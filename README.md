@@ -1,36 +1,67 @@
 # los-memory
 
-Standalone SQLite-backed memory tool with a local-only web viewer and a Codex retrieval skill.
+Local SQLite memory tool for Codex and Claude Code workflows.
 
-## Layout
-- `memory_tool/` – CLI, ingestion helper, viewer, and LLM hook example
-- `skills/memory-retrieval/` – Codex skill for search/retrieval
+## What it provides
+- Durable memory records (`add`, `ingest`)
+- Record maintenance (`edit`, `delete`)
+- Fast retrieval (`search`, `timeline`, `get`, `list`)
+- Local viewer UI (`viewer.py`)
+- Maintenance and cleanup (`manage`, `clean`)
+
+## Agent profiles
+Use separate default databases by profile:
+
+- `codex`: `~/.codex_memory/memory.db`
+- `claude`: `~/.claude_memory/memory.db`
+- `shared`: `~/.local/share/llm-memory/memory.db`
+
+You can set a default profile:
+
+```bash
+export MEMORY_PROFILE=codex
+```
+
+Or override with `--profile` / `--db` on each command.
 
 ## Quick start
 ```bash
-python3 memory_tool/memory_tool.py init
-python3 memory_tool/memory_tool.py add --title "First note" --summary "Hello" --auto-tags
-python3 memory_tool/memory_tool.py search "hello"
-python3 memory_tool/memory_tool.py list --limit 5
+python3 memory_tool/memory_tool.py --profile codex init
+python3 memory_tool/memory_tool.py --profile codex add --title "First note" --summary "Hello" --auto-tags
+python3 memory_tool/memory_tool.py --profile codex edit --id 1 --summary "Hello updated"
+python3 memory_tool/memory_tool.py --profile codex search "hello"
+python3 memory_tool/memory_tool.py --profile codex delete "1" --dry-run
+python3 memory_tool/memory_tool.py --profile codex manage stats
+python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --dry-run
 ```
 
-## Local viewer
+## Viewer
 ```bash
-python3 memory_tool/viewer.py --db ~/.codex_memory/memory.db
-python3 memory_tool/viewer.py --db ~/.codex_memory/memory.db --auth-token "mytoken"
+python3 memory_tool/viewer.py --profile codex
+python3 memory_tool/viewer.py --profile claude --auth-token "mytoken"
 ```
 
-When using `--auth-token`, open the viewer with `?token=...` in the URL
-or send an `Authorization: Bearer ...` header for API calls.
+If using `--auth-token`, open with `?token=...` or send `Authorization: Bearer ...`.
 
 ## Export
 ```bash
-python3 memory_tool/memory_tool.py export --format json --output export.json
-python3 memory_tool/memory_tool.py export --format csv --output export.csv
+python3 memory_tool/memory_tool.py --profile codex export --format json --output export.json
+python3 memory_tool/memory_tool.py --profile claude export --format csv --output export.csv
 ```
 
-## LLM hook (optional)
+## General memory usage guide
+See `docs/GENERAL_MEMORY.md` for practical workflows, cleanup strategy, and management commands.
+
+## Codex / Claude install and usage
+See `docs/CODEX_CLAUDE_INSTALL.md` for setup and daily usage from each assistant.
+
+## Makefile shortcuts
 ```bash
-export MEMORY_LLM_HOOK="python3 memory_tool/llm_hook_example.py"
-python3 memory_tool/memory_tool.py add --title "Hooked" --summary "" --raw "raw text" --auto-tags
+make help
+make init-codex
+make init-claude
+make stats PROFILE=codex
 ```
+
+## Skill layout
+- `skills/memory-retrieval/` contains retrieval guidance and references.

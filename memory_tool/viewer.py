@@ -275,13 +275,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Memory tool viewer")
-    parser.add_argument("--db", default=mem.DEFAULT_DB)
+    parser.add_argument(
+        "--profile",
+        choices=mem.PROFILE_CHOICES,
+        default=mem.DEFAULT_PROFILE,
+        help="Memory profile to select default DB path",
+    )
+    parser.add_argument("--db", default=None, help="SQLite database path (overrides --profile)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=37777)
     parser.add_argument("--auth-token", default=None, help="Require a token for access")
     args = parser.parse_args()
 
-    Handler.db_path = args.db
+    Handler.db_path = mem.resolve_db_path(args.profile, args.db)
     Handler.auth_token = args.auth_token
     server = HTTPServer((args.host, args.port), Handler)
     print(f"Memory viewer running at http://{args.host}:{args.port}")

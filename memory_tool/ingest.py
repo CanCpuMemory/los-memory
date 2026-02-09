@@ -32,8 +32,9 @@ def derive_title_summary(raw: str, title: str | None, summary: str | None) -> tu
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest helper for memory tool")
-    parser.add_argument("--db", default=None, help="SQLite database path")
-    parser.add_argument("--project", default="cantool")
+    parser.add_argument("--profile", choices=["codex", "claude", "shared"], default="codex")
+    parser.add_argument("--db", default=None, help="SQLite database path (overrides --profile)")
+    parser.add_argument("--project", default="general")
     parser.add_argument("--kind", default="note")
     parser.add_argument("--title", default=None)
     parser.add_argument("--summary", default=None)
@@ -49,6 +50,8 @@ def main() -> None:
     cmd = [sys.executable, str(MEMORY_TOOL)]
     if args.db:
         cmd += ["--db", args.db]
+    else:
+        cmd += ["--profile", args.profile]
     cmd += ["add", "--title", title, "--summary", summary]
     if args.project:
         cmd += ["--project", args.project]

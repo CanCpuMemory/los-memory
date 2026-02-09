@@ -17,7 +17,16 @@ from typing import Iterable, List, Optional
 
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 SCHEMA_VERSION = 2
-DEFAULT_DB = os.path.expanduser("~/.codex_memory/memory.db")
+PROFILE_DB_PATHS = {
+    "codex": "~/.codex_memory/memory.db",
+    "claude": "~/.claude_memory/memory.db",
+    "shared": "~/.local/share/llm-memory/memory.db",
+}
+PROFILE_CHOICES = tuple(PROFILE_DB_PATHS.keys())
+DEFAULT_PROFILE = os.environ.get("MEMORY_PROFILE", "codex").strip().lower() or "codex"
+if DEFAULT_PROFILE not in PROFILE_DB_PATHS:
+    DEFAULT_PROFILE = "codex"
+DEFAULT_DB = os.path.expanduser(PROFILE_DB_PATHS[DEFAULT_PROFILE])
 DEFAULT_LLM_HOOK = os.environ.get("MEMORY_LLM_HOOK", "")
 TAG_BLACKLIST = {
     "a",
@@ -71,8 +80,19 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime(ISO_FORMAT)
 
 
+def resolve_db_path(profile: str, explicit_db: Optional[str]) -> str:
+    if explicit_db:
+        return os.path.expanduser(explicit_db)
+    profile_name = (profile or DEFAULT_PROFILE).strip().lower()
+    if profile_name not in PROFILE_DB_PATHS:
+        raise ValueError(f"Unknown profile '{profile_name}'. Expected one of: {', '.join(PROFILE_CHOICES)}")
+    return os.path.expanduser(PROFILE_DB_PATHS[profile_name])
+
+
 def connect_db(path: str) -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
@@ -503,9 +523,260 @@ def run_export(conn: sqlite3.Connection, limit: int, offset: int = 0) -> List[Ob
     return run_list(conn, limit, offset)
 
 
+def parse_ids(ids_raw: str) -> List[int]:
+    ids = [int(part.strip()) for part in ids_raw.split(",") if part.strip()]
+    unique_ids: List[int] = []
+    seen: set[int] = set()
+    for item in ids:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique_ids.append(item)
+    return unique_ids
+
+
+def run_edit(
+    conn: sqlite3.Connection,
+    obs_id: int,
+    project: Optional[str],
+    kind: Optional[str],
+    title: Optional[str],
+    summary: Optional[str],
+    tags: Optional[str],
+    raw: Optional[str],
+    timestamp: Optional[str],
+    auto_tags: bool,
+) -> dict:
+    row = conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Observation {obs_id} not found")
+
+    current_title = row["title"]
+    current_summary = row["summary"]
+    current_tags = parse_tags_json(row["tags"])
+
+    updates: dict[str, object] = {}
+    if project is not None:
+        updates["project"] = project
+    if kind is not None:
+        updates["kind"] = kind
+    if title is not None:
+        updates["title"] = normalize_text(title)
+        current_title = str(updates["title"])
+    if summary is not None:
+        updates["summary"] = normalize_text(summary)
+        current_summary = str(updates["summary"])
+    if raw is not None:
+        updates["raw"] = raw
+    if timestamp is not None:
+        updates["timestamp"] = timestamp
+
+    if tags is not None:
+        current_tags = normalize_tags_list(tags)
+    if auto_tags and tags is None:
+        current_tags = auto_tags_from_text(current_title, current_summary)
+    if tags is not None or auto_tags:
+        updates["tags"] = tags_to_json(current_tags)
+        updates["tags_text"] = tags_to_text(current_tags)
+
+    if not updates:
+        raise ValueError("No changes requested. Provide at least one editable field.")
+
+    set_clause = ", ".join(f"{column} = ?" for column in updates.keys())
+    params = list(updates.values()) + [obs_id]
+    conn.execute(f"UPDATE observations SET {set_clause} WHERE id = ?", params)
+    conn.commit()
+
+    updated = conn.execute("SELECT * FROM observations WHERE id = ?", (obs_id,)).fetchone()
+    result = normalize_rows([updated])[0]
+    return {"ok": True, "updated": asdict(result)}
+
+
+def run_delete(conn: sqlite3.Connection, ids: List[int], dry_run: bool) -> dict:
+    if not ids:
+        raise ValueError("No ids provided")
+    placeholders = ",".join("?" for _ in ids)
+    matched = int(
+        conn.execute(
+            f"SELECT COUNT(*) AS c FROM observations WHERE id IN ({placeholders})",
+            ids,
+        ).fetchone()["c"]
+    )
+    deleted = 0
+    if not dry_run and matched:
+        cursor = conn.execute(f"DELETE FROM observations WHERE id IN ({placeholders})", ids)
+        deleted = int(cursor.rowcount)
+        conn.commit()
+    elif dry_run:
+        conn.rollback()
+    return {
+        "ok": True,
+        "ids": ids,
+        "matched": matched,
+        "deleted": deleted,
+        "dry_run": dry_run,
+    }
+
+
+def run_clean(
+    conn: sqlite3.Connection,
+    before: Optional[str],
+    older_than_days: Optional[int],
+    project: Optional[str],
+    kind: Optional[str],
+    tag: Optional[str],
+    delete_all: bool,
+    dry_run: bool,
+    vacuum: bool,
+) -> dict:
+    if before and older_than_days is not None:
+        raise ValueError("Use either --before or --older-than-days, not both")
+    filters: List[str] = []
+    params: List[object] = []
+
+    cutoff = before
+    if older_than_days is not None:
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        cutoff = cutoff_dt.strftime(ISO_FORMAT)
+    if cutoff:
+        filters.append("timestamp < ?")
+        params.append(cutoff)
+    if project:
+        filters.append("project = ?")
+        params.append(project)
+    if kind:
+        filters.append("kind = ?")
+        params.append(kind)
+
+    tag_values = normalize_tags_list(tag) if tag else []
+    if tag_values:
+        tag_filters: List[str] = []
+        for item in tag_values:
+            tag_filters.append("tags_text LIKE ?")
+            params.append(f"%{item}%")
+        filters.append(f"({' OR '.join(tag_filters)})")
+
+    if not filters and not delete_all:
+        raise ValueError("Refusing to clean without filters. Use --all to delete everything.")
+
+    where_clause = " AND ".join(filters) if filters else "1=1"
+    matched = int(
+        conn.execute(
+            f"SELECT COUNT(*) AS c FROM observations WHERE {where_clause}",
+            params,
+        ).fetchone()["c"]
+    )
+
+    deleted = 0
+    if not dry_run and matched:
+        cursor = conn.execute(f"DELETE FROM observations WHERE {where_clause}", params)
+        deleted = int(cursor.rowcount)
+        conn.commit()
+    elif dry_run:
+        conn.rollback()
+
+    if vacuum and not dry_run:
+        conn.execute("VACUUM")
+
+    return {
+        "ok": True,
+        "matched": matched,
+        "deleted": deleted,
+        "dry_run": dry_run,
+        "before": cutoff,
+        "vacuum": bool(vacuum and not dry_run),
+    }
+
+
+def run_manage(conn: sqlite3.Connection, action: str, limit: int) -> dict:
+    if action == "stats":
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total, MIN(timestamp) AS earliest, MAX(timestamp) AS latest
+            FROM observations
+            """
+        ).fetchone()
+        projects = [
+            {"project": item["project"], "count": item["count"]}
+            for item in conn.execute(
+                """
+                SELECT project, COUNT(*) AS count
+                FROM observations
+                GROUP BY project
+                ORDER BY count DESC, project ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        kinds = [
+            {"kind": item["kind"], "count": item["count"]}
+            for item in conn.execute(
+                """
+                SELECT kind, COUNT(*) AS count
+                FROM observations
+                GROUP BY kind
+                ORDER BY count DESC, kind ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        return {
+            "ok": True,
+            "action": action,
+            "total": int(row["total"]),
+            "earliest": row["earliest"],
+            "latest": row["latest"],
+            "projects": projects,
+            "kinds": kinds,
+        }
+
+    if action == "projects":
+        rows = conn.execute(
+            """
+            SELECT project, COUNT(*) AS count
+            FROM observations
+            GROUP BY project
+            ORDER BY count DESC, project ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return {
+            "ok": True,
+            "action": action,
+            "projects": [{"project": row["project"], "count": row["count"]} for row in rows],
+        }
+
+    if action == "tags":
+        counts: dict[str, int] = {}
+        for row in conn.execute("SELECT tags FROM observations").fetchall():
+            for tag in parse_tags_json(row["tags"]):
+                counts[tag] = counts.get(tag, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+        return {
+            "ok": True,
+            "action": action,
+            "tags": [{"tag": tag, "count": count} for tag, count in ranked],
+        }
+
+    if action == "vacuum":
+        conn.execute("VACUUM")
+        return {"ok": True, "action": action, "vacuumed": True}
+
+    raise ValueError(f"Unsupported manage action: {action}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Standalone memory tool")
-    parser.add_argument("--db", default=DEFAULT_DB, help="Path to SQLite database")
+    parser.add_argument(
+        "--profile",
+        choices=PROFILE_CHOICES,
+        default=DEFAULT_PROFILE,
+        help="Memory profile to select default DB path",
+    )
+    parser.add_argument("--db", default=None, help="Path to SQLite database (overrides --profile)")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -513,7 +784,7 @@ def parse_args() -> argparse.Namespace:
 
     add_parser = subparsers.add_parser("add", help="Add an observation")
     add_parser.add_argument("--timestamp", default=utc_now())
-    add_parser.add_argument("--project", default="cantool")
+    add_parser.add_argument("--project", default="general")
     add_parser.add_argument("--kind", default="note")
     add_parser.add_argument("--title", required=True)
     add_parser.add_argument("--summary", required=True)
@@ -557,6 +828,21 @@ def parse_args() -> argparse.Namespace:
     get_parser = subparsers.add_parser("get", help="Fetch observations by id")
     get_parser.add_argument("ids", help="Comma-separated observation ids")
 
+    edit_parser = subparsers.add_parser("edit", help="Edit an observation by id")
+    edit_parser.add_argument("--id", type=int, required=True)
+    edit_parser.add_argument("--timestamp", default=None)
+    edit_parser.add_argument("--project", default=None)
+    edit_parser.add_argument("--kind", default=None)
+    edit_parser.add_argument("--title", default=None)
+    edit_parser.add_argument("--summary", default=None)
+    edit_parser.add_argument("--tags", default=None)
+    edit_parser.add_argument("--raw", default=None)
+    edit_parser.add_argument("--auto-tags", action="store_true")
+
+    delete_parser = subparsers.add_parser("delete", help="Delete observations by ids")
+    delete_parser.add_argument("ids", help="Comma-separated observation ids")
+    delete_parser.add_argument("--dry-run", action="store_true", help="Show matches without deleting")
+
     list_parser = subparsers.add_parser("list", help="List latest observations")
     list_parser.add_argument("--limit", type=int, default=20)
     list_parser.add_argument("--offset", type=int, default=0)
@@ -567,17 +853,37 @@ def parse_args() -> argparse.Namespace:
     export_parser.add_argument("--limit", type=int, default=1000)
     export_parser.add_argument("--offset", type=int, default=0)
 
+    clean_parser = subparsers.add_parser("clean", help="Delete old or filtered observations")
+    clean_parser.add_argument("--before", default=None, help="Delete rows before ISO UTC timestamp")
+    clean_parser.add_argument(
+        "--older-than-days",
+        type=int,
+        default=None,
+        help="Delete rows older than N days",
+    )
+    clean_parser.add_argument("--project", default=None)
+    clean_parser.add_argument("--kind", default=None)
+    clean_parser.add_argument("--tag", default=None, help="Tag filter (comma-separated)")
+    clean_parser.add_argument("--all", action="store_true", help="Delete all observations")
+    clean_parser.add_argument("--dry-run", action="store_true", help="Show matched rows without deleting")
+    clean_parser.add_argument("--vacuum", action="store_true", help="VACUUM database after cleanup")
+
+    manage_parser = subparsers.add_parser("manage", help="Manage and inspect memory database")
+    manage_parser.add_argument("action", choices=["stats", "projects", "tags", "vacuum"])
+    manage_parser.add_argument("--limit", type=int, default=20)
+
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    db_path = resolve_db_path(args.profile, args.db)
     if args.command == "init":
-        init_db(args.db)
-        print(json.dumps({"ok": True, "db": args.db}, indent=2))
+        init_db(db_path)
+        print(json.dumps({"ok": True, "db": db_path, "profile": args.profile}, indent=2))
         return
 
-    conn = connect_db(args.db)
+    conn = connect_db(db_path)
     ensure_schema(conn)
     ensure_fts(conn)
 
@@ -648,9 +954,42 @@ def main() -> None:
         return
 
     if args.command == "get":
-        ids = [int(part.strip()) for part in args.ids.split(",") if part.strip()]
+        ids = parse_ids(args.ids)
         results = run_get(conn, ids)
         print(json.dumps({"ok": True, "results": [asdict(r) for r in results]}, indent=2))
+        return
+
+    if args.command == "edit":
+        try:
+            result = run_edit(
+                conn,
+                obs_id=args.id,
+                project=args.project,
+                kind=args.kind,
+                title=args.title,
+                summary=args.summary,
+                tags=args.tags,
+                raw=args.raw,
+                timestamp=args.timestamp,
+                auto_tags=args.auto_tags,
+            )
+        except ValueError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+            sys.exit(1)
+        result["db"] = db_path
+        result["profile"] = args.profile
+        print(json.dumps(result, indent=2))
+        return
+
+    if args.command == "delete":
+        try:
+            result = run_delete(conn, parse_ids(args.ids), args.dry_run)
+        except ValueError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+            sys.exit(1)
+        result["db"] = db_path
+        result["profile"] = args.profile
+        print(json.dumps(result, indent=2))
         return
 
     if args.command == "list":
@@ -681,6 +1020,38 @@ def main() -> None:
         finally:
             if output is not sys.stdout:
                 output.close()
+        return
+
+    if args.command == "clean":
+        try:
+            result = run_clean(
+                conn,
+                before=args.before,
+                older_than_days=args.older_than_days,
+                project=args.project,
+                kind=args.kind,
+                tag=args.tag,
+                delete_all=args.all,
+                dry_run=args.dry_run,
+                vacuum=args.vacuum,
+            )
+        except ValueError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+            sys.exit(1)
+        result["db"] = db_path
+        result["profile"] = args.profile
+        print(json.dumps(result, indent=2))
+        return
+
+    if args.command == "manage":
+        try:
+            result = run_manage(conn, args.action, args.limit)
+        except ValueError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+            sys.exit(1)
+        result["db"] = db_path
+        result["profile"] = args.profile
+        print(json.dumps(result, indent=2))
         return
 
 

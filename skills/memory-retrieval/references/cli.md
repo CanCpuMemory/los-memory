@@ -4,7 +4,13 @@
 `memory_tool/memory_tool.py`
 
 ## Global Flags
-- `--db <path>`: SQLite database path (default: `~/.codex_memory/memory.db`)
+- `--profile <codex|claude|shared>`: choose profile-specific default DB
+- `--db <path>`: explicit SQLite database path (overrides profile)
+
+Profile defaults:
+- `codex` -> `~/.codex_memory/memory.db`
+- `claude` -> `~/.claude_memory/memory.db`
+- `shared` -> `~/.local/share/llm-memory/memory.db`
 
 ## Commands
 
@@ -12,78 +18,135 @@
 Initialize the database schema.
 
 ```bash
-python3 memory_tool/memory_tool.py init --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex init
 ```
 
 ### add
 Add an observation record.
 
 ```bash
-python3 memory_tool/memory_tool.py add \
+python3 memory_tool/memory_tool.py --profile codex add \
   --title "<title>" \
   --summary "<summary>" \
-  --project "cantool" \
+  --project "general" \
   --kind "note" \
   --tags "tag1,tag2" \
   --auto-tags \
   --llm-hook "<shell command>" \
   --raw "<raw payload>" \
-  --timestamp "2026-02-08T00:00:00Z" \
-  --db <db_path>
+  --timestamp "2026-02-08T00:00:00Z"
 ```
 
 Notes:
 - `--auto-tags` derives tags from title/summary when tags is empty.
-- `--llm-hook` (or `MEMORY_LLM_HOOK` env var) runs a command that reads JSON from stdin and returns JSON with optional `title`, `summary`, and `tags` fields.
-
-Example hook:
-
-```bash
-export MEMORY_LLM_HOOK="python3 memory_tool/llm_hook_example.py"
-```
+- `--llm-hook` (or `MEMORY_LLM_HOOK`) reads JSON from stdin and may return `title`, `summary`, `tags`.
 
 ### search
 Returns summary results with IDs and optional scores.
 
 ```bash
-python3 memory_tool/memory_tool.py search "<query>" --limit 10 --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex search "<query>" --limit 10
 ```
 
 ### timeline
 Returns observations in a time window (timestamp or around an ID).
 
 ```bash
-python3 memory_tool/memory_tool.py timeline --around-id 42 --window-minutes 120 --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex timeline --around-id 42 --window-minutes 120
 ```
 
 ```bash
-python3 memory_tool/memory_tool.py timeline --start 2026-02-01T00:00:00Z --end 2026-02-08T00:00:00Z --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex timeline --start 2026-02-01T00:00:00Z --end 2026-02-08T00:00:00Z
 ```
 
 ### get
 Fetch full records by ID.
 
 ```bash
-python3 memory_tool/memory_tool.py get "1,2,3" --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex get "1,2,3"
+```
+
+### edit
+Edit one observation by id.
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex edit --id 10 --summary "Updated text" --tags "ops,incident"
+```
+
+Editable fields:
+- `--timestamp`
+- `--project`
+- `--kind`
+- `--title`
+- `--summary`
+- `--tags`
+- `--raw`
+- `--auto-tags` (recompute tags from title/summary)
+
+### delete
+Delete observations by ids.
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex delete "10,11" --dry-run
+python3 memory_tool/memory_tool.py --profile codex delete "10,11"
+```
+
+### list
+List latest observations.
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex list --limit 20 --offset 0
+```
+
+### export
+Export observations.
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex export --format json --output export.json
+python3 memory_tool/memory_tool.py --profile codex export --format csv --output export.csv
+```
+
+### clean
+Delete observations with safety checks.
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --dry-run
+python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --project ops
+python3 memory_tool/memory_tool.py --profile codex clean --tag temp,noise
+python3 memory_tool/memory_tool.py --profile codex clean --all
+```
+
+Flags:
+- `--before <ISO>` or `--older-than-days <N>`
+- optional filters: `--project`, `--kind`, `--tag`
+- `--dry-run` for preview
+- `--vacuum` to compact DB after deletion
+- requires at least one filter unless `--all` is set
+
+### manage
+Inspect and maintain memory.
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex manage stats
+python3 memory_tool/memory_tool.py --profile codex manage projects --limit 20
+python3 memory_tool/memory_tool.py --profile codex manage tags --limit 20
+python3 memory_tool/memory_tool.py --profile codex manage vacuum
 ```
 
 ### ingest helper
 Convenience wrapper that reads stdin or a file and calls `add`.
 
 ```bash
-cat build.log | python3 memory_tool/ingest.py --auto-tags --db <db_path>
-```
-
-```bash
-python3 memory_tool/ingest.py --raw-file notes.txt --title "Meeting notes" --summary "Standup summary" --db <db_path>
+cat build.log | python3 memory_tool/ingest.py --profile codex --auto-tags
+python3 memory_tool/ingest.py --profile claude --raw-file notes.txt --title "Meeting notes"
 ```
 
 ### viewer
 Run the local-only viewer UI.
 
 ```bash
-python3 memory_tool/viewer.py --db <db_path>
+python3 memory_tool/viewer.py --profile codex
 ```
 
 ## Output
-Commands return JSON with an `ok` field and `results` for list-returning operations.
+Commands return JSON with `ok`; list operations include `results`.

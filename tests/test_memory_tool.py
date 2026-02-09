@@ -187,3 +187,135 @@ def test_pagination_offsets(tmp_path: Path) -> None:
     )
     assert len(timeline_page) == 2
     conn.close()
+
+
+def test_profile_resolution() -> None:
+    codex_path = mem.resolve_db_path("codex", None)
+    claude_path = mem.resolve_db_path("claude", None)
+    shared_path = mem.resolve_db_path("shared", None)
+    explicit = mem.resolve_db_path("codex", "~/custom-memory.db")
+
+    assert codex_path.endswith("/.codex_memory/memory.db")
+    assert claude_path.endswith("/.claude_memory/memory.db")
+    assert shared_path.endswith("/.local/share/llm-memory/memory.db")
+    assert explicit.endswith("/custom-memory.db")
+
+
+def test_clean_and_manage(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    conn = mem.connect_db(str(db_path))
+    mem.ensure_schema(conn)
+    mem.ensure_fts(conn)
+    mem.add_observation(
+        conn,
+        "2020-01-01T00:00:00Z",
+        "ops",
+        "note",
+        "Old entry",
+        "to be cleaned",
+        mem.tags_to_json(["temp"]),
+        mem.tags_to_text(["temp"]),
+        "",
+    )
+    mem.add_observation(
+        conn,
+        "2026-01-01T00:00:00Z",
+        "ops",
+        "decision",
+        "New entry",
+        "to keep",
+        mem.tags_to_json(["keep"]),
+        mem.tags_to_text(["keep"]),
+        "",
+    )
+
+    dry = mem.run_clean(
+        conn,
+        before="2021-01-01T00:00:00Z",
+        older_than_days=None,
+        project=None,
+        kind=None,
+        tag=None,
+        delete_all=False,
+        dry_run=True,
+        vacuum=False,
+    )
+    assert dry["matched"] == 1
+    assert dry["deleted"] == 0
+
+    cleaned = mem.run_clean(
+        conn,
+        before="2021-01-01T00:00:00Z",
+        older_than_days=None,
+        project=None,
+        kind=None,
+        tag=None,
+        delete_all=False,
+        dry_run=False,
+        vacuum=False,
+    )
+    assert cleaned["deleted"] == 1
+
+    stats = mem.run_manage(conn, "stats", 10)
+    assert stats["total"] == 1
+    projects = mem.run_manage(conn, "projects", 10)
+    assert projects["projects"][0]["project"] == "ops"
+    tags = mem.run_manage(conn, "tags", 10)
+    assert tags["tags"][0]["tag"] == "keep"
+    conn.close()
+
+
+def test_edit_and_delete(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    conn = mem.connect_db(str(db_path))
+    mem.ensure_schema(conn)
+    mem.ensure_fts(conn)
+    first_id = mem.add_observation(
+        conn,
+        "2026-01-01T00:00:00Z",
+        "app",
+        "note",
+        "Original",
+        "Before",
+        mem.tags_to_json(["alpha"]),
+        mem.tags_to_text(["alpha"]),
+        "raw",
+    )
+    second_id = mem.add_observation(
+        conn,
+        "2026-01-01T00:10:00Z",
+        "app",
+        "note",
+        "Second",
+        "Before2",
+        mem.tags_to_json(["beta"]),
+        mem.tags_to_text(["beta"]),
+        "raw2",
+    )
+
+    edited = mem.run_edit(
+        conn,
+        obs_id=first_id,
+        project=None,
+        kind="decision",
+        title="Changed",
+        summary="After",
+        tags="gamma,delta",
+        raw=None,
+        timestamp=None,
+        auto_tags=False,
+    )
+    assert edited["updated"]["title"] == "Changed"
+    assert edited["updated"]["kind"] == "decision"
+    assert "gamma" in edited["updated"]["tags"]
+
+    preview = mem.run_delete(conn, [second_id], dry_run=True)
+    assert preview["matched"] == 1
+    assert preview["deleted"] == 0
+
+    deleted = mem.run_delete(conn, [second_id], dry_run=False)
+    assert deleted["deleted"] == 1
+    remaining = mem.run_list(conn, limit=10)
+    assert len(remaining) == 1
+    assert remaining[0].id == first_id
+    conn.close()

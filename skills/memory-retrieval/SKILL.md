@@ -19,32 +19,37 @@ Use the standalone memory tool to search, timeline, and fetch stored observation
 Use the CLI search to get candidate IDs and summaries.
 
 ```bash
-python3 memory_tool/memory_tool.py search "<query>" --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex search "<query>"
 ```
 
 ### 2) Launch local viewer
 Run the local-only viewer (binds to 127.0.0.1:37777 by default).
 
 ```bash
-python3 memory_tool/viewer.py --db <db_path>
+python3 memory_tool/viewer.py --profile codex
 ```
 
 ### 3) Timeline around an observation
 Use a window around a known ID to capture nearby context.
 
 ```bash
-python3 memory_tool/memory_tool.py timeline --around-id <id> --window-minutes 120 --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex timeline --around-id <id> --window-minutes 120
 ```
 
 ### 4) Fetch full records
 Use IDs from search/timeline to retrieve full JSON records.
 
 ```bash
-python3 memory_tool/memory_tool.py get "1,2,3" --db <db_path>
+python3 memory_tool/memory_tool.py --profile codex get "1,2,3"
 ```
 
 ## Database Location
-Default DB path is `~/.codex_memory/memory.db`. Override with `--db` when needed.
+Profiles map to defaults:
+- `codex` -> `~/.codex_memory/memory.db`
+- `claude` -> `~/.claude_memory/memory.db`
+- `shared` -> `~/.local/share/llm-memory/memory.db`
+
+Use `--profile` for defaults, or `--db` for an explicit path.
 
 ## References
 - See `references/cli.md` for all CLI flags and output shapes.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Memory Retrieval"
+  short_description: "Search and retrieve records from the standalone memory tool"
+  default_prompt: "Use memory_tool CLI commands with --profile claude (or --profile shared) to search, timeline, and get observations."
