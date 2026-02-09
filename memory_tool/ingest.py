@@ -46,9 +46,10 @@ def main() -> None:
     raw = read_raw(args)
     title, summary = derive_title_summary(raw, args.title, args.summary)
 
-    cmd = [sys.executable, str(MEMORY_TOOL), "add", "--title", title, "--summary", summary]
+    cmd = [sys.executable, str(MEMORY_TOOL)]
     if args.db:
         cmd += ["--db", args.db]
+    cmd += ["add", "--title", title, "--summary", summary]
     if args.project:
         cmd += ["--project", args.project]
     if args.kind:
