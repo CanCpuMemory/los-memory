@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Optional
 
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SESSION_FILE = ".los_memory_session"
 PROFILE_DB_PATHS = {
     "codex": "~/.codex_memory/memory.db",
@@ -88,6 +88,18 @@ class Session:
     agent_type: str
     summary: str
     status: str
+
+
+@dataclass
+class Checkpoint:
+    id: int
+    timestamp: str
+    name: str
+    description: str
+    tag: str
+    session_id: Optional[int]
+    observation_count: int
+    project: str
 
 
 def utc_now() -> str:
@@ -247,6 +259,24 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             pass
         set_schema_version(conn, 3)
+        version = 3
+    if version < 4:
+        # Version 4 adds checkpoints table
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                tag TEXT DEFAULT '',
+                session_id INTEGER REFERENCES sessions(id),
+                observation_count INTEGER DEFAULT 0,
+                project TEXT DEFAULT ''
+            )
+            """
+        )
+        set_schema_version(conn, 4)
 
 
 def ensure_fts(conn: sqlite3.Connection) -> bool:
@@ -621,6 +651,160 @@ def generate_session_summary(conn: sqlite3.Connection, session_id: int) -> str:
         summary_parts.append(f"Tags: {tag_str}")
 
     return "; ".join(summary_parts)
+
+
+# Checkpoint management functions
+def create_checkpoint(
+    conn: sqlite3.Connection,
+    name: str,
+    description: str,
+    tag: str,
+    session_id: Optional[int],
+    project: str,
+) -> int:
+    """Create a new checkpoint."""
+    # Count observations since last checkpoint or for this session
+    if session_id:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM observations WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+    else:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM observations WHERE project = ?",
+            (project,),
+        ).fetchone()[0]
+
+    cursor = conn.execute(
+        """
+        INSERT INTO checkpoints (timestamp, name, description, tag, session_id, observation_count, project)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (utc_now(), name, description, tag, session_id, count, project),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def list_checkpoints(
+    conn: sqlite3.Connection,
+    limit: int = 20,
+    tag: Optional[str] = None,
+) -> List[Checkpoint]:
+    """List checkpoints."""
+    query = "SELECT * FROM checkpoints"
+    params: List[object] = []
+    if tag:
+        query += " WHERE tag = ?"
+        params.append(tag)
+    query += " ORDER BY timestamp DESC LIMIT ? OFFSET 0"
+    params.append(limit)
+
+    rows = conn.execute(query, params).fetchall()
+    return [
+        Checkpoint(
+            id=row["id"],
+            timestamp=row["timestamp"],
+            name=row["name"],
+            description=row["description"],
+            tag=row["tag"],
+            session_id=row["session_id"],
+            observation_count=row["observation_count"],
+            project=row["project"],
+        )
+        for row in rows
+    ]
+
+
+def get_checkpoint(conn: sqlite3.Connection, checkpoint_id: int) -> Optional[Checkpoint]:
+    """Get a checkpoint by ID."""
+    row = conn.execute(
+        "SELECT * FROM checkpoints WHERE id = ?",
+        (checkpoint_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return Checkpoint(
+        id=row["id"],
+        timestamp=row["timestamp"],
+        name=row["name"],
+        description=row["description"],
+        tag=row["tag"],
+        session_id=row["session_id"],
+        observation_count=row["observation_count"],
+        project=row["project"],
+    )
+
+
+def get_checkpoint_observations(
+    conn: sqlite3.Connection,
+    checkpoint_id: int,
+    limit: int = 100,
+) -> List[Observation]:
+    """Get observations relevant to a checkpoint."""
+    checkpoint = get_checkpoint(conn, checkpoint_id)
+    if not checkpoint:
+        return []
+
+    # Get observations from the checkpoint's session or after its timestamp
+    if checkpoint.session_id:
+        rows = conn.execute(
+            """
+            SELECT * FROM observations
+            WHERE session_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (checkpoint.session_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT * FROM observations
+            WHERE project = ? AND timestamp >= ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (checkpoint.project, checkpoint.timestamp, limit),
+        ).fetchall()
+
+    return normalize_rows(rows)
+
+
+def resume_from_checkpoint(
+    conn: sqlite3.Connection,
+    checkpoint_id: int,
+    profile: str,
+) -> dict:
+    """Resume work from a checkpoint."""
+    checkpoint = get_checkpoint(conn, checkpoint_id)
+    if not checkpoint:
+        raise ValueError(f"Checkpoint {checkpoint_id} not found")
+
+    # Set active project
+    set_active_project(profile, checkpoint.project)
+
+    # If checkpoint has a session, resume it
+    if checkpoint.session_id:
+        set_active_session(profile, checkpoint.session_id, conn.execute("PRAGMA database_list").fetchone()[2])
+        session_info = {
+            "session_id": checkpoint.session_id,
+            "resumed": True,
+        }
+    else:
+        session_info = {"session_id": None}
+
+    # Get recent observations for context
+    observations = get_checkpoint_observations(conn, checkpoint_id, limit=20)
+
+    return {
+        "checkpoint_id": checkpoint_id,
+        "checkpoint_name": checkpoint.name,
+        "project": checkpoint.project,
+        **session_info,
+        "observation_count": len(observations),
+        "recent_observations": [asdict(o) for o in observations[:5]],
+    }
 
 
 def quote_fts_query(query: str) -> str:
@@ -1657,6 +1841,32 @@ def parse_args() -> argparse.Namespace:
     import_parser.add_argument("--project", default=None, help="Override project name")
     import_parser.add_argument("--dry-run", action="store_true", help="Preview without importing")
 
+    # Quick capture command
+    capture_parser = subparsers.add_parser("capture", help="Quick capture observation (one-liner)")
+    capture_parser.add_argument("text", nargs="+", help="Observation text (title and summary)")
+    capture_parser.add_argument("--project", default=None, help="Project (uses active if not set)")
+    capture_parser.add_argument("--kind", default="note", help="Observation kind")
+    capture_parser.add_argument("--tags", default="", help="Tags (comma-separated)")
+    capture_parser.add_argument("--auto-tags", action="store_true", help="Auto-generate tags")
+
+    # Checkpoint command
+    checkpoint_parser = subparsers.add_parser("checkpoint", help="Create and manage checkpoints")
+    checkpoint_subparsers = checkpoint_parser.add_subparsers(dest="checkpoint_action", required=True)
+
+    checkpoint_create_parser = checkpoint_subparsers.add_parser("create", help="Create a checkpoint")
+    checkpoint_create_parser.add_argument("--name", required=True, help="Checkpoint name")
+    checkpoint_create_parser.add_argument("--description", default="", help="Checkpoint description")
+    checkpoint_create_parser.add_argument("--tag", default="", help="Checkpoint tag (milestone, release, etc.)")
+
+    checkpoint_list_parser = checkpoint_subparsers.add_parser("list", help="List checkpoints")
+    checkpoint_list_parser.add_argument("--limit", type=int, default=20)
+
+    checkpoint_resume_parser = checkpoint_subparsers.add_parser("resume", help="Resume from checkpoint")
+    checkpoint_resume_parser.add_argument("checkpoint_id", type=int, help="Checkpoint ID to resume from")
+
+    checkpoint_show_parser = checkpoint_subparsers.add_parser("show", help="Show checkpoint details")
+    checkpoint_show_parser.add_argument("checkpoint_id", type=int, help="Checkpoint ID")
+
     return parser.parse_args()
 
 
@@ -2054,6 +2264,133 @@ def main() -> None:
                 "action": "archive",
                 "old_name": args.project_name,
                 "new_name": new_name,
+            }, indent=2))
+            return
+
+        return
+
+    if args.command == "capture":
+        # Combine text arguments into a single string
+        full_text = " ".join(args.text)
+
+        # Split into title and summary (first sentence = title, rest = summary)
+        sentences = full_text.replace("! ", "!|").replace("? ", "?|").replace(". ", ".|").split("|")
+        if len(sentences) > 1 and len(sentences[0]) < 100:
+            title = sentences[0].strip()
+            summary = " ".join(s.strip() for s in sentences[1:]).strip()
+            if not summary:
+                summary = title
+        else:
+            # Use first 80 chars as title, rest as summary
+            if len(full_text) <= 80:
+                title = full_text
+                summary = full_text
+            else:
+                # Find a good break point
+                break_point = full_text.rfind(" ", 0, 80)
+                if break_point == -1:
+                    break_point = 80
+                title = full_text[:break_point].strip()
+                summary = full_text.strip()
+
+        # Determine project
+        project = args.project
+        if not project:
+            active_project = get_active_project(args.profile)
+            project = active_project if active_project else "general"
+
+        tags_list = normalize_tags_list(args.tags)
+        if args.auto_tags and not tags_list:
+            tags_list = auto_tags_from_text(title, summary)
+
+        tags_json = tags_to_json(tags_list)
+        tags_text = tags_to_text(tags_list)
+
+        # Check for active session
+        active_session = get_active_session(args.profile)
+        session_id = active_session["session_id"] if active_session else None
+
+        obs_id = add_observation(
+            conn,
+            utc_now(),
+            project,
+            args.kind,
+            title,
+            summary,
+            tags_json,
+            tags_text,
+            full_text,
+            session_id,
+        )
+
+        result = {
+            "ok": True,
+            "id": obs_id,
+            "title": title,
+            "project": project,
+        }
+        if session_id:
+            result["session_id"] = session_id
+
+        print(json.dumps(result, indent=2))
+        return
+
+    if args.command == "checkpoint":
+        if args.checkpoint_action == "create":
+            active_session = get_active_session(args.profile)
+            session_id = active_session["session_id"] if active_session else None
+            project = get_active_project(args.profile) or "general"
+
+            checkpoint_id = create_checkpoint(
+                conn,
+                name=args.name,
+                description=args.description,
+                tag=args.tag,
+                session_id=session_id,
+                project=project,
+            )
+            print(json.dumps({
+                "ok": True,
+                "action": "create",
+                "checkpoint_id": checkpoint_id,
+                "name": args.name,
+                "project": project,
+            }, indent=2))
+            return
+
+        if args.checkpoint_action == "list":
+            checkpoints = list_checkpoints(conn, limit=args.limit)
+            print(json.dumps({
+                "ok": True,
+                "action": "list",
+                "checkpoints": [asdict(c) for c in checkpoints],
+            }, indent=2))
+            return
+
+        if args.checkpoint_action == "show":
+            checkpoint = get_checkpoint(conn, args.checkpoint_id)
+            if not checkpoint:
+                print(json.dumps({"ok": False, "error": f"Checkpoint {args.checkpoint_id} not found"}, indent=2))
+                sys.exit(1)
+            observations = get_checkpoint_observations(conn, args.checkpoint_id)
+            print(json.dumps({
+                "ok": True,
+                "action": "show",
+                "checkpoint": asdict(checkpoint),
+                "observations": [asdict(o) for o in observations],
+            }, indent=2))
+            return
+
+        if args.checkpoint_action == "resume":
+            try:
+                result = resume_from_checkpoint(conn, args.checkpoint_id, args.profile)
+            except ValueError as exc:
+                print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+                sys.exit(1)
+            print(json.dumps({
+                "ok": True,
+                "action": "resume",
+                **result,
             }, indent=2))
             return
 
