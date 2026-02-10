@@ -16,7 +16,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Optional
 
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+SESSION_FILE = ".los_memory_session"
 PROFILE_DB_PATHS = {
     "codex": "~/.codex_memory/memory.db",
     "claude": "~/.claude_memory/memory.db",
@@ -74,6 +75,19 @@ class Observation:
     summary: str
     tags: List[str]
     raw: str
+    session_id: Optional[int] = None
+
+
+@dataclass
+class Session:
+    id: int
+    start_time: str
+    end_time: Optional[str]
+    project: str
+    working_dir: str
+    agent_type: str
+    summary: str
+    status: str
 
 
 def utc_now() -> str:
@@ -87,6 +101,17 @@ def resolve_db_path(profile: str, explicit_db: Optional[str]) -> str:
     if profile_name not in PROFILE_DB_PATHS:
         raise ValueError(f"Unknown profile '{profile_name}'. Expected one of: {', '.join(PROFILE_CHOICES)}")
     return os.path.expanduser(PROFILE_DB_PATHS[profile_name])
+
+
+def get_session_file_path(profile: str) -> str:
+    """Get the path to the session state file for a profile."""
+    profile_name = (profile or DEFAULT_PROFILE).strip().lower()
+    if profile_name == "codex":
+        return os.path.expanduser("~/.codex_memory/current_session")
+    elif profile_name == "claude":
+        return os.path.expanduser("~/.claude_memory/current_session")
+    else:
+        return os.path.expanduser("~/.local/share/llm-memory/current_session")
 
 
 def connect_db(path: str) -> sqlite3.Connection:
@@ -110,7 +135,22 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             summary TEXT NOT NULL,
             tags TEXT NOT NULL,
             tags_text TEXT NOT NULL,
-            raw TEXT NOT NULL
+            raw TEXT NOT NULL,
+            session_id INTEGER REFERENCES sessions(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_time TEXT NOT NULL,
+            end_time TEXT,
+            project TEXT NOT NULL,
+            working_dir TEXT NOT NULL,
+            agent_type TEXT NOT NULL,
+            summary TEXT DEFAULT '',
+            status TEXT DEFAULT 'active'
         )
         """
     )
@@ -183,6 +223,30 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             )
         rebuild_fts(conn)
         set_schema_version(conn, 2)
+        version = 2
+    if version < 3:
+        # Version 3 adds sessions table and session_id to observations
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_time TEXT NOT NULL,
+                end_time TEXT,
+                project TEXT NOT NULL,
+                working_dir TEXT NOT NULL,
+                agent_type TEXT NOT NULL,
+                summary TEXT DEFAULT '',
+                status TEXT DEFAULT 'active'
+            )
+            """
+        )
+        try:
+            conn.execute(
+                "ALTER TABLE observations ADD COLUMN session_id INTEGER REFERENCES sessions(id)"
+            )
+        except sqlite3.OperationalError:
+            pass
+        set_schema_version(conn, 3)
 
 
 def ensure_fts(conn: sqlite3.Connection) -> bool:
@@ -253,13 +317,14 @@ def add_observation(
     tags: str,
     tags_text: str,
     raw: str,
+    session_id: Optional[int] = None,
 ) -> int:
     cursor = conn.execute(
         """
-        INSERT INTO observations (timestamp, project, kind, title, summary, tags, tags_text, raw)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO observations (timestamp, project, kind, title, summary, tags, tags_text, raw, session_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (timestamp, project, kind, title, summary, tags, tags_text, raw),
+        (timestamp, project, kind, title, summary, tags, tags_text, raw, session_id),
     )
     conn.commit()
     return int(cursor.lastrowid)
@@ -383,9 +448,179 @@ def normalize_rows(rows: Iterable[sqlite3.Row]) -> List[Observation]:
                 summary=row["summary"],
                 tags=parse_tags_json(row["tags"]),
                 raw=row["raw"],
+                session_id=row["session_id"] if "session_id" in row.keys() else None,
             )
         )
     return results
+
+
+# Session management functions
+def start_session(
+    conn: sqlite3.Connection,
+    project: str,
+    working_dir: str,
+    agent_type: str,
+    summary: str = "",
+) -> int:
+    """Start a new session and return its ID."""
+    cursor = conn.execute(
+        """
+        INSERT INTO sessions (start_time, end_time, project, working_dir, agent_type, summary, status)
+        VALUES (?, NULL, ?, ?, ?, ?, 'active')
+        """,
+        (utc_now(), project, working_dir, agent_type, summary),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def end_session(conn: sqlite3.Connection, session_id: int, summary: Optional[str] = None) -> None:
+    """End a session by setting its end_time and optionally updating summary."""
+    if summary:
+        conn.execute(
+            """
+            UPDATE sessions SET end_time = ?, status = 'completed', summary = ?
+            WHERE id = ?
+            """,
+            (utc_now(), summary, session_id),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE sessions SET end_time = ?, status = 'completed'
+            WHERE id = ?
+            """,
+            (utc_now(), session_id),
+        )
+    conn.commit()
+
+
+def get_session(conn: sqlite3.Connection, session_id: int) -> Optional[Session]:
+    """Get a session by ID."""
+    row = conn.execute(
+        "SELECT * FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return Session(
+        id=row["id"],
+        start_time=row["start_time"],
+        end_time=row["end_time"],
+        project=row["project"],
+        working_dir=row["working_dir"],
+        agent_type=row["agent_type"],
+        summary=row["summary"],
+        status=row["status"],
+    )
+
+
+def list_sessions(
+    conn: sqlite3.Connection,
+    status: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> List[Session]:
+    """List sessions, optionally filtered by status."""
+    query = "SELECT * FROM sessions"
+    params: List[object] = []
+    if status:
+        query += " WHERE status = ?"
+        params.append(status)
+    query += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    rows = conn.execute(query, params).fetchall()
+    return [
+        Session(
+            id=row["id"],
+            start_time=row["start_time"],
+            end_time=row["end_time"],
+            project=row["project"],
+            working_dir=row["working_dir"],
+            agent_type=row["agent_type"],
+            summary=row["summary"],
+            status=row["status"],
+        )
+        for row in rows
+    ]
+
+
+def get_session_observations(
+    conn: sqlite3.Connection,
+    session_id: int,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Observation]:
+    """Get all observations for a session."""
+    rows = conn.execute(
+        """
+        SELECT * FROM observations
+        WHERE session_id = ?
+        ORDER BY timestamp ASC
+        LIMIT ? OFFSET ?
+        """,
+        (session_id, limit, offset),
+    ).fetchall()
+    return normalize_rows(rows)
+
+
+def get_active_session(profile: str) -> Optional[dict]:
+    """Get the currently active session from the session file."""
+    session_file = get_session_file_path(profile)
+    if not os.path.exists(session_file):
+        return None
+    try:
+        with open(session_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
+def set_active_session(profile: str, session_id: int, db_path: str) -> None:
+    """Set the active session in the session file."""
+    session_file = get_session_file_path(profile)
+    session_dir = os.path.dirname(session_file)
+    if session_dir:
+        os.makedirs(session_dir, exist_ok=True)
+    with open(session_file, "w", encoding="utf-8") as f:
+        json.dump({"session_id": session_id, "db_path": db_path}, f)
+
+
+def clear_active_session(profile: str) -> None:
+    """Clear the active session."""
+    session_file = get_session_file_path(profile)
+    if os.path.exists(session_file):
+        os.remove(session_file)
+
+
+def generate_session_summary(conn: sqlite3.Connection, session_id: int) -> str:
+    """Generate an automatic summary for a session based on its observations."""
+    observations = get_session_observations(conn, session_id, limit=1000)
+    if not observations:
+        return "No observations in session"
+
+    # Count kinds
+    kind_counts: dict[str, int] = {}
+    for obs in observations:
+        kind_counts[obs.kind] = kind_counts.get(obs.kind, 0) + 1
+
+    # Get all tags
+    all_tags: set[str] = set()
+    for obs in observations:
+        all_tags.update(obs.tags)
+
+    summary_parts = [f"{len(observations)} observation(s)"]
+
+    if kind_counts:
+        kind_str = ", ".join(f"{count} {kind}" for kind, count in sorted(kind_counts.items()))
+        summary_parts.append(f"Types: {kind_str}")
+
+    if all_tags:
+        tag_str = ", ".join(sorted(all_tags)[:10])
+        summary_parts.append(f"Tags: {tag_str}")
+
+    return "; ".join(summary_parts)
 
 
 def quote_fts_query(query: str) -> str:
@@ -431,6 +666,7 @@ def run_search(
                     "summary": row["summary"],
                     "tags": parse_tags_json(row["tags"]),
                     "score": row["score"],
+                    "session_id": row["session_id"] if "session_id" in row.keys() else None,
                 }
                 for row in rows
             ]
@@ -458,6 +694,7 @@ def run_search(
             "summary": row["summary"],
             "tags": parse_tags_json(row["tags"]),
             "score": None,
+            "session_id": row["session_id"] if "session_id" in row.keys() else None,
         }
         for row in rows
     ]
@@ -499,7 +736,8 @@ def run_timeline(
     params.append(str(limit))
     params.append(str(offset))
     rows = conn.execute(query, params).fetchall()
-    return normalize_rows(rows)
+    results = normalize_rows(rows)
+    return results
 
 
 def run_get(conn: sqlite3.Connection, ids: List[int]) -> List[Observation]:
@@ -872,6 +1110,31 @@ def parse_args() -> argparse.Namespace:
     manage_parser.add_argument("action", choices=["stats", "projects", "tags", "vacuum"])
     manage_parser.add_argument("--limit", type=int, default=20)
 
+    # Session commands
+    session_parser = subparsers.add_parser("session", help="Session management")
+    session_subparsers = session_parser.add_subparsers(dest="session_action", required=True)
+
+    session_start_parser = session_subparsers.add_parser("start", help="Start a new session")
+    session_start_parser.add_argument("--project", default="general", help="Project name")
+    session_start_parser.add_argument("--working-dir", default=os.getcwd(), help="Working directory")
+    session_start_parser.add_argument("--agent-type", default=DEFAULT_PROFILE, help="Agent type (codex/claude)")
+    session_start_parser.add_argument("--summary", default="", help="Session summary/description")
+
+    session_stop_parser = session_subparsers.add_parser("stop", help="Stop the current session")
+    session_stop_parser.add_argument("--summary", default=None, help="Update session summary on stop")
+
+    session_list_parser = session_subparsers.add_parser("list", help="List sessions")
+    session_list_parser.add_argument("--status", choices=["active", "completed"], default=None)
+    session_list_parser.add_argument("--limit", type=int, default=20)
+    session_list_parser.add_argument("--offset", type=int, default=0)
+
+    session_show_parser = session_subparsers.add_parser("show", help="Show session details")
+    session_show_parser.add_argument("session_id", type=int, help="Session ID")
+    session_show_parser.add_argument("--observations", action="store_true", help="Include observations")
+
+    session_resume_parser = session_subparsers.add_parser("resume", help="Resume a session")
+    session_resume_parser.add_argument("session_id", type=int, nargs="?", default=None, help="Session ID (or use active session)")
+
     return parser.parse_args()
 
 
@@ -910,6 +1173,9 @@ def main() -> None:
             tags_list = auto_tags_from_text(title, summary)
         tags_json = tags_to_json(tags_list)
         tags_text = tags_to_text(tags_list)
+        # Check for active session
+        active_session = get_active_session(args.profile)
+        session_id = active_session["session_id"] if active_session else None
         obs_id = add_observation(
             conn,
             args.timestamp,
@@ -920,8 +1186,12 @@ def main() -> None:
             tags_json,
             tags_text,
             raw,
+            session_id,
         )
-        print(json.dumps({"ok": True, "id": obs_id}, indent=2))
+        result = {"ok": True, "id": obs_id}
+        if session_id:
+            result["session_id"] = session_id
+        print(json.dumps(result, indent=2))
         return
 
     if args.command == "search":
@@ -1052,6 +1322,95 @@ def main() -> None:
         result["db"] = db_path
         result["profile"] = args.profile
         print(json.dumps(result, indent=2))
+        return
+
+    if args.command == "session":
+        if args.session_action == "start":
+            session_id = start_session(
+                conn,
+                project=args.project,
+                working_dir=args.working_dir,
+                agent_type=args.agent_type,
+                summary=args.summary,
+            )
+            set_active_session(args.profile, session_id, db_path)
+            print(json.dumps({
+                "ok": True,
+                "action": "start",
+                "session_id": session_id,
+                "project": args.project,
+                "working_dir": args.working_dir,
+            }, indent=2))
+            return
+
+        if args.session_action == "stop":
+            active = get_active_session(args.profile)
+            if not active:
+                print(json.dumps({"ok": False, "error": "No active session"}, indent=2))
+                sys.exit(1)
+            session_id = active["session_id"]
+            summary = args.summary
+            if not summary:
+                summary = generate_session_summary(conn, session_id)
+            end_session(conn, session_id, summary)
+            clear_active_session(args.profile)
+            print(json.dumps({
+                "ok": True,
+                "action": "stop",
+                "session_id": session_id,
+                "summary": summary,
+            }, indent=2))
+            return
+
+        if args.session_action == "list":
+            sessions = list_sessions(conn, status=args.status, limit=args.limit, offset=args.offset)
+            print(json.dumps({
+                "ok": True,
+                "action": "list",
+                "sessions": [asdict(s) for s in sessions],
+            }, indent=2))
+            return
+
+        if args.session_action == "show":
+            session = get_session(conn, args.session_id)
+            if not session:
+                print(json.dumps({"ok": False, "error": f"Session {args.session_id} not found"}, indent=2))
+                sys.exit(1)
+            result = {
+                "ok": True,
+                "action": "show",
+                "session": asdict(session),
+            }
+            if args.observations:
+                observations = get_session_observations(conn, args.session_id)
+                result["observations"] = [asdict(o) for o in observations]
+            print(json.dumps(result, indent=2))
+            return
+
+        if args.session_action == "resume":
+            if args.session_id:
+                session = get_session(conn, args.session_id)
+                if not session:
+                    print(json.dumps({"ok": False, "error": f"Session {args.session_id} not found"}, indent=2))
+                    sys.exit(1)
+                set_active_session(args.profile, args.session_id, db_path)
+                print(json.dumps({
+                    "ok": True,
+                    "action": "resume",
+                    "session_id": args.session_id,
+                }, indent=2))
+            else:
+                active = get_active_session(args.profile)
+                if not active:
+                    print(json.dumps({"ok": False, "error": "No active session to resume"}, indent=2))
+                    sys.exit(1)
+                print(json.dumps({
+                    "ok": True,
+                    "action": "resume",
+                    "session_id": active["session_id"],
+                }, indent=2))
+            return
+
         return
 
 
