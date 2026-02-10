@@ -1,25 +1,9 @@
-#!/usr/bin/env python3
-"""
-Standalone memory tool for logging and retrieving observations.
-
-This module re-exports all functionality from the memory_tool package
-for backwards compatibility. New code should import directly from
-the submodules:
-    from memory_tool.models import Observation
-    from memory_tool.database import connect_db
-"""
+"""Memory tool package."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-# Re-export everything from the package for backwards compatibility
-from memory_tool.models import Checkpoint, Observation, Session
-from memory_tool.database import connect_db, ensure_fts, ensure_schema, init_db, SCHEMA_VERSION
-from memory_tool.utils import (
+from .models import Checkpoint, Observation, Session
+from .database import connect_db, ensure_fts, ensure_schema, init_db, SCHEMA_VERSION
+from .utils import (
     auto_tags_from_text,
     normalize_tags_list,
     normalize_text,
@@ -32,7 +16,7 @@ from memory_tool.utils import (
     PROFILE_CHOICES,
     PROFILE_DB_PATHS,
 )
-from memory_tool.operations import (
+from .operations import (
     add_observation,
     normalize_rows,
     run_search,
@@ -46,7 +30,7 @@ from memory_tool.operations import (
     run_manage,
     generate_visual_timeline,
 )
-from memory_tool.sessions import (
+from .sessions import (
     get_active_session,
     set_active_session,
     clear_active_session,
@@ -57,26 +41,27 @@ from memory_tool.sessions import (
     get_session_observations,
     generate_session_summary,
 )
-from memory_tool.checkpoints import (
+from .checkpoints import (
     get_checkpoint,
     list_checkpoints,
     get_checkpoint_observations,
     resume_from_checkpoint,
 )
-from memory_tool.projects import get_active_project, set_active_project, list_projects, get_project_stats
-from memory_tool.share import run_share, run_import
-from memory_tool.cli import parse_args, main
+from .projects import list_projects
+from .share import run_share, run_import
 
-# Backwards compatibility aliases
 __all__ = [
+    # Models
     "Checkpoint",
     "Observation",
     "Session",
+    # Database
     "connect_db",
     "ensure_fts",
     "ensure_schema",
     "init_db",
     "SCHEMA_VERSION",
+    # Utils
     "auto_tags_from_text",
     "normalize_tags_list",
     "normalize_text",
@@ -88,6 +73,7 @@ __all__ = [
     "DEFAULT_PROFILE",
     "PROFILE_CHOICES",
     "PROFILE_DB_PATHS",
+    # Operations
     "add_observation",
     "normalize_rows",
     "run_search",
@@ -100,6 +86,7 @@ __all__ = [
     "run_clean",
     "run_manage",
     "generate_visual_timeline",
+    # Sessions
     "get_active_session",
     "set_active_session",
     "clear_active_session",
@@ -109,19 +96,14 @@ __all__ = [
     "list_sessions",
     "get_session_observations",
     "generate_session_summary",
+    # Checkpoints
     "get_checkpoint",
     "list_checkpoints",
     "get_checkpoint_observations",
     "resume_from_checkpoint",
-    "get_active_project",
-    "set_active_project",
+    # Projects
     "list_projects",
-    "get_project_stats",
+    # Share
     "run_share",
     "run_import",
-    "parse_args",
-    "main",
 ]
-
-if __name__ == "__main__":
-    main()

@@ -9,8 +9,34 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-sys.path.append(str(Path(__file__).resolve().parent))
-import memory_tool as mem  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Import from the new package structure
+from memory_tool.database import ensure_fts, ensure_schema, connect_db
+from memory_tool.utils import resolve_db_path
+from memory_tool.operations import normalize_rows, run_search, run_timeline, run_get, run_list
+from memory_tool.sessions import list_sessions
+from memory_tool.utils import DEFAULT_PROFILE, PROFILE_CHOICES
+
+# Create a simple namespace for compatibility
+class MemModule:
+    pass
+
+mem = MemModule()
+mem.DEFAULT_DB = resolve_db_path(DEFAULT_PROFILE, None)
+mem.PROFILE_CHOICES = PROFILE_CHOICES
+mem.DEFAULT_PROFILE = DEFAULT_PROFILE
+mem.resolve_db_path = resolve_db_path
+mem.connect_db = connect_db
+mem.ensure_schema = ensure_schema
+mem.ensure_fts = ensure_fts
+mem.run_search = run_search
+mem.run_timeline = run_timeline
+mem.run_get = run_get
+mem.run_list = run_list
+mem.normalize_rows = normalize_rows
+mem.asdict = lambda x: x.__dict__ if hasattr(x, '__dict__') else x
+mem.list_sessions = list_sessions
 
 HTML = """<!doctype html>
 <html lang="en">
