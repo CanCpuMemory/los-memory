@@ -740,6 +740,75 @@ def run_timeline(
     return results
 
 
+def generate_visual_timeline(observations: List[Observation], group_by: Optional[str] = None) -> str:
+    """Generate a visual ASCII timeline of observations."""
+    if not observations:
+        return "No observations to display."
+
+    lines = ["\n📅 Visual Timeline", "=" * 60]
+
+    # Sort by timestamp ascending
+    sorted_obs = sorted(observations, key=lambda x: x.timestamp)
+
+    if group_by == "day":
+        # Group by day
+        from collections import defaultdict
+        by_day: dict[str, List[Observation]] = defaultdict(list)
+        for obs in sorted_obs:
+            day = obs.timestamp[:10]  # YYYY-MM-DD
+            by_day[day].append(obs)
+
+        for day, obs_list in sorted(by_day.items()):
+            lines.append(f"\n📆 {day}")
+            lines.append("-" * 40)
+            for obs in obs_list:
+                time = obs.timestamp[11:16]  # HH:MM
+                icon = {"decision": "🎯", "fix": "🔧", "note": "📝", "incident": "🚨"}.get(obs.kind, "•")
+                lines.append(f"  {time} {icon} [{obs.kind}] {obs.title}")
+
+    elif group_by == "session":
+        # Group by session
+        from collections import defaultdict
+        by_session: dict[Optional[int], List[Observation]] = defaultdict(list)
+        for obs in sorted_obs:
+            by_session[obs.session_id].append(obs)
+
+        for session_id, obs_list in sorted(by_session.items(), key=lambda x: x[0] or 0):
+            if session_id:
+                lines.append(f"\n🔷 Session {session_id}")
+            else:
+                lines.append(f"\n🔸 No Session")
+            lines.append("-" * 40)
+            for obs in obs_list:
+                time = obs.timestamp[11:16]
+                icon = {"decision": "🎯", "fix": "🔧", "note": "📝", "incident": "🚨"}.get(obs.kind, "•")
+                lines.append(f"  {time} {icon} [{obs.kind}] {obs.title}")
+
+    else:
+        # Show with time gaps
+        prev_time: Optional[datetime] = None
+        for obs in sorted_obs:
+            obs_time = datetime.strptime(obs.timestamp, ISO_FORMAT).replace(tzinfo=timezone.utc)
+            time_str = obs.timestamp[11:16]
+
+            # Show gap if significant
+            if prev_time:
+                gap = obs_time - prev_time
+                if gap > timedelta(hours=1):
+                    gap_hours = gap.total_seconds() / 3600
+                    lines.append(f"\n  ... {gap_hours:.1f} hours gap ...")
+                elif gap > timedelta(minutes=10):
+                    gap_mins = gap.total_seconds() / 60
+                    lines.append(f"\n  ... {gap_mins:.0f} min gap ...")
+
+            icon = {"decision": "🎯", "fix": "🔧", "note": "📝", "incident": "🚨"}.get(obs.kind, "•")
+            lines.append(f"{time_str} {icon} [{obs.kind}] {obs.title}")
+            prev_time = obs_time
+
+    lines.append("\n" + "=" * 60)
+    return "\n".join(lines)
+
+
 def run_get(conn: sqlite3.Connection, ids: List[int]) -> List[Observation]:
     placeholders = ",".join("?" for _ in ids)
     rows = conn.execute(
@@ -1004,6 +1073,120 @@ def run_manage(conn: sqlite3.Connection, action: str, limit: int) -> dict:
         return {"ok": True, "action": action, "vacuumed": True}
 
     raise ValueError(f"Unsupported manage action: {action}")
+
+
+def get_project_file_path(profile: str) -> str:
+    """Get the path to store active project for a profile."""
+    profile_name = (profile or DEFAULT_PROFILE).strip().lower()
+    if profile_name == "codex":
+        return os.path.expanduser("~/.codex_memory/active_project")
+    elif profile_name == "claude":
+        return os.path.expanduser("~/.claude_memory/active_project")
+    else:
+        return os.path.expanduser("~/.local/share/llm-memory/active_project")
+
+
+def get_active_project(profile: str) -> Optional[str]:
+    """Get the currently active project."""
+    project_file = get_project_file_path(profile)
+    if not os.path.exists(project_file):
+        return None
+    try:
+        with open(project_file, "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except IOError:
+        return None
+
+
+def set_active_project(profile: str, project: str) -> None:
+    """Set the active project."""
+    project_file = get_project_file_path(profile)
+    project_dir = os.path.dirname(project_file)
+    if project_dir:
+        os.makedirs(project_dir, exist_ok=True)
+    with open(project_file, "w", encoding="utf-8") as f:
+        f.write(project)
+
+
+def list_projects(conn: sqlite3.Connection, limit: int) -> List[dict]:
+    """List all projects with observation counts."""
+    rows = conn.execute(
+        """
+        SELECT
+            o.project,
+            COUNT(*) as observation_count,
+            COUNT(DISTINCT o.kind) as kind_count,
+            MIN(o.timestamp) as earliest,
+            MAX(o.timestamp) as latest
+        FROM observations o
+        GROUP BY o.project
+        ORDER BY latest DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        {
+            "project": row["project"],
+            "observation_count": row["observation_count"],
+            "kind_count": row["kind_count"],
+            "earliest": row["earliest"],
+            "latest": row["latest"],
+        }
+        for row in rows
+    ]
+
+
+def get_project_stats(conn: sqlite3.Connection, project: str) -> dict:
+    """Get detailed statistics for a project."""
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) as observation_count,
+            COUNT(DISTINCT kind) as kind_count,
+            MIN(timestamp) as earliest,
+            MAX(timestamp) as latest
+        FROM observations
+        WHERE project = ?
+        """,
+        (project,),
+    ).fetchone()
+
+    kinds = [
+        {"kind": r["kind"], "count": r["count"]}
+        for r in conn.execute(
+            "SELECT kind, COUNT(*) as count FROM observations WHERE project = ? GROUP BY kind",
+            (project,),
+        ).fetchall()
+    ]
+
+    # Get all tags for this project
+    tag_counts: dict[str, int] = {}
+    for r in conn.execute("SELECT tags FROM observations WHERE project = ?", (project,)).fetchall():
+        for tag in parse_tags_json(r["tags"]):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+    top_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))[:10]
+
+    # Get recent sessions
+    sessions = [
+        {"id": r["id"], "start_time": r["start_time"], "status": r["status"]}
+        for r in conn.execute(
+            "SELECT id, start_time, status FROM sessions WHERE project = ? ORDER BY start_time DESC LIMIT 5",
+            (project,),
+        ).fetchall()
+    ]
+
+    return {
+        "project": project,
+        "observation_count": row["observation_count"],
+        "kind_count": row["kind_count"],
+        "earliest": row["earliest"],
+        "latest": row["latest"],
+        "kinds": kinds,
+        "top_tags": [{"tag": t, "count": c} for t, c in top_tags],
+        "recent_sessions": sessions,
+    }
 
 
 def run_share(
@@ -1356,13 +1539,15 @@ def parse_args() -> argparse.Namespace:
         help="Quote the query to make FTS parsing safer",
     )
 
-    timeline_parser = subparsers.add_parser("timeline", help="Timeline query")
+    timeline_parser = subparsers.add_parser("timeline", help="Timeline query and visualization")
     timeline_parser.add_argument("--start")
     timeline_parser.add_argument("--end")
     timeline_parser.add_argument("--around-id", type=int)
     timeline_parser.add_argument("--window-minutes", type=int, default=120)
     timeline_parser.add_argument("--limit", type=int, default=20)
     timeline_parser.add_argument("--offset", type=int, default=0)
+    timeline_parser.add_argument("--visual", "-v", action="store_true", help="Show visual timeline")
+    timeline_parser.add_argument("--group-by", choices=["hour", "day", "session"], default=None, help="Group observations")
 
     get_parser = subparsers.add_parser("get", help="Fetch observations by id")
     get_parser.add_argument("ids", help="Comma-separated observation ids")
@@ -1410,6 +1595,25 @@ def parse_args() -> argparse.Namespace:
     manage_parser = subparsers.add_parser("manage", help="Manage and inspect memory database")
     manage_parser.add_argument("action", choices=["stats", "projects", "tags", "vacuum"])
     manage_parser.add_argument("--limit", type=int, default=20)
+
+    # Project command
+    project_parser = subparsers.add_parser("project", help="Project management")
+    project_subparsers = project_parser.add_subparsers(dest="project_action", required=True)
+
+    project_list_parser = project_subparsers.add_parser("list", help="List all projects")
+    project_list_parser.add_argument("--limit", type=int, default=50)
+
+    project_switch_parser = project_subparsers.add_parser("switch", help="Set default project for current session")
+    project_switch_parser.add_argument("project_name", help="Project name to switch to")
+
+    project_archive_parser = project_subparsers.add_parser("archive", help="Archive a project")
+    project_archive_parser.add_argument("project_name", help="Project name to archive")
+
+    project_stats_parser = project_subparsers.add_parser("stats", help="Show project statistics")
+    project_stats_parser.add_argument("project_name", nargs="?", default=None, help="Project name (or current)")
+
+    project_active_parser = project_subparsers.add_parser("active", help="Show/set active project")
+    project_active_parser.add_argument("project_name", nargs="?", default=None, help="Set active project")
 
     # Session commands
     session_parser = subparsers.add_parser("session", help="Session management")
@@ -1473,12 +1677,18 @@ def main() -> None:
         summary = normalize_text(args.summary)
         tags_list = normalize_tags_list(args.tags)
         raw = args.raw
+        # Check for active project (unless explicitly provided)
+        project = args.project
+        if project == "general":
+            active_project = get_active_project(args.profile)
+            if active_project:
+                project = active_project
         if args.llm_hook:
             hook_payload = {
                 "title": title,
                 "summary": summary,
                 "raw": raw,
-                "project": args.project,
+                "project": project,
                 "kind": args.kind,
                 "tags": tags_list,
             }
@@ -1497,7 +1707,7 @@ def main() -> None:
         obs_id = add_observation(
             conn,
             args.timestamp,
-            args.project,
+            project,
             args.kind,
             title,
             summary,
@@ -1538,7 +1748,18 @@ def main() -> None:
         except ValueError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
             sys.exit(1)
-        print(json.dumps({"ok": True, "results": [asdict(r) for r in results]}, indent=2))
+
+        # Output JSON
+        output = {"ok": True, "results": [asdict(r) for r in results]}
+
+        # Add visual timeline if requested
+        if args.visual:
+            visual = generate_visual_timeline(results, group_by=args.group_by)
+            output["visual"] = visual
+            # Also print to stderr so user sees it even when piping JSON
+            print(visual, file=sys.stderr)
+
+        print(json.dumps(output, indent=2))
         return
 
     if args.command == "get":
@@ -1766,6 +1987,76 @@ def main() -> None:
         result["db"] = db_path
         result["profile"] = args.profile
         print(json.dumps(result, indent=2))
+        return
+
+    if args.command == "project":
+        if args.project_action == "list":
+            projects = list_projects(conn, args.limit)
+            active = get_active_project(args.profile)
+            print(json.dumps({
+                "ok": True,
+                "action": "list",
+                "active_project": active,
+                "projects": projects,
+            }, indent=2))
+            return
+
+        if args.project_action == "switch":
+            set_active_project(args.profile, args.project_name)
+            print(json.dumps({
+                "ok": True,
+                "action": "switch",
+                "project": args.project_name,
+            }, indent=2))
+            return
+
+        if args.project_action == "active":
+            if args.project_name:
+                set_active_project(args.profile, args.project_name)
+                print(json.dumps({
+                    "ok": True,
+                    "action": "active",
+                    "project": args.project_name,
+                }, indent=2))
+            else:
+                active = get_active_project(args.profile)
+                print(json.dumps({
+                    "ok": True,
+                    "action": "active",
+                    "project": active,
+                }, indent=2))
+            return
+
+        if args.project_action == "stats":
+            project_name = args.project_name or get_active_project(args.profile) or "general"
+            stats = get_project_stats(conn, project_name)
+            print(json.dumps({
+                "ok": True,
+                "action": "stats",
+                **stats,
+            }, indent=2))
+            return
+
+        if args.project_action == "archive":
+            # Rename project to archived/{project}
+            new_name = f"archived/{args.project_name}"
+            conn.execute(
+                "UPDATE observations SET project = ? WHERE project = ?",
+                (new_name, args.project_name),
+            )
+            conn.execute(
+                "UPDATE sessions SET project = ? WHERE project = ?",
+                (new_name, args.project_name),
+            )
+            conn.commit()
+            print(json.dumps({
+                "ok": True,
+                "action": "archive",
+                "old_name": args.project_name,
+                "new_name": new_name,
+            }, indent=2))
+            return
+
         return
 
 
