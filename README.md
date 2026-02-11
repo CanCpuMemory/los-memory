@@ -55,6 +55,9 @@ See `docs/GENERAL_MEMORY.md` for practical workflows, cleanup strategy, and mana
 ## Codex / Claude install and usage
 See `docs/CODEX_CLAUDE_INSTALL.md` for setup and daily usage from each assistant.
 
+## AI Agent usage guide
+See `docs/AI_USAGE_GUIDE.md` for comprehensive guidance on how AI agents should use this tool effectively, including best practices, workflows, and examples.
+
 ## Makefile shortcuts
 ```bash
 make help
