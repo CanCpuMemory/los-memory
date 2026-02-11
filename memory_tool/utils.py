@@ -109,6 +109,19 @@ def tags_to_text(tags_list: List[str]) -> str:
     return " ".join(tags_list)
 
 
+def parse_tags_json(tags_json: str) -> List[str]:
+    """Parse JSON string to tags list."""
+    if not tags_json:
+        return []
+    try:
+        result = json.loads(tags_json)
+        if isinstance(result, list):
+            return result
+        return []
+    except json.JSONDecodeError:
+        return []
+
+
 def auto_tags_from_text(title: str, summary: str, limit: int = 6) -> List[str]:
     """Auto-generate tags from title and summary."""
     text = normalize_text(f"{title} {summary}").lower()
