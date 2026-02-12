@@ -138,7 +138,29 @@ python3 memory_tool/viewer.py --profile codex
 python3 memory_tool/viewer.py --profile claude --auth-token "secret-token"
 ```
 
-## 8) Cross-agent workflow patterns
+## 8) Additional Commands
+
+### Feedback and Corrections
+Provide natural language feedback to correct or supplement memories:
+```bash
+python3 memory_tool/memory_tool.py --profile codex feedback "修正: API密钥是yyy" --id 42
+```
+
+### Tool Memory Tracking
+Log and analyze tool usage:
+```bash
+python3 memory_tool/memory_tool.py --profile codex tool-log --tool search_files --input '{"q":"TODO"}' --status success
+python3 memory_tool/memory_tool.py --profile codex tool-stats
+```
+
+### Memory Linking
+Create relationships between related memories:
+```bash
+python3 memory_tool/memory_tool.py --profile codex link --from 123 --to 456 --type refines
+python3 memory_tool/memory_tool.py --profile codex related 123
+```
+
+## 9) Cross-agent workflow patterns
 Separate stores:
 - Keep Codex and Claude data isolated by profile.
 
@@ -147,10 +169,10 @@ Shared store:
 
 Recommended fields:
 - `project`: team/app name (`payments`, `infra`, `frontend`)
-- `kind`: `note`, `decision`, `incident`, `meeting`, `todo`
+- `kind`: `note`, `decision`, `incident`, `meeting`, `todo`, `tool_call`
 - `tags`: short retrieval keys (`postgres`, `rollback`, `oauth`)
 
-## 9) Backup and export
+## 10) Backup and export
 ```bash
 python3 memory_tool/memory_tool.py --profile codex export --format json --output codex-memory.json
 python3 memory_tool/memory_tool.py --profile claude export --format csv --output claude-memory.csv
@@ -158,7 +180,7 @@ python3 memory_tool/memory_tool.py --profile claude export --format csv --output
 
 For full backup, copy the DB files directly.
 
-## 10) Shortcut commands
+## 11) Shortcut commands
 This repo includes a `Makefile`:
 
 ```bash

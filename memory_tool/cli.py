@@ -11,6 +11,9 @@ from typing import Optional
 
 from .database import connect_db, ensure_fts, ensure_schema, init_db
 from .models import Observation
+from .analytics import get_tool_stats, log_tool_call, suggest_tools_for_task
+from .feedback import apply_feedback, get_feedback_history
+from .links import create_link, delete_link, find_similar_observations, get_related_observations
 from .operations import (
     add_observation,
     generate_visual_timeline,
@@ -246,6 +249,51 @@ def parse_args() -> argparse.Namespace:
     capture_parser.add_argument("--tags", default="")
     capture_parser.add_argument("--auto-tags", action="store_true")
 
+    # feedback
+    feedback_parser = subparsers.add_parser("feedback", help="Provide natural language feedback on observations")
+    feedback_parser.add_argument("text", nargs="+", help="Feedback text (e.g., '修正: API密钥是yyy而非xxx')")
+    feedback_parser.add_argument("--id", type=int, required=True, dest="observation_id", help="Target observation ID")
+    feedback_parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying")
+    feedback_parser.add_argument("--history", action="store_true", help="Show feedback history for the observation")
+
+    # tool-log
+    tool_log_parser = subparsers.add_parser("tool-log", help="Log a tool call")
+    tool_log_parser.add_argument("--tool", required=True, help="Tool name")
+    tool_log_parser.add_argument("--input", required=True, help="Tool input (JSON string)")
+    tool_log_parser.add_argument("--output", default="{}", help="Tool output (JSON string)")
+    tool_log_parser.add_argument("--status", choices=["success", "error"], default="success", help="Call status")
+    tool_log_parser.add_argument("--duration", type=int, default=None, help="Duration in milliseconds")
+    tool_log_parser.add_argument("--project", default=None, help="Project name")
+
+    # tool-stats
+    tool_stats_parser = subparsers.add_parser("tool-stats", help="Show tool usage statistics")
+    tool_stats_parser.add_argument("--project", default=None, help="Filter by project")
+    tool_stats_parser.add_argument("--limit", type=int, default=20, help="Max tools to show")
+
+    # tool-suggest
+    tool_suggest_parser = subparsers.add_parser("tool-suggest", help="Suggest tools for a task")
+    tool_suggest_parser.add_argument("task", nargs="+", help="Task description")
+    tool_suggest_parser.add_argument("--limit", type=int, default=5, help="Max suggestions")
+
+    # link
+    link_parser = subparsers.add_parser("link", help="Create a link between observations")
+    link_parser.add_argument("--from", type=int, required=True, dest="from_id", help="Source observation ID")
+    link_parser.add_argument("--to", type=int, required=True, dest="to_id", help="Target observation ID")
+    link_parser.add_argument("--type", choices=["related", "child", "parent", "refines"], default="related", help="Link type")
+
+    # unlink
+    unlink_parser = subparsers.add_parser("unlink", help="Remove a link between observations")
+    unlink_parser.add_argument("--from", type=int, required=True, dest="from_id", help="Source observation ID")
+    unlink_parser.add_argument("--to", type=int, required=True, dest="to_id", help="Target observation ID")
+    unlink_parser.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None, help="Specific link type to remove")
+
+    # related
+    related_parser = subparsers.add_parser("related", help="Find observations related to a given observation")
+    related_parser.add_argument("id", type=int, help="Observation ID")
+    related_parser.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None, help="Filter by link type")
+    related_parser.add_argument("--limit", type=int, default=20, help="Max results")
+    related_parser.add_argument("--suggest", action="store_true", help="Suggest potentially related observations based on similarity")
+
     return parser.parse_args()
 
 
@@ -296,6 +344,20 @@ def main() -> None:
             _handle_import(conn, args)
         elif args.command == "capture":
             _handle_capture(conn, args)
+        elif args.command == "feedback":
+            _handle_feedback(conn, args)
+        elif args.command == "tool-log":
+            _handle_tool_log(conn, args)
+        elif args.command == "tool-stats":
+            _handle_tool_stats(conn, args)
+        elif args.command == "tool-suggest":
+            _handle_tool_suggest(conn, args)
+        elif args.command == "link":
+            _handle_link(conn, args)
+        elif args.command == "unlink":
+            _handle_unlink(conn, args)
+        elif args.command == "related":
+            _handle_related(conn, args)
     except ValueError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
         sys.exit(1)
@@ -550,6 +612,93 @@ def _handle_capture(conn, args):
     if session_id:
         result["session_id"] = session_id
     print(json.dumps(result, indent=2))
+
+
+def _handle_feedback(conn, args):
+    full_text = " ".join(args.text)
+
+    if args.history:
+        history = get_feedback_history(conn, args.observation_id)
+        print(json.dumps({"ok": True, "observation_id": args.observation_id, "history": history}, indent=2, ensure_ascii=False))
+        return
+
+    result = apply_feedback(conn, args.observation_id, full_text, auto_apply=not args.dry_run)
+    result["db"] = args.db
+    result["profile"] = args.profile
+    result["dry_run"] = args.dry_run
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+def _handle_tool_log(conn, args):
+    import json
+
+    tool_input = json.loads(args.input)
+    tool_output = json.loads(args.output)
+    project = args.project or get_active_project(args.profile) or "general"
+    active_session = get_active_session(args.profile)
+    session_id = active_session["session_id"] if active_session else None
+
+    obs_id = log_tool_call(
+        conn, args.tool, tool_input, tool_output,
+        args.status, args.duration, project, session_id
+    )
+    print(json.dumps({"ok": True, "id": obs_id, "tool": args.tool, "status": args.status}, indent=2))
+
+
+def _handle_tool_stats(conn, args):
+    result = get_tool_stats(conn, args.project, args.limit)
+    result["db"] = args.db
+    result["profile"] = args.profile
+    print(json.dumps(result, indent=2))
+
+
+def _handle_tool_suggest(conn, args):
+    task = " ".join(args.task)
+    result = suggest_tools_for_task(conn, task, args.limit)
+    result["db"] = args.db
+    result["profile"] = args.profile
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+def _handle_link(conn, args):
+    link_id = create_link(conn, args.from_id, args.to_id, args.type)
+    print(json.dumps({
+        "ok": True,
+        "link_id": link_id,
+        "from_id": args.from_id,
+        "to_id": args.to_id,
+        "type": args.type,
+    }, indent=2))
+
+
+def _handle_unlink(conn, args):
+    deleted = delete_link(conn, args.from_id, args.to_id, args.type)
+    print(json.dumps({
+        "ok": True,
+        "deleted": deleted,
+        "from_id": args.from_id,
+        "to_id": args.to_id,
+        "type": args.type,
+    }, indent=2))
+
+
+def _handle_related(conn, args):
+    if args.suggest:
+        suggestions = find_similar_observations(conn, args.id, args.limit)
+        print(json.dumps({
+            "ok": True,
+            "observation_id": args.id,
+            "mode": "suggested",
+            "suggestions": suggestions,
+        }, indent=2, ensure_ascii=False))
+    else:
+        related = get_related_observations(conn, args.id, args.type, args.limit)
+        print(json.dumps({
+            "ok": True,
+            "observation_id": args.id,
+            "mode": "linked",
+            "related": related,
+        }, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

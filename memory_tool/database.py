@@ -10,7 +10,7 @@ from .utils import ISO_FORMAT, utc_now
 if TYPE_CHECKING:
     pass
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 
 def connect_db(path: str) -> sqlite3.Connection:
@@ -171,6 +171,60 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             """
         )
         set_schema_version(conn, 4)
+        version = 4
+
+    if version < 5:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feedback_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target_observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+                action_type TEXT NOT NULL,
+                feedback_text TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_feedback_target
+            ON feedback_log(target_observation_id)
+            """
+        )
+        set_schema_version(conn, 5)
+        version = 5
+
+    if version < 6:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS observation_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+                to_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+                link_type TEXT NOT NULL DEFAULT 'related',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_links_from_to
+            ON observation_links(from_id, to_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_links_to_type
+            ON observation_links(to_id, link_type)
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_links_unique
+            ON observation_links(from_id, to_id, link_type)
+            """
+        )
+        set_schema_version(conn, 6)
 
 
 def ensure_fts(conn: sqlite3.Connection) -> bool:

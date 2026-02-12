@@ -48,6 +48,7 @@ Use the appropriate `kind` for each memory:
 | `meeting` | Discussion summaries | "Sprint planning decisions" |
 | `todo` | Future work items | "Refactor auth middleware" |
 | `snippet` | Reusable code blocks | "JWT validation helper" |
+| `tool_call` | Tool execution records | "Search files for TODO patterns" |
 
 ### Projects
 Use consistent project names:
@@ -150,6 +151,100 @@ python3 memory_tool/memory_tool.py --profile claude checkpoint create \
 python3 memory_tool/memory_tool.py --profile claude manage stats
 ```
 
+### Feedback and Corrections
+
+Correct or supplement existing memories using natural language:
+
+```bash
+# Correct an observation
+python3 memory_tool/memory_tool.py --profile claude feedback \
+  "修正: API密钥是yyy而非xxx" \
+  --id 123
+
+# Supplement with additional information
+python3 memory_tool/memory_tool.py --profile claude feedback \
+  "补充: 还需要考虑边界情况" \
+  --id 456
+
+# Preview changes without applying
+python3 memory_tool/memory_tool.py --profile claude feedback \
+  "修正: 数据库使用PostgreSQL而非MySQL" \
+  --id 789 \
+  --dry-run
+
+# View feedback history for an observation
+python3 memory_tool/memory_tool.py --profile claude feedback \
+  "查看历史" \
+  --id 123 \
+  --history
+```
+
+### Tool Memory Tracking
+
+Log tool calls to track usage patterns and get recommendations:
+
+```bash
+# Log a successful tool call
+python3 memory_tool/memory_tool.py --profile claude tool-log \
+  --tool "search_files" \
+  --input '{"query": "TODO"}' \
+  --output '{"results": [1, 2, 3]}' \
+  --status success \
+  --duration 150
+
+# Log a failed tool call
+python3 memory_tool/memory_tool.py --profile claude tool-log \
+  --tool "api_request" \
+  --input '{"url": "http://api.test"}' \
+  --output '{"error": "Timeout"}' \
+  --status error
+
+# View tool usage statistics
+python3 memory_tool/memory_tool.py --profile claude tool-stats
+
+# Filter by project
+python3 memory_tool/memory_tool.py --profile claude tool-stats \
+  --project "api-service"
+
+# Get tool suggestions for a task
+python3 memory_tool/memory_tool.py --profile claude tool-suggest \
+  "find code patterns in the codebase"
+```
+
+### Memory Linking
+
+Create relationships between related observations:
+
+```bash
+# Create a link between observations
+python3 memory_tool/memory_tool.py --profile claude link \
+  --from 123 \
+  --to 456 \
+  --type refines
+
+# Link types: related, child, parent, refines
+python3 memory_tool/memory_tool.py --profile claude link \
+  --from 100 \
+  --to 101 \
+  --type child
+
+# Find related observations
+python3 memory_tool/memory_tool.py --profile claude related 123
+
+# Filter by link type
+python3 memory_tool/memory_tool.py --profile claude related 123 \
+  --type refines
+
+# Suggest potentially related observations based on similarity
+python3 memory_tool/memory_tool.py --profile claude related 123 \
+  --suggest
+
+# Remove a link
+python3 memory_tool/memory_tool.py --profile claude unlink \
+  --from 123 \
+  --to 456
+```
+
 ## Python API Usage
 
 For programmatic access within Python:
@@ -161,6 +256,17 @@ from memory_tool.projects import get_active_project, set_active_project
 from memory_tool.sessions import start_session, end_session, get_active_session
 from memory_tool.checkpoints import create_checkpoint, resume_from_checkpoint
 from memory_tool.share import run_share, run_import
+
+# New in v2.x: Feedback and corrections
+from memory_tool.feedback import apply_feedback, get_feedback_history
+
+# New in v2.x: Tool memory and analytics
+from memory_tool.analytics import log_tool_call, get_tool_stats, suggest_tools_for_task
+
+# New in v2.x: Memory linking and relationships
+from memory_tool.links import (
+    create_link, delete_link, get_related_observations, find_similar_observations
+)
 
 # Connect to database
 conn = connect_db("~/.claude_memory/memory.db")
@@ -184,6 +290,43 @@ obs_id = add_observation(
 results = run_search(conn, "architecture decision", limit=10)
 for row in results:
     print(f"{row['id']}: {row['title']} ({row['project']})")
+
+# Provide feedback to correct an observation
+result = apply_feedback(
+    conn,
+    observation_id=123,
+    feedback_text="修正: API密钥是yyy而非xxx",
+    auto_apply=True
+)
+
+# Log a tool call
+log_tool_call(
+    conn,
+    tool_name="search_files",
+    tool_input={"query": "TODO"},
+    tool_output={"results": [1, 2, 3]},
+    status="success",
+    duration_ms=150,
+    project="my-project",
+    session_id=None
+)
+
+# Get tool usage statistics
+stats = get_tool_stats(conn)
+print(f"Total calls: {stats['total_calls']}, Success rate: {stats['success_rate']}%")
+
+# Create a link between observations
+link_id = create_link(conn, from_id=123, to_id=456, link_type="refines")
+
+# Find related observations
+related = get_related_observations(conn, observation_id=123)
+for obs in related:
+    print(f"{obs['id']}: {obs['title']} ({obs['link_type']})")
+
+# Find similar observations
+similar = find_similar_observations(conn, observation_id=123)
+for obs in similar:
+    print(f"Suggested: {obs['title']} (score: {obs['similarity_score']})")
 ```
 
 ## Retrieval Patterns

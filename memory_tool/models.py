@@ -40,3 +40,40 @@ class Checkpoint:
     session_id: Optional[int]
     observation_count: int
     project: str
+
+
+@dataclass
+class Feedback:
+    """Feedback record for observation corrections/supplements."""
+
+    id: int
+    target_observation_id: int
+    action_type: str  # "correct", "supplement", "delete"
+    feedback_text: str
+    timestamp: str
+
+
+@dataclass
+class ObservationLink:
+    """Link between two observations representing a relationship."""
+
+    id: int
+    from_id: int
+    to_id: int
+    link_type: str  # "related", "child", "parent", "refines"
+    created_at: str
+
+
+@dataclass
+class ToolCall:
+    """Tool call observation for tracking tool usage."""
+
+    id: int
+    timestamp: str
+    project: str
+    tool_name: str
+    tool_input: dict
+    tool_output: Optional[dict]
+    status: str  # "success", "error"
+    duration_ms: Optional[int]
+    session_id: Optional[int] = None

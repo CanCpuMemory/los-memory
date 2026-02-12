@@ -48,6 +48,15 @@ class BDDTestContext:
         self.last_session_id: int | None = None
         self.last_checkpoint_id: int | None = None
         self.search_results: list = []
+        self.feedback_history: list = []
+        self.last_feedback_result: dict | None = None
+        self.last_tool_stats: dict | None = None
+        self.last_tool_suggestions: dict | None = None
+        self.observations_by_title: dict[str, int] = {}
+        self.last_link_id: int | None = None
+        self.last_related: list = []
+        self.last_similar: list = []
+        self.last_unlink_result: bool = False
 
 
 @given("a new memory database", target_fixture="test_context")
@@ -191,6 +200,7 @@ def given_observation_exists(test_context: BDDTestContext, title: str):
         None,
     )
     test_context.last_observation_id = obs_id
+    test_context.observations_by_title[title] = obs_id
 
 
 @given("an observation exists with:")
