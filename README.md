@@ -30,9 +30,11 @@ python3 memory_tool/memory_tool.py --profile codex init
 python3 memory_tool/memory_tool.py --profile codex add --title "First note" --summary "Hello" --auto-tags
 python3 memory_tool/memory_tool.py --profile codex edit --id 1 --summary "Hello updated"
 python3 memory_tool/memory_tool.py --profile codex search "hello"
+python3 memory_tool/memory_tool.py --profile codex search "hello" --require-tags "tenant:default,user:alice"
 python3 memory_tool/memory_tool.py --profile codex delete "1" --dry-run
 python3 memory_tool/memory_tool.py --profile codex manage stats
 python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --dry-run
+python3 memory_tool/memory_tool.py --profile codex review-feedback --file review.json --dry-run
 ```
 
 ## Viewer
@@ -64,6 +66,11 @@ make help
 make init-codex
 make init-claude
 make stats PROFILE=codex
+```
+
+## Latency benchmark
+```bash
+python3 memory_tool/benchmark.py --iterations 20
 ```
 
 ## Skill layout

@@ -46,6 +46,8 @@ Returns summary results with IDs and optional scores.
 
 ```bash
 python3 memory_tool/memory_tool.py --profile codex search "<query>" --limit 10
+python3 memory_tool/memory_tool.py --profile codex search "<query>" \
+  --require-tags "tenant:default,user:alice"
 ```
 
 ### timeline
@@ -96,6 +98,41 @@ List latest observations.
 
 ```bash
 python3 memory_tool/memory_tool.py --profile codex list --limit 20 --offset 0
+python3 memory_tool/memory_tool.py --profile codex list \
+  --require-tags "tenant:default,user:alice"
+```
+
+### transition-log
+Write a structured agent transition record (`kind=agent_transition`).
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex transition-log \
+  --phase "review" \
+  --action "check-regression" \
+  --input '{"files":["a.py"]}' \
+  --output '{"ok":true,"issues":0}' \
+  --status success \
+  --reward 1.0 \
+  --project "tenant:default"
+```
+
+### review-feedback
+Batch apply review findings as feedback updates.
+
+Input JSON can be either an array or an object with `items`:
+
+```json
+{
+  "items": [
+    { "observation_id": 12, "feedback": "修正: ..."},
+    { "id": 13, "text": "补充: ..."}
+  ]
+}
+```
+
+```bash
+python3 memory_tool/memory_tool.py --profile codex review-feedback --file review.json
+python3 memory_tool/memory_tool.py --profile codex review-feedback --file review.json --dry-run
 ```
 
 ### export

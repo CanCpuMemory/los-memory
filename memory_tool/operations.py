@@ -56,6 +56,20 @@ def add_observation(
     return int(cursor.lastrowid)
 
 
+def _normalize_required_tags(required_tags: Optional[List[str]]) -> List[str]:
+    from .utils import normalize_tags_list
+    if not required_tags:
+        return []
+    return normalize_tags_list(required_tags)
+
+
+def _matches_required_tags(item_tags: List[str], required_tags: List[str]) -> bool:
+    if not required_tags:
+        return True
+    tag_set = set(item_tags or [])
+    return all(tag in tag_set for tag in required_tags)
+
+
 def run_search(
     conn: sqlite3.Connection,
     query: str,
@@ -63,12 +77,14 @@ def run_search(
     offset: int = 0,
     mode: str = "auto",
     quote: bool = False,
+    required_tags: Optional[List[str]] = None,
 ) -> List[dict]:
     """Search observations using FTS or LIKE."""
     from .utils import parse_tags_json, quote_fts_query
     query = query.strip()
     if not query:
         return []
+    required = _normalize_required_tags(required_tags)
     fts_query = quote_fts_query(query) if quote else query
     if mode != "like":
         try:
@@ -86,7 +102,7 @@ def run_search(
                 """,
                 (fts_query, limit, offset),
             ).fetchall()
-            return [
+            fts_results = [
                 {
                     "id": row["id"],
                     "timestamp": row["timestamp"],
@@ -100,6 +116,9 @@ def run_search(
                 }
                 for row in rows
             ]
+            if not required:
+                return fts_results
+            return [item for item in fts_results if _matches_required_tags(item.get("tags", []), required)]
         except sqlite3.OperationalError:
             if mode == "fts":
                 raise
@@ -114,7 +133,7 @@ def run_search(
         """,
         tuple([f"%{query}%"] * 4 + [limit, offset]),
     ).fetchall()
-    return [
+    like_results = [
         {
             "id": row["id"],
             "timestamp": row["timestamp"],
@@ -128,6 +147,9 @@ def run_search(
         }
         for row in rows
     ]
+    if not required:
+        return like_results
+    return [item for item in like_results if _matches_required_tags(item.get("tags", []), required)]
 
 
 def run_timeline(
@@ -245,13 +267,22 @@ def run_get(conn: sqlite3.Connection, ids: List[int]) -> List["Observation"]:
     return normalize_rows(rows)
 
 
-def run_list(conn: sqlite3.Connection, limit: int, offset: int = 0) -> List["Observation"]:
+def run_list(
+    conn: sqlite3.Connection,
+    limit: int,
+    offset: int = 0,
+    required_tags: Optional[List[str]] = None,
+) -> List["Observation"]:
     """List latest observations."""
+    required = _normalize_required_tags(required_tags)
     rows = conn.execute(
         "SELECT * FROM observations ORDER BY timestamp DESC LIMIT ? OFFSET ?",
         (limit, offset),
     ).fetchall()
-    return normalize_rows(rows)
+    results = normalize_rows(rows)
+    if not required:
+        return results
+    return [item for item in results if _matches_required_tags(item.tags, required)]
 
 
 def run_export(conn: sqlite3.Connection, limit: int, offset: int = 0) -> List["Observation"]:

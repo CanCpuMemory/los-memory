@@ -191,3 +191,53 @@ def log_tool_call(
     )
 
     return obs_id
+
+
+def log_agent_transition(
+    conn: sqlite3.Connection,
+    phase: str,
+    action: str,
+    transition_input: dict,
+    transition_output: Optional[dict],
+    status: str,
+    reward: Optional[float],
+    project: str,
+    session_id: Optional[int] = None,
+) -> int:
+    """Log an agent transition as a structured memory record."""
+    from .operations import add_observation
+    from .utils import tags_to_json, utc_now
+
+    safe_phase = (phase or "unknown").strip() or "unknown"
+    safe_action = (action or "unknown").strip() or "unknown"
+
+    summary = f"Status: {status}"
+    if reward is not None:
+        summary += f" | Reward: {reward}"
+
+    raw_data = {
+        "phase": safe_phase,
+        "action": safe_action,
+        "input": transition_input,
+        "output": transition_output,
+        "status": status,
+        "reward": reward,
+    }
+
+    tags = ["transition", safe_phase.lower().replace(" ", "_"), safe_action.lower().replace(" ", "_")]
+    if status == "error":
+        tags.append("error")
+
+    obs_id = add_observation(
+        conn,
+        utc_now(),
+        project,
+        "agent_transition",
+        f"Transition: {safe_phase}/{safe_action}",
+        summary,
+        tags_to_json(tags),
+        " ".join(tags),
+        json.dumps(raw_data, ensure_ascii=False),
+        session_id,
+    )
+    return obs_id

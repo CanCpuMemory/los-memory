@@ -6,13 +6,15 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from dataclasses import asdict
 from typing import Optional
 
 from .database import connect_db, ensure_fts, ensure_schema, init_db
 from .models import Observation
-from .analytics import get_tool_stats, log_tool_call, suggest_tools_for_task
+from .analytics import get_tool_stats, log_agent_transition, log_tool_call, suggest_tools_for_task
 from .feedback import apply_feedback, get_feedback_history
+from .review_feedback import apply_review_feedback
 from .links import create_link, delete_link, find_similar_observations, get_related_observations
 from .operations import (
     add_observation,
@@ -102,6 +104,11 @@ def parse_args() -> argparse.Namespace:
     search_parser.add_argument("--offset", type=int, default=0)
     search_parser.add_argument("--mode", choices=["auto", "fts", "like"], default="auto")
     search_parser.add_argument("--fts-quote", action="store_true")
+    search_parser.add_argument(
+        "--require-tags",
+        default="",
+        help="Comma-separated tags that every result must contain",
+    )
 
     # timeline
     timeline_parser = subparsers.add_parser("timeline", help="Timeline query")
@@ -139,6 +146,11 @@ def parse_args() -> argparse.Namespace:
     list_parser = subparsers.add_parser("list", help="List observations")
     list_parser.add_argument("--limit", type=int, default=20)
     list_parser.add_argument("--offset", type=int, default=0)
+    list_parser.add_argument(
+        "--require-tags",
+        default="",
+        help="Comma-separated tags that every result must contain",
+    )
 
     # export
     export_parser = subparsers.add_parser("export", help="Export observations")
@@ -256,6 +268,19 @@ def parse_args() -> argparse.Namespace:
     feedback_parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying")
     feedback_parser.add_argument("--history", action="store_true", help="Show feedback history for the observation")
 
+    # review-feedback
+    review_feedback_parser = subparsers.add_parser("review-feedback", help="Batch apply review feedback entries")
+    review_feedback_parser.add_argument(
+        "--file",
+        required=True,
+        help="Path to JSON file with review feedback items",
+    )
+    review_feedback_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and evaluate feedback without modifying observations",
+    )
+
     # tool-log
     tool_log_parser = subparsers.add_parser("tool-log", help="Log a tool call")
     tool_log_parser.add_argument("--tool", required=True, help="Tool name")
@@ -264,6 +289,16 @@ def parse_args() -> argparse.Namespace:
     tool_log_parser.add_argument("--status", choices=["success", "error"], default="success", help="Call status")
     tool_log_parser.add_argument("--duration", type=int, default=None, help="Duration in milliseconds")
     tool_log_parser.add_argument("--project", default=None, help="Project name")
+
+    # transition-log
+    transition_log_parser = subparsers.add_parser("transition-log", help="Log an agent transition")
+    transition_log_parser.add_argument("--phase", required=True, help="Transition phase, e.g. plan/act/review")
+    transition_log_parser.add_argument("--action", required=True, help="Transition action name")
+    transition_log_parser.add_argument("--input", required=True, help="Transition input JSON")
+    transition_log_parser.add_argument("--output", default="{}", help="Transition output JSON")
+    transition_log_parser.add_argument("--status", choices=["success", "error"], default="success", help="Transition status")
+    transition_log_parser.add_argument("--reward", type=float, default=None, help="Optional reward score")
+    transition_log_parser.add_argument("--project", default=None, help="Project name")
 
     # tool-stats
     tool_stats_parser = subparsers.add_parser("tool-stats", help="Show tool usage statistics")
@@ -346,8 +381,12 @@ def main() -> None:
             _handle_capture(conn, args)
         elif args.command == "feedback":
             _handle_feedback(conn, args)
+        elif args.command == "review-feedback":
+            _handle_review_feedback(conn, args)
         elif args.command == "tool-log":
             _handle_tool_log(conn, args)
+        elif args.command == "transition-log":
+            _handle_transition_log(conn, args)
         elif args.command == "tool-stats":
             _handle_tool_stats(conn, args)
         elif args.command == "tool-suggest":
@@ -405,7 +444,16 @@ def _handle_add(conn, args):
 
 
 def _handle_search(conn, args):
-    results = run_search(conn, args.query, args.limit, offset=args.offset, mode=args.mode, quote=args.fts_quote)
+    required_tags = normalize_tags_list(args.require_tags)
+    results = run_search(
+        conn,
+        args.query,
+        args.limit,
+        offset=args.offset,
+        mode=args.mode,
+        quote=args.fts_quote,
+        required_tags=required_tags,
+    )
     print(json.dumps({"ok": True, "results": results}, indent=2))
 
 
@@ -440,7 +488,8 @@ def _handle_delete(conn, args):
 
 
 def _handle_list(conn, args):
-    results = run_list(conn, args.limit, offset=args.offset)
+    required_tags = normalize_tags_list(args.require_tags)
+    results = run_list(conn, args.limit, offset=args.offset, required_tags=required_tags)
     print(json.dumps({"ok": True, "results": [asdict(r) for r in results]}, indent=2))
 
 
@@ -456,7 +505,10 @@ def _handle_export(conn, args):
             if output is sys.stdout:
                 output.write("\n")
         else:
-            writer = csv.DictWriter(output, fieldnames=["id", "timestamp", "project", "kind", "title", "summary", "tags", "raw"])
+            writer = csv.DictWriter(
+                output,
+                fieldnames=["id", "timestamp", "project", "kind", "title", "summary", "tags", "raw", "session_id"],
+            )
             writer.writeheader()
             for item in results:
                 row = asdict(item)
@@ -629,6 +681,26 @@ def _handle_feedback(conn, args):
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+def _handle_review_feedback(conn, args):
+    payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        items = payload.get("items")
+        if items is None:
+            # Accept common review report shapes
+            items = payload.get("findings", payload.get("reviews", []))
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        raise ValueError("review_feedback_file_must_contain_array_or_object")
+    if not isinstance(items, list):
+        raise ValueError("review_feedback_items_must_be_array")
+
+    result = apply_review_feedback(conn, items, auto_apply=not args.dry_run)
+    result["db"] = args.db
+    result["profile"] = args.profile
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 def _handle_tool_log(conn, args):
     import json
 
@@ -643,6 +715,34 @@ def _handle_tool_log(conn, args):
         args.status, args.duration, project, session_id
     )
     print(json.dumps({"ok": True, "id": obs_id, "tool": args.tool, "status": args.status}, indent=2))
+
+
+def _handle_transition_log(conn, args):
+    import json
+
+    transition_input = json.loads(args.input)
+    transition_output = json.loads(args.output)
+    project = args.project or get_active_project(args.profile) or "general"
+    active_session = get_active_session(args.profile)
+    session_id = active_session["session_id"] if active_session else None
+
+    obs_id = log_agent_transition(
+        conn,
+        phase=args.phase,
+        action=args.action,
+        transition_input=transition_input,
+        transition_output=transition_output,
+        status=args.status,
+        reward=args.reward,
+        project=project,
+        session_id=session_id,
+    )
+    print(
+        json.dumps(
+            {"ok": True, "id": obs_id, "phase": args.phase, "action": args.action, "status": args.status},
+            indent=2,
+        )
+    )
 
 
 def _handle_tool_stats(conn, args):
