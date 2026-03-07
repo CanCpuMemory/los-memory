@@ -17,7 +17,7 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
     """Add approval management subcommands."""
     approval_parser = subparsers.add_parser(
         "approval",
-        help="L2 approval workflow management"
+        help="L2 approval workflow management [DEPRECATED - Moving to VPS Agent Web]"
     )
     approval_subparsers = approval_parser.add_subparsers(
         dest="approval_action",

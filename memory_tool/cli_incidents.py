@@ -17,7 +17,7 @@ def add_incident_subcommands(subparsers: argparse._SubParsersAction) -> None:
     """Add incident management subcommands."""
     incident_parser = subparsers.add_parser(
         "incident",
-        help="Incident management commands"
+        help="Incident management commands [EXT]"
     )
     incident_subparsers = incident_parser.add_subparsers(
         dest="incident_action",
