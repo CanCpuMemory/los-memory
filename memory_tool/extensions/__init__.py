@@ -26,10 +26,10 @@ if TYPE_CHECKING:
 # Extension registry - static definition
 # Format: name -> (module_path, register_func_name, handler_func_name, status)
 _EXTENSION_REGISTRY: dict[str, tuple[str, str, str, str]] = {
-    "incident": ("memory_tool.cli_incidents", "add_incident_subcommands", "handle_incident_command", "experimental"),
-    "recovery": ("memory_tool.cli_recovery", "add_recovery_subcommands", "handle_recovery_command", "experimental"),
-    "knowledge": ("memory_tool.cli_knowledge", "add_knowledge_subcommands", "handle_knowledge_command", "experimental"),
-    "attribution": ("memory_tool.cli_attribution", "add_attribution_subcommands", "handle_attribution_command", "experimental"),
+    "incident": ("memory_tool.extensions.incident", "add_incident_subcommands", "handle_incident_command", "experimental"),
+    "recovery": ("memory_tool.extensions.recovery", "add_recovery_subcommands", "handle_recovery_command", "experimental"),
+    "knowledge": ("memory_tool.extensions.knowledge", "add_knowledge_subcommands", "handle_knowledge_command", "experimental"),
+    "attribution": ("memory_tool.extensions.attribution", "add_attribution_subcommands", "handle_attribution_command", "experimental"),
 }
 
 # Cached extension handlers
