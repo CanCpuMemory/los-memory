@@ -232,13 +232,54 @@
 
 - ❌ 项目级共享知识服务
 - ❌ 多租户/多项目正式隔离中心
-- ❌ 审批系统或 proposal/commit 完整治理
+- ❌ ~~审批系统或 proposal/commit 完整治理~~ *(注: Approval 已实现但标记为 deprecated，正在迁移至 VPS Agent Web)*
 - ❌ 全局事实真相源（Source of Truth for organization）
 - ❌ 分布式 trace 中心
 - ❌ 替代审计系统
 - ❌ HTTP/gRPC 服务（当前阶段）
 
 > 这些能力可能在未来服务化阶段引入，但当前阶段明确不追求。
+>
+> **扩展能力说明**: 以下能力已实现但作为**扩展（Extension）**提供，默认启用但标记为 experimental：
+> - Incident/Recovery/Attribution（运维治理域）
+> - Knowledge（知识管理域）
+> - Approval（正在迁移至 VPS Agent Web，12个月移除）
+>
+> 扩展可通过环境变量 `MEMORY_DISABLE_EXTENSIONS` 禁用，详见 [扩展能力文档](#扩展能力)。
+
+---
+
+#### 扩展能力
+
+自 v2.0.0 起，los-memory 区分**核心能力**与**扩展能力**：
+
+| 层级 | 归属 | 能力 | 兼容性承诺 | 启用控制 |
+|------|------|------|------------|----------|
+| 核心 | 内建 | Observation, Session, Checkpoint, Feedback, Link, ToolCall | 完整向后兼容 | 始终启用 |
+| 扩展 | 可选 | Incident, Recovery, Knowledge, Attribution | 尽力而为 | 默认启用，可禁用 |
+| 迁出 | 可选 | Approval | 12个月后移除 | 默认启用，建议迁移 |
+
+**扩展管理**:
+```bash
+# 列出扩展
+los-memory admin extensions list
+
+# 查看扩展状态
+los-memory admin extensions status
+
+# 禁用扩展（环境变量）
+export MEMORY_DISABLE_EXTENSIONS="incident,recovery,knowledge,attribution"
+los-memory incident list  # 将不可用
+```
+
+**扩展标记**:
+- CLI help 中扩展命令标记 `[EXT]`
+- 使用扩展时显示 experimental 警告
+- 扩展位于 `memory_tool/extensions/` 目录
+
+**迁移计划**:
+- Approval 系统正在迁移至 VPS Agent Web（12个月时间线）
+- 详见 [MIGRATION_APPROVAL.md](./MIGRATION_APPROVAL.md)
 
 #### 服务化触发条件
 
@@ -280,14 +321,22 @@
 - 数据导出/导入/清理
 
 #### 拥有对象
-| 对象 | 类型 | 说明 |
-|------|------|------|
-| `Observation` | 核心 | 记忆基本单元，支持多态（decision/incident/note/meeting/todo/snippet/tool_call） |
-| `Session` | 核心 | 工作会话，组织相关 Observation |
-| `Checkpoint` | 核心 | 检查点，保存工作现场 |
-| `Feedback` | 治理 | 对已有记忆的反馈与修正 |
-| `ObservationLink` | 治理 | 记忆间的关联关系 |
-| `ToolCall` | 追踪 | 工具调用记录 |
+
+| 对象 | 类型 | 归属 | 说明 |
+|------|------|------|------|
+| `Observation` | 核心 | 核心 | 记忆基本单元，支持多态（decision/note/meeting/todo/snippet/tool_call） |
+| `Session` | 核心 | 核心 | 工作会话，组织相关 Observation |
+| `Checkpoint` | 核心 | 核心 | 检查点，保存工作现场 |
+| `Feedback` | 治理 | 核心 | 对已有记忆的反馈与修正 |
+| `ObservationLink` | 治理 | 核心 | 记忆间的关联关系 |
+| `ToolCall` | 追踪 | 核心 | 工具调用记录 |
+| `Incident` | 运维 | **扩展** | 事故管理（experimental） |
+| `Recovery` | 运维 | **扩展** | 自动恢复（experimental） |
+| `Knowledge` | 知识 | **扩展** | 经验知识库（experimental） |
+| `Attribution` | 分析 | **扩展** | 根因分析（experimental，绑定 Incident） |
+| `Approval` | 审批 | **迁出** | 审批工作流（deprecated，迁移至 VPS Agent Web） |
+
+> **注意**: Observation 的多态中的 `incident` 属于 Incident 扩展，使用时请注意兼容性。
 
 #### 不负责的内容
 - 代码扫描（属于 los-ast）

@@ -16,7 +16,7 @@ def add_recovery_subcommands(subparsers: argparse._SubParsersAction) -> None:
     """Add recovery management subcommands."""
     recovery_parser = subparsers.add_parser(
         "recovery",
-        help="Recovery management commands"
+        help="Recovery management commands [EXT]"
     )
     recovery_subparsers = recovery_parser.add_subparsers(
         dest="recovery_action",

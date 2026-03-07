@@ -12,7 +12,7 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
     """Add knowledge base subcommands."""
     knowledge_parser = subparsers.add_parser(
         "knowledge",
-        help="Knowledge base management"
+        help="Knowledge base management [EXT]"
     )
     knowledge_subparsers = knowledge_parser.add_subparsers(
         dest="knowledge_action",
