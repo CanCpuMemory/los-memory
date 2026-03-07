@@ -1,25 +1,40 @@
 #!/usr/bin/env python3
-"""Command-line interface for the memory tool."""
+"""Command-line interface for the memory tool.
+
+los-memory v2.0.0 - Architecture Convergence
+
+Command Groups:
+  Core Commands (stable, full compatibility承诺):
+    memory, observation, session, checkpoint, project, tool, review, admin
+
+  Extension Commands (experimental,尽力而为):
+    incident [EXT], recovery [EXT], knowledge [EXT], attribution [EXT]
+
+  Migrating Commands (deprecated, will be removed):
+    approval [DEPRECATED] - Migrating to VPS Agent Web
+
+Environment Variables:
+  MEMORY_DISABLE_EXTENSIONS - Comma-separated list of extensions to disable
+  Example: MEMORY_DISABLE_EXTENSIONS=incident,recovery,knowledge
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
 from dataclasses import asdict
 from typing import Optional
 
+# Core imports - using original modules for Phase 1 (to be migrated to core/ in Phase 2)
 from .database import connect_db, ensure_fts, ensure_schema, init_db
 from .models import Observation
 from .analytics import get_tool_stats, log_agent_transition, log_tool_call, suggest_tools_for_task
 from .feedback import apply_feedback, get_feedback_history
 from .review_feedback import apply_review_feedback
 from .links import create_link, delete_link, find_similar_observations, get_related_observations
-from .cli_incidents import add_incident_subcommands, handle_incident_command
-from .cli_recovery import add_recovery_subcommands, handle_recovery_command
-from .cli_approval import add_approval_subcommands, handle_approval_command
-from .cli_knowledge import add_knowledge_subcommands, handle_knowledge_command
 from .operations import (
     add_observation,
     generate_visual_timeline,
@@ -71,6 +86,26 @@ from .utils import (
     tags_to_text,
     utc_now,
 )
+
+# Extension imports (static registration)
+from .extensions import (
+    dispatch_extension_command,
+    get_disabled_extensions,
+    get_extension_help_text,
+    is_extension_enabled,
+    list_extensions,
+    register_extensions,
+)
+
+# Migration imports (with deprecation warnings)
+try:
+    from .migrate_out.approval import (
+        add_approval_subcommands,
+        handle_approval_command,
+    )
+    _approval_available = True
+except ImportError:
+    _approval_available = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -357,6 +392,10 @@ def parse_args() -> argparse.Namespace:
     admin_import.add_argument("--project")
     admin_import.add_argument("--dry-run", action="store_true")
 
+    # admin extensions - Extension management
+    admin_extensions = admin_subparsers.add_parser("extensions", help="Manage extensions [EXT]")
+    admin_extensions.add_argument("action", choices=["list", "status"], default="list", nargs="?")
+
     # ========================================================================
     # review - Review feedback commands
     # ========================================================================
@@ -368,24 +407,20 @@ def parse_args() -> argparse.Namespace:
     review_apply.add_argument("--dry-run", action="store_true")
 
     # ========================================================================
-    # incident - Incident management (Phase 1: Self-healing system)
+    # EXTENSION COMMANDS (experimental, may change or be removed)
     # ========================================================================
-    add_incident_subcommands(subparsers)
+    # Register extensions via static registration system
+    registered = register_extensions(subparsers, show_warnings=False)
 
-    # ========================================================================
-    # recovery - Recovery management (Phase 2: L1 auto-recovery)
-    # ========================================================================
-    add_recovery_subcommands(subparsers)
+    # Register migrating approval with deprecation warning
+    if _approval_available and "approval" not in get_disabled_extensions():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # Suppress immediate warning
+            add_approval_subcommands(subparsers)
+            registered.append("approval")
 
-    # ========================================================================
-    # approval - L2 approval workflow (Phase 3: Approval recovery)
-    # ========================================================================
-    add_approval_subcommands(subparsers)
-
-    # ========================================================================
-    # knowledge - Knowledge base (Phase 4: Experience沉淀)
-    # ========================================================================
-    add_knowledge_subcommands(subparsers)
+    # Store registered extensions for help text
+    parser.registered_extensions = registered  # type: ignore
 
     return parser.parse_args()
 
@@ -490,18 +525,34 @@ def _dispatch_command(conn, args) -> dict | None:
             return _handle_admin_share(conn, args)
         elif action == "import":
             return _handle_admin_import(conn, args)
+        elif action == "extensions":
+            return _handle_admin_extensions(conn, args)
     elif cmd == "review":
         action = args.review_action
         if action == "apply":
             return _handle_review_apply(conn, args)
-    elif cmd == "incident":
-        return handle_incident_command(conn, args)
-    elif cmd == "recovery":
-        return handle_recovery_command(conn, args)
+    # Extension commands (incident, recovery, knowledge, attribution)
+    # Dispatch via extension system for consistent handling
+    elif cmd in ("incident", "recovery", "knowledge", "attribution"):
+        result = dispatch_extension_command(cmd, conn, args)
+        if result is not None:
+            return result
+        raise ValueError(f"Extension command '{cmd}' failed to dispatch")
+
+    # Approval command (deprecated, migrating to VPS Agent Web)
     elif cmd == "approval":
+        if not _approval_available:
+            raise ValueError(
+                "Approval command is deprecated and has been disabled. "
+                "Please use VPS Agent Web for approval workflows."
+            )
+        warnings.warn(
+            "Approval command is deprecated and will be removed. "
+            "Migrate to VPS Agent Web's approval workflow.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return handle_approval_command(conn, args)
-    elif cmd == "knowledge":
-        return handle_knowledge_command(conn, args)
 
     # Backward compatibility: handle old flat commands
     return _handle_backward_compat(conn, args)
@@ -853,6 +904,29 @@ def _handle_admin_import(conn, args):
     result["db"] = args.db
     result["profile"] = args.profile
     return result
+
+
+def _handle_admin_extensions(conn, args):
+    """Handle admin extensions command."""
+    action = args.action or "list"
+
+    if action == "list":
+        extensions = list_extensions()
+        return {
+            "ok": True,
+            "action": "list",
+            "extensions": extensions,
+        }
+    elif action == "status":
+        disabled = get_disabled_extensions()
+        return {
+            "ok": True,
+            "action": "status",
+            "disabled_extensions": list(disabled) if disabled else [],
+            "all_extensions": list_extensions(),
+        }
+
+    return {"ok": False, "error": f"Unknown action: {action}"}
 
 
 def _handle_obs_capture(conn, args):
