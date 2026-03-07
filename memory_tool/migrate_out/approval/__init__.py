@@ -16,6 +16,13 @@ Recommended Action:
 
 Environment:
   Set MEMORY_DISABLE_EXTENSIONS=approval to disable now.
+
+Phase 4 Adapter Layer:
+  The adapter layer provides bridge functionality during migration:
+  - ApprovalMigrationAdapter: Main adapter class
+  - DualWriteManager: Write to both systems during transition
+  - HMACBridge: HMAC signature compatibility
+  - VPSAgentWebClient: HTTP client for VPS Agent Web
 """
 from __future__ import annotations
 
@@ -35,8 +42,7 @@ warnings.warn(
     stacklevel=2,
 )
 
-# Re-export from original location for now
-# These will be removed after migration
+# Re-export from original location for backward compatibility
 from memory_tool.cli_approval import (
     add_approval_subcommands,
     handle_approval_command,
@@ -44,11 +50,42 @@ from memory_tool.cli_approval import (
 from memory_tool.approval_api import ApprovalAPI
 from memory_tool.approval_store import ApprovalStore
 
+# Phase 4 Adapter Layer - new exports
+from .adapter import ApprovalMigrationAdapter
+from .config import (
+    DualWriteConfig,
+    DualWriteMode,
+    HMACConfig,
+    MigrationConfig,
+    MigrationPhase,
+    SSEProxyConfig,
+    VPSAgentWebConfig,
+)
+from .dual_write import DualWriteManager, DualWriteResult
+from .hmac_bridge import HMACBridge, HMACVerificationError
+from .vps_client import VPSAgentWebClient, VPSAgentWebError
+
 __all__ = [
+    # Legacy exports (backward compatibility)
     "add_approval_subcommands",
     "handle_approval_command",
     "ApprovalAPI",
     "ApprovalStore",
+    # Phase 4 Adapter Layer
+    "ApprovalMigrationAdapter",
+    "DualWriteConfig",
+    "DualWriteManager",
+    "DualWriteMode",
+    "DualWriteResult",
+    "HMACBridge",
+    "HMACConfig",
+    "HMACVerificationError",
+    "MigrationConfig",
+    "MigrationPhase",
+    "SSEProxyConfig",
+    "VPSAgentWebClient",
+    "VPSAgentWebConfig",
+    "VPSAgentWebError",
 ]
 
 
