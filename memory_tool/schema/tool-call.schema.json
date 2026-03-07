@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/tool-call.schema.json",
+  "title": "Tool Call Schema",
+  "description": "Schema for ToolCall data model",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["id", "timestamp", "project", "tool_name", "tool_input", "status"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "Unique tool call ID",
+      "minimum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the tool was called"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project identifier"
+    },
+    "tool_name": {
+      "type": "string",
+      "description": "Name of the tool"
+    },
+    "tool_input": {
+      "type": "object",
+      "description": "Tool input parameters"
+    },
+    "tool_output": {
+      "type": ["object", "null"],
+      "description": "Tool output (null if not completed)"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "error"],
+      "description": "Execution status"
+    },
+    "duration_ms": {
+      "type": ["integer", "null"],
+      "description": "Execution duration in milliseconds",
+      "minimum": 0
+    },
+    "session_id": {
+      "type": ["integer", "null"],
+      "description": "Associated session ID"
+    }
+  }
+}

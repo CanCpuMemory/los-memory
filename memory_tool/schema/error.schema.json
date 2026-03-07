@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/error.schema.json",
+  "title": "Error Response Schema",
+  "description": "Schema for error responses",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["ok", "error"],
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "enum": [false]
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Error code (VAL_*, NF_*, DB_*, CFG_*, SYS_*)",
+          "pattern": "^(VAL|NF|DB|CFG|SYS)_[A-Z0-9_]+$"
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable error message"
+        },
+        "suggestion": {
+          "type": "string",
+          "description": "Suggested action to resolve"
+        },
+        "help_command": {
+          "type": "string",
+          "description": "Help command for more info"
+        },
+        "docs_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Documentation URL (optional, may be offline)"
+        },
+        "details": {
+          "type": "object",
+          "description": "Additional error context"
+        }
+      }
+    },
+    "meta": {
+      "$ref": "base.schema.json#/properties/meta"
+    }
+  }
+}

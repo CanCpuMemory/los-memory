@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/search-result.schema.json",
+  "title": "Search Result Schema",
+  "description": "Schema for search/timeline response data",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["items"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "description": "List of search results",
+      "items": {
+        "$ref": "observation.schema.json"
+      }
+    },
+    "query": {
+      "type": "string",
+      "description": "The search query"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["fts", "like", "auto"],
+      "description": "Search mode used"
+    }
+  }
+}

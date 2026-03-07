@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/feedback.schema.json",
+  "title": "Feedback Schema",
+  "description": "Schema for Feedback data model",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["id", "target_observation_id", "action_type", "feedback_text", "timestamp"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "Unique feedback ID",
+      "minimum": 1
+    },
+    "target_observation_id": {
+      "type": "integer",
+      "description": "ID of the observation being corrected",
+      "minimum": 1
+    },
+    "action_type": {
+      "type": "string",
+      "enum": ["correct", "supplement", "delete"],
+      "description": "Type of feedback action"
+    },
+    "feedback_text": {
+      "type": "string",
+      "description": "Feedback content"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the feedback was created"
+    }
+  }
+}

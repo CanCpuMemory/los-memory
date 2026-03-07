@@ -16,6 +16,10 @@ from .analytics import get_tool_stats, log_agent_transition, log_tool_call, sugg
 from .feedback import apply_feedback, get_feedback_history
 from .review_feedback import apply_review_feedback
 from .links import create_link, delete_link, find_similar_observations, get_related_observations
+from .cli_incidents import add_incident_subcommands, handle_incident_command
+from .cli_recovery import add_recovery_subcommands, handle_recovery_command
+from .cli_approval import add_approval_subcommands, handle_approval_command
+from .cli_knowledge import add_knowledge_subcommands, handle_knowledge_command
 from .operations import (
     add_observation,
     generate_visual_timeline,
@@ -71,7 +75,10 @@ from .utils import (
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Standalone memory tool")
+    parser = argparse.ArgumentParser(
+        description="los-memory: Memory ledger for AI agent observations",
+        prog="los-memory",
+    )
     parser.add_argument(
         "--profile",
         choices=PROFILE_CHOICES,
@@ -79,103 +86,154 @@ def parse_args() -> argparse.Namespace:
         help="Memory profile to select default DB path",
     )
     parser.add_argument("--db", default=None, help="Path to SQLite database (overrides --profile)")
+    parser.add_argument("--human", action="store_true", help="Output in human-readable format")
+    parser.add_argument("--output", "-o", choices=["json", "yaml", "table"], default="json",
+                        help="Output format (default: json)")
+    parser.add_argument("--color", choices=["auto", "always", "never"], default="auto",
+                        help="Color output mode")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # ========================================================================
     # init
+    # ========================================================================
     init_parser = subparsers.add_parser("init", help="Initialize the database")
 
-    # add
-    add_parser = subparsers.add_parser("add", help="Add an observation")
-    add_parser.add_argument("--timestamp", default=utc_now())
-    add_parser.add_argument("--project", default="general")
-    add_parser.add_argument("--kind", default="note")
-    add_parser.add_argument("--title", required=True)
-    add_parser.add_argument("--summary", required=True)
-    add_parser.add_argument("--tags", default="")
-    add_parser.add_argument("--raw", default="")
-    add_parser.add_argument("--auto-tags", action="store_true")
-    add_parser.add_argument("--llm-hook", default=DEFAULT_LLM_HOOK)
+    # ========================================================================
+    # memory - Data access commands
+    # ========================================================================
+    memory_parser = subparsers.add_parser("memory", help="Memory data access commands")
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_action", required=True)
 
-    # search
-    search_parser = subparsers.add_parser("search", help="Search observations")
-    search_parser.add_argument("query")
-    search_parser.add_argument("--limit", type=int, default=10)
-    search_parser.add_argument("--offset", type=int, default=0)
-    search_parser.add_argument("--mode", choices=["auto", "fts", "like"], default="auto")
-    search_parser.add_argument("--fts-quote", action="store_true")
-    search_parser.add_argument(
+    # memory search
+    memory_search = memory_subparsers.add_parser("search", help="Search observations")
+    memory_search.add_argument("query")
+    memory_search.add_argument("--limit", type=int, default=10)
+    memory_search.add_argument("--offset", type=int, default=0)
+    memory_search.add_argument("--mode", choices=["auto", "fts", "like"], default="auto")
+    memory_search.add_argument("--fts-quote", action="store_true")
+    memory_search.add_argument(
         "--require-tags",
         default="",
         help="Comma-separated tags that every result must contain",
     )
 
-    # timeline
-    timeline_parser = subparsers.add_parser("timeline", help="Timeline query")
-    timeline_parser.add_argument("--start")
-    timeline_parser.add_argument("--end")
-    timeline_parser.add_argument("--around-id", type=int)
-    timeline_parser.add_argument("--window-minutes", type=int, default=120)
-    timeline_parser.add_argument("--limit", type=int, default=20)
-    timeline_parser.add_argument("--offset", type=int, default=0)
-    timeline_parser.add_argument("--visual", "-v", action="store_true")
-    timeline_parser.add_argument("--group-by", choices=["hour", "day", "session"], default=None)
-
-    # get
-    get_parser = subparsers.add_parser("get", help="Fetch observations by id")
-    get_parser.add_argument("ids", help="Comma-separated observation ids")
-
-    # edit
-    edit_parser = subparsers.add_parser("edit", help="Edit an observation")
-    edit_parser.add_argument("--id", type=int, required=True)
-    edit_parser.add_argument("--timestamp", default=None)
-    edit_parser.add_argument("--project", default=None)
-    edit_parser.add_argument("--kind", default=None)
-    edit_parser.add_argument("--title", default=None)
-    edit_parser.add_argument("--summary", default=None)
-    edit_parser.add_argument("--tags", default=None)
-    edit_parser.add_argument("--raw", default=None)
-    edit_parser.add_argument("--auto-tags", action="store_true")
-
-    # delete
-    delete_parser = subparsers.add_parser("delete", help="Delete observations")
-    delete_parser.add_argument("ids")
-    delete_parser.add_argument("--dry-run", action="store_true")
-
-    # list
-    list_parser = subparsers.add_parser("list", help="List observations")
-    list_parser.add_argument("--limit", type=int, default=20)
-    list_parser.add_argument("--offset", type=int, default=0)
-    list_parser.add_argument(
+    # memory list
+    memory_list = memory_subparsers.add_parser("list", help="List observations")
+    memory_list.add_argument("--limit", type=int, default=20)
+    memory_list.add_argument("--offset", type=int, default=0)
+    memory_list.add_argument(
         "--require-tags",
         default="",
         help="Comma-separated tags that every result must contain",
     )
 
-    # export
-    export_parser = subparsers.add_parser("export", help="Export observations")
-    export_parser.add_argument("--format", choices=["json", "csv"], default="json")
-    export_parser.add_argument("--output", default=None)
-    export_parser.add_argument("--limit", type=int, default=1000)
-    export_parser.add_argument("--offset", type=int, default=0)
+    # memory get
+    memory_get = memory_subparsers.add_parser("get", help="Fetch observations by id")
+    memory_get.add_argument("ids", help="Comma-separated observation ids")
 
-    # clean
-    clean_parser = subparsers.add_parser("clean", help="Delete old observations")
-    clean_parser.add_argument("--before")
-    clean_parser.add_argument("--older-than-days", type=int)
-    clean_parser.add_argument("--project")
-    clean_parser.add_argument("--kind")
-    clean_parser.add_argument("--tag")
-    clean_parser.add_argument("--all", action="store_true")
-    clean_parser.add_argument("--dry-run", action="store_true")
-    clean_parser.add_argument("--vacuum", action="store_true")
+    # memory timeline
+    memory_timeline = memory_subparsers.add_parser("timeline", help="Timeline query")
+    memory_timeline.add_argument("--start")
+    memory_timeline.add_argument("--end")
+    memory_timeline.add_argument("--around-id", type=int)
+    memory_timeline.add_argument("--window-minutes", type=int, default=120)
+    memory_timeline.add_argument("--limit", type=int, default=20)
+    memory_timeline.add_argument("--offset", type=int, default=0)
+    memory_timeline.add_argument("--visual", action="store_true")
+    memory_timeline.add_argument("--group-by", choices=["hour", "day", "session"], default=None)
 
-    # manage
-    manage_parser = subparsers.add_parser("manage", help="Manage database")
-    manage_parser.add_argument("action", choices=["stats", "projects", "tags", "vacuum"])
-    manage_parser.add_argument("--limit", type=int, default=20)
+    # memory export
+    memory_export = memory_subparsers.add_parser("export", help="Export observations")
+    memory_export.add_argument("--format", choices=["json", "csv"], default="json")
+    memory_export.add_argument("--output", default=None)
+    memory_export.add_argument("--limit", type=int, default=1000)
+    memory_export.add_argument("--offset", type=int, default=0)
 
-    # session
+    # memory clean
+    memory_clean = memory_subparsers.add_parser("clean", help="Delete old observations")
+    memory_clean.add_argument("--before")
+    memory_clean.add_argument("--older-than-days", type=int)
+    memory_clean.add_argument("--project")
+    memory_clean.add_argument("--kind")
+    memory_clean.add_argument("--tag")
+    memory_clean.add_argument("--all", action="store_true")
+    memory_clean.add_argument("--dry-run", action="store_true")
+    memory_clean.add_argument("--vacuum", action="store_true")
+
+    # ========================================================================
+    # observation - Observation CRUD commands
+    # ========================================================================
+    obs_parser = subparsers.add_parser("observation", help="Observation management commands")
+    obs_subparsers = obs_parser.add_subparsers(dest="obs_action", required=True)
+
+    # observation add
+    obs_add = obs_subparsers.add_parser("add", help="Add an observation")
+    obs_add.add_argument("--timestamp", default=utc_now())
+    obs_add.add_argument("--project", default="general")
+    obs_add.add_argument("--kind", default="note")
+    obs_add.add_argument("--title", required=True)
+    obs_add.add_argument("--summary", required=True)
+    obs_add.add_argument("--tags", default="")
+    obs_add.add_argument("--raw", default="")
+    obs_add.add_argument("--auto-tags", action="store_true")
+    obs_add.add_argument("--llm-hook", default=DEFAULT_LLM_HOOK)
+
+    # observation edit
+    obs_edit = obs_subparsers.add_parser("edit", help="Edit an observation")
+    obs_edit.add_argument("--id", type=int, required=True)
+    obs_edit.add_argument("--timestamp", default=None)
+    obs_edit.add_argument("--project", default=None)
+    obs_edit.add_argument("--kind", default=None)
+    obs_edit.add_argument("--title", default=None)
+    obs_edit.add_argument("--summary", default=None)
+    obs_edit.add_argument("--tags", default=None)
+    obs_edit.add_argument("--raw", default=None)
+    obs_edit.add_argument("--auto-tags", action="store_true")
+
+    # observation delete
+    obs_delete = obs_subparsers.add_parser("delete", help="Delete observations")
+    obs_delete.add_argument("ids")
+    obs_delete.add_argument("--dry-run", action="store_true")
+
+    # observation capture
+    obs_capture = obs_subparsers.add_parser("capture", help="Quick capture")
+    obs_capture.add_argument("text", nargs="+")
+    obs_capture.add_argument("--project")
+    obs_capture.add_argument("--kind", default="note")
+    obs_capture.add_argument("--tags", default="")
+    obs_capture.add_argument("--auto-tags", action="store_true")
+
+    # observation feedback
+    obs_feedback = obs_subparsers.add_parser("feedback", help="Provide feedback on observations")
+    obs_feedback.add_argument("text", nargs="+", help="Feedback text")
+    obs_feedback.add_argument("--id", type=int, required=True, dest="observation_id")
+    obs_feedback.add_argument("--dry-run", action="store_true")
+    obs_feedback.add_argument("--history", action="store_true")
+
+    # observation link
+    obs_link = obs_subparsers.add_parser("link", help="Create link between observations")
+    obs_link.add_argument("--from", type=int, required=True, dest="from_id")
+    obs_link.add_argument("--to", type=int, required=True, dest="to_id")
+    obs_link.add_argument("--type", choices=["related", "child", "parent", "refines"], default="related")
+
+    # observation unlink
+    obs_unlink = obs_subparsers.add_parser("unlink", help="Remove link between observations")
+    obs_unlink.add_argument("--from", type=int, required=True, dest="from_id")
+    obs_unlink.add_argument("--to", type=int, required=True, dest="to_id")
+    obs_unlink.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None)
+
+    # observation related
+    obs_related = obs_subparsers.add_parser("related", help="Find related observations")
+    obs_related.add_argument("id", type=int, help="Observation ID")
+    obs_related.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None)
+    obs_related.add_argument("--limit", type=int, default=20)
+    obs_related.add_argument("--suggest", action="store_true")
+
+    # ========================================================================
+    # session - Session management
+    # ========================================================================
     session_parser = subparsers.add_parser("session", help="Session management")
     session_subparsers = session_parser.add_subparsers(dest="session_action", required=True)
 
@@ -199,7 +257,29 @@ def parse_args() -> argparse.Namespace:
     session_resume = session_subparsers.add_parser("resume", help="Resume a session")
     session_resume.add_argument("session_id", type=int, nargs="?")
 
-    # project
+    # ========================================================================
+    # checkpoint - Checkpoint management
+    # ========================================================================
+    checkpoint_parser = subparsers.add_parser("checkpoint", help="Checkpoint management")
+    checkpoint_subparsers = checkpoint_parser.add_subparsers(dest="checkpoint_action", required=True)
+
+    checkpoint_create = checkpoint_subparsers.add_parser("create", help="Create checkpoint")
+    checkpoint_create.add_argument("--name", required=True)
+    checkpoint_create.add_argument("--description", default="")
+    checkpoint_create.add_argument("--tag", default="")
+
+    checkpoint_list = checkpoint_subparsers.add_parser("list", help="List checkpoints")
+    checkpoint_list.add_argument("--limit", type=int, default=20)
+
+    checkpoint_resume = checkpoint_subparsers.add_parser("resume", help="Resume from checkpoint")
+    checkpoint_resume.add_argument("checkpoint_id", type=int)
+
+    checkpoint_show = checkpoint_subparsers.add_parser("show", help="Show checkpoint")
+    checkpoint_show.add_argument("checkpoint_id", type=int)
+
+    # ========================================================================
+    # project - Project management
+    # ========================================================================
     project_parser = subparsers.add_parser("project", help="Project management")
     project_subparsers = project_parser.add_subparsers(dest="project_action", required=True)
 
@@ -218,193 +298,332 @@ def parse_args() -> argparse.Namespace:
     project_active = project_subparsers.add_parser("active", help="Show/set active project")
     project_active.add_argument("project_name", nargs="?")
 
-    # checkpoint
-    checkpoint_parser = subparsers.add_parser("checkpoint", help="Checkpoint management")
-    checkpoint_subparsers = checkpoint_parser.add_subparsers(dest="checkpoint_action", required=True)
+    # ========================================================================
+    # tool - Tool tracking commands
+    # ========================================================================
+    tool_parser = subparsers.add_parser("tool", help="Tool tracking commands")
+    tool_subparsers = tool_parser.add_subparsers(dest="tool_action", required=True)
 
-    checkpoint_create = checkpoint_subparsers.add_parser("create", help="Create checkpoint")
-    checkpoint_create.add_argument("--name", required=True)
-    checkpoint_create.add_argument("--description", default="")
-    checkpoint_create.add_argument("--tag", default="")
+    tool_log = tool_subparsers.add_parser("log", help="Log a tool call")
+    tool_log.add_argument("--tool", required=True)
+    tool_log.add_argument("--input", required=True)
+    tool_log.add_argument("--output", default="{}")
+    tool_log.add_argument("--status", choices=["success", "error"], default="success")
+    tool_log.add_argument("--duration", type=int, default=None)
+    tool_log.add_argument("--project", default=None)
 
-    checkpoint_list = checkpoint_subparsers.add_parser("list", help="List checkpoints")
-    checkpoint_list.add_argument("--limit", type=int, default=20)
+    tool_stats = tool_subparsers.add_parser("stats", help="Show tool usage statistics")
+    tool_stats.add_argument("--project", default=None)
+    tool_stats.add_argument("--limit", type=int, default=20)
 
-    checkpoint_resume = checkpoint_subparsers.add_parser("resume", help="Resume from checkpoint")
-    checkpoint_resume.add_argument("checkpoint_id", type=int)
+    tool_suggest = tool_subparsers.add_parser("suggest", help="Suggest tools for a task")
+    tool_suggest.add_argument("task", nargs="+")
+    tool_suggest.add_argument("--limit", type=int, default=5)
 
-    checkpoint_show = checkpoint_subparsers.add_parser("show", help="Show checkpoint")
-    checkpoint_show.add_argument("checkpoint_id", type=int)
+    tool_transition = tool_subparsers.add_parser("transition", help="Log an agent transition")
+    tool_transition.add_argument("--phase", required=True)
+    tool_transition.add_argument("--action", required=True)
+    tool_transition.add_argument("--input", required=True)
+    tool_transition.add_argument("--output", default="{}")
+    tool_transition.add_argument("--status", choices=["success", "error"], default="success")
+    tool_transition.add_argument("--reward", type=float, default=None)
+    tool_transition.add_argument("--project", default=None)
 
-    # share
-    share_parser = subparsers.add_parser("share", help="Create shareable bundle")
-    share_parser.add_argument("--output", "-o", required=True)
-    share_parser.add_argument("--format", choices=["json", "markdown", "html"], default="json")
-    share_parser.add_argument("--project")
-    share_parser.add_argument("--kind")
-    share_parser.add_argument("--tag")
-    share_parser.add_argument("--session", type=int)
-    share_parser.add_argument("--since")
-    share_parser.add_argument("--limit", type=int, default=1000)
+    # ========================================================================
+    # admin - Administrative commands
+    # ========================================================================
+    admin_parser = subparsers.add_parser("admin", help="Administrative commands")
+    admin_subparsers = admin_parser.add_subparsers(dest="admin_action", required=True)
 
-    # import
-    import_parser = subparsers.add_parser("import", help="Import bundle")
-    import_parser.add_argument("file")
-    import_parser.add_argument("--project")
-    import_parser.add_argument("--dry-run", action="store_true")
+    admin_doctor = admin_subparsers.add_parser("doctor", help="Run health checks")
+    admin_doctor.add_argument("--fix", action="store_true", help="Attempt auto-fixes")
 
-    # capture
-    capture_parser = subparsers.add_parser("capture", help="Quick capture")
-    capture_parser.add_argument("text", nargs="+")
-    capture_parser.add_argument("--project")
-    capture_parser.add_argument("--kind", default="note")
-    capture_parser.add_argument("--tags", default="")
-    capture_parser.add_argument("--auto-tags", action="store_true")
+    admin_manage = admin_subparsers.add_parser("manage", help="Manage database")
+    admin_manage.add_argument("action", choices=["stats", "projects", "tags", "vacuum"])
+    admin_manage.add_argument("--limit", type=int, default=20)
 
-    # feedback
-    feedback_parser = subparsers.add_parser("feedback", help="Provide natural language feedback on observations")
-    feedback_parser.add_argument("text", nargs="+", help="Feedback text (e.g., '修正: API密钥是yyy而非xxx')")
-    feedback_parser.add_argument("--id", type=int, required=True, dest="observation_id", help="Target observation ID")
-    feedback_parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying")
-    feedback_parser.add_argument("--history", action="store_true", help="Show feedback history for the observation")
+    admin_share = admin_subparsers.add_parser("share", help="Create shareable bundle")
+    admin_share.add_argument("--output", "-o", required=True)
+    admin_share.add_argument("--format", choices=["json", "markdown", "html"], default="json")
+    admin_share.add_argument("--project")
+    admin_share.add_argument("--kind")
+    admin_share.add_argument("--tag")
+    admin_share.add_argument("--session", type=int)
+    admin_share.add_argument("--since")
+    admin_share.add_argument("--limit", type=int, default=1000)
 
-    # review-feedback
-    review_feedback_parser = subparsers.add_parser("review-feedback", help="Batch apply review feedback entries")
-    review_feedback_parser.add_argument(
-        "--file",
-        required=True,
-        help="Path to JSON file with review feedback items",
-    )
-    review_feedback_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Parse and evaluate feedback without modifying observations",
-    )
+    admin_import = admin_subparsers.add_parser("import", help="Import bundle")
+    admin_import.add_argument("file")
+    admin_import.add_argument("--project")
+    admin_import.add_argument("--dry-run", action="store_true")
 
-    # tool-log
-    tool_log_parser = subparsers.add_parser("tool-log", help="Log a tool call")
-    tool_log_parser.add_argument("--tool", required=True, help="Tool name")
-    tool_log_parser.add_argument("--input", required=True, help="Tool input (JSON string)")
-    tool_log_parser.add_argument("--output", default="{}", help="Tool output (JSON string)")
-    tool_log_parser.add_argument("--status", choices=["success", "error"], default="success", help="Call status")
-    tool_log_parser.add_argument("--duration", type=int, default=None, help="Duration in milliseconds")
-    tool_log_parser.add_argument("--project", default=None, help="Project name")
+    # ========================================================================
+    # review - Review feedback commands
+    # ========================================================================
+    review_parser = subparsers.add_parser("review", help="Review feedback commands")
+    review_subparsers = review_parser.add_subparsers(dest="review_action", required=True)
 
-    # transition-log
-    transition_log_parser = subparsers.add_parser("transition-log", help="Log an agent transition")
-    transition_log_parser.add_argument("--phase", required=True, help="Transition phase, e.g. plan/act/review")
-    transition_log_parser.add_argument("--action", required=True, help="Transition action name")
-    transition_log_parser.add_argument("--input", required=True, help="Transition input JSON")
-    transition_log_parser.add_argument("--output", default="{}", help="Transition output JSON")
-    transition_log_parser.add_argument("--status", choices=["success", "error"], default="success", help="Transition status")
-    transition_log_parser.add_argument("--reward", type=float, default=None, help="Optional reward score")
-    transition_log_parser.add_argument("--project", default=None, help="Project name")
+    review_apply = review_subparsers.add_parser("apply", help="Apply review feedback")
+    review_apply.add_argument("--file", required=True)
+    review_apply.add_argument("--dry-run", action="store_true")
 
-    # tool-stats
-    tool_stats_parser = subparsers.add_parser("tool-stats", help="Show tool usage statistics")
-    tool_stats_parser.add_argument("--project", default=None, help="Filter by project")
-    tool_stats_parser.add_argument("--limit", type=int, default=20, help="Max tools to show")
+    # ========================================================================
+    # incident - Incident management (Phase 1: Self-healing system)
+    # ========================================================================
+    add_incident_subcommands(subparsers)
 
-    # tool-suggest
-    tool_suggest_parser = subparsers.add_parser("tool-suggest", help="Suggest tools for a task")
-    tool_suggest_parser.add_argument("task", nargs="+", help="Task description")
-    tool_suggest_parser.add_argument("--limit", type=int, default=5, help="Max suggestions")
+    # ========================================================================
+    # recovery - Recovery management (Phase 2: L1 auto-recovery)
+    # ========================================================================
+    add_recovery_subcommands(subparsers)
 
-    # link
-    link_parser = subparsers.add_parser("link", help="Create a link between observations")
-    link_parser.add_argument("--from", type=int, required=True, dest="from_id", help="Source observation ID")
-    link_parser.add_argument("--to", type=int, required=True, dest="to_id", help="Target observation ID")
-    link_parser.add_argument("--type", choices=["related", "child", "parent", "refines"], default="related", help="Link type")
+    # ========================================================================
+    # approval - L2 approval workflow (Phase 3: Approval recovery)
+    # ========================================================================
+    add_approval_subcommands(subparsers)
 
-    # unlink
-    unlink_parser = subparsers.add_parser("unlink", help="Remove a link between observations")
-    unlink_parser.add_argument("--from", type=int, required=True, dest="from_id", help="Source observation ID")
-    unlink_parser.add_argument("--to", type=int, required=True, dest="to_id", help="Target observation ID")
-    unlink_parser.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None, help="Specific link type to remove")
-
-    # related
-    related_parser = subparsers.add_parser("related", help="Find observations related to a given observation")
-    related_parser.add_argument("id", type=int, help="Observation ID")
-    related_parser.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None, help="Filter by link type")
-    related_parser.add_argument("--limit", type=int, default=20, help="Max results")
-    related_parser.add_argument("--suggest", action="store_true", help="Suggest potentially related observations based on similarity")
+    # ========================================================================
+    # knowledge - Knowledge base (Phase 4: Experience沉淀)
+    # ========================================================================
+    add_knowledge_subcommands(subparsers)
 
     return parser.parse_args()
 
 
-def main() -> None:
+def main() -> int:
     """Main entry point."""
     args = parse_args()
     db_path = resolve_db_path(args.profile, args.db)
 
+    # Handle init command (no DB connection needed)
     if args.command == "init":
         init_db(db_path)
-        print(json.dumps({"ok": True, "db": db_path, "profile": args.profile}, indent=2))
-        return
+        _print_output(args, {"ok": True, "db": db_path, "profile": args.profile}, "init")
+        return 0
+
+    # Handle doctor command with special output formatting
+    if args.command == "admin" and getattr(args, "admin_action", None) == "doctor":
+        from .doctor import doctor_command
+        response = doctor_command(db_path, args.profile, human=args.human)
+        response.print(format=args.output, human=args.human)
+        return 0 if response.ok else 1
 
     conn = connect_db(db_path)
     ensure_schema(conn)
     ensure_fts(conn)
 
     try:
-        if args.command == "add":
-            _handle_add(conn, args)
-        elif args.command == "search":
-            _handle_search(conn, args)
-        elif args.command == "timeline":
-            _handle_timeline(conn, args)
-        elif args.command == "get":
-            _handle_get(conn, args)
-        elif args.command == "edit":
-            _handle_edit(conn, args)
-        elif args.command == "delete":
-            _handle_delete(conn, args)
-        elif args.command == "list":
-            _handle_list(conn, args)
-        elif args.command == "export":
-            _handle_export(conn, args)
-        elif args.command == "clean":
-            _handle_clean(conn, args)
-        elif args.command == "manage":
-            _handle_manage(conn, args)
-        elif args.command == "session":
-            _handle_session(conn, args)
-        elif args.command == "project":
-            _handle_project(conn, args)
-        elif args.command == "checkpoint":
-            _handle_checkpoint(conn, args)
-        elif args.command == "share":
-            _handle_share(conn, args)
-        elif args.command == "import":
-            _handle_import(conn, args)
-        elif args.command == "capture":
-            _handle_capture(conn, args)
-        elif args.command == "feedback":
-            _handle_feedback(conn, args)
-        elif args.command == "review-feedback":
-            _handle_review_feedback(conn, args)
-        elif args.command == "tool-log":
-            _handle_tool_log(conn, args)
-        elif args.command == "transition-log":
-            _handle_transition_log(conn, args)
-        elif args.command == "tool-stats":
-            _handle_tool_stats(conn, args)
-        elif args.command == "tool-suggest":
-            _handle_tool_suggest(conn, args)
-        elif args.command == "link":
-            _handle_link(conn, args)
-        elif args.command == "unlink":
-            _handle_unlink(conn, args)
-        elif args.command == "related":
-            _handle_related(conn, args)
+        result = _dispatch_command(conn, args)
+        if result is not None:
+            _print_output(args, result, args.command)
+        return 0
     except ValueError as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
-        sys.exit(1)
+        error_response = {"ok": False, "error": str(exc)}
+        _print_output(args, error_response, "error")
+        return 1
+    except Exception as exc:
+        error_response = {"ok": False, "error": f"Unexpected error: {exc}"}
+        _print_output(args, error_response, "error")
+        return 1
     finally:
         conn.close()
 
 
-def _handle_add(conn, args):
+def _dispatch_command(conn, args) -> dict | None:
+    """Dispatch to appropriate handler based on command structure."""
+    cmd = args.command
+
+    # New nested command structure
+    if cmd == "memory":
+        action = args.memory_action
+        if action == "search":
+            return _handle_memory_search(conn, args)
+        elif action == "list":
+            return _handle_memory_list(conn, args)
+        elif action == "get":
+            return _handle_memory_get(conn, args)
+        elif action == "timeline":
+            return _handle_memory_timeline(conn, args)
+        elif action == "export":
+            return _handle_memory_export(conn, args)
+        elif action == "clean":
+            return _handle_memory_clean(conn, args)
+    elif cmd == "observation":
+        action = args.obs_action
+        if action == "add":
+            return _handle_obs_add(conn, args)
+        elif action == "edit":
+            return _handle_obs_edit(conn, args)
+        elif action == "delete":
+            return _handle_obs_delete(conn, args)
+        elif action == "capture":
+            return _handle_obs_capture(conn, args)
+        elif action == "feedback":
+            return _handle_obs_feedback(conn, args)
+        elif action == "link":
+            return _handle_obs_link(conn, args)
+        elif action == "unlink":
+            return _handle_obs_unlink(conn, args)
+        elif action == "related":
+            return _handle_obs_related(conn, args)
+    elif cmd == "session":
+        return _handle_session(conn, args)
+    elif cmd == "checkpoint":
+        return _handle_checkpoint(conn, args)
+    elif cmd == "project":
+        return _handle_project(conn, args)
+    elif cmd == "tool":
+        action = args.tool_action
+        if action == "log":
+            return _handle_tool_log(conn, args)
+        elif action == "stats":
+            return _handle_tool_stats(conn, args)
+        elif action == "suggest":
+            return _handle_tool_suggest(conn, args)
+        elif action == "transition":
+            return _handle_tool_transition(conn, args)
+    elif cmd == "admin":
+        action = args.admin_action
+        if action == "manage":
+            return _handle_admin_manage(conn, args)
+        elif action == "share":
+            return _handle_admin_share(conn, args)
+        elif action == "import":
+            return _handle_admin_import(conn, args)
+    elif cmd == "review":
+        action = args.review_action
+        if action == "apply":
+            return _handle_review_apply(conn, args)
+    elif cmd == "incident":
+        return handle_incident_command(conn, args)
+    elif cmd == "recovery":
+        return handle_recovery_command(conn, args)
+    elif cmd == "approval":
+        return handle_approval_command(conn, args)
+    elif cmd == "knowledge":
+        return handle_knowledge_command(conn, args)
+
+    # Backward compatibility: handle old flat commands
+    return _handle_backward_compat(conn, args)
+
+
+def _handle_backward_compat(conn, args) -> dict | None:
+    """Handle old flat command names for backward compatibility."""
+    cmd = args.command
+
+    # These are the old command names that should still work
+    legacy_map = {
+        "add": lambda: _handle_obs_add(conn, args),
+        "search": lambda: _handle_memory_search(conn, args),
+        "timeline": lambda: _handle_memory_timeline(conn, args),
+        "get": lambda: _handle_memory_get(conn, args),
+        "edit": lambda: _handle_obs_edit(conn, args),
+        "delete": lambda: _handle_obs_delete(conn, args),
+        "list": lambda: _handle_memory_list(conn, args),
+        "export": lambda: _handle_memory_export(conn, args),
+        "clean": lambda: _handle_memory_clean(conn, args),
+        "manage": lambda: _handle_admin_manage(conn, args),
+        "capture": lambda: _handle_obs_capture(conn, args),
+        "feedback": lambda: _handle_obs_feedback(conn, args),
+        "review-feedback": lambda: _handle_review_apply_legacy(conn, args),
+        "tool-log": lambda: _handle_tool_log_legacy(conn, args),
+        "transition-log": lambda: _handle_tool_transition_legacy(conn, args),
+        "tool-stats": lambda: _handle_tool_stats(conn, args),
+        "tool-suggest": lambda: _handle_tool_suggest(conn, args),
+        "link": lambda: _handle_obs_link_legacy(conn, args),
+        "unlink": lambda: _handle_obs_unlink_legacy(conn, args),
+        "related": lambda: _handle_obs_related(conn, args),
+        "share": lambda: _handle_admin_share(conn, args),
+        "import": lambda: _handle_admin_import_legacy(conn, args),
+    }
+
+    if cmd in legacy_map:
+        import warnings
+        new_cmd = _get_new_command_name(cmd)
+        warnings.warn(
+            f"Command '{cmd}' is deprecated. Use '{new_cmd}' instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        return legacy_map[cmd]()
+
+    raise ValueError(f"Unknown command: {cmd}")
+
+
+def _get_new_command_name(old_cmd: str) -> str:
+    """Get the new command name for a deprecated command."""
+    mapping = {
+        "add": "observation add",
+        "search": "memory search",
+        "timeline": "memory timeline",
+        "get": "memory get",
+        "edit": "observation edit",
+        "delete": "observation delete",
+        "list": "memory list",
+        "export": "memory export",
+        "clean": "memory clean",
+        "manage": "admin manage",
+        "capture": "observation capture",
+        "feedback": "observation feedback",
+        "review-feedback": "review apply",
+        "tool-log": "tool log",
+        "transition-log": "tool transition",
+        "tool-stats": "tool stats",
+        "tool-suggest": "tool suggest",
+        "link": "observation link",
+        "unlink": "observation unlink",
+        "related": "observation related",
+        "share": "admin share",
+        "import": "admin import",
+    }
+    return mapping.get(old_cmd, old_cmd)
+
+
+def _print_output(args, data: dict, command_type: str) -> None:
+    """Print output in appropriate format."""
+    # Determine output format
+    fmt = args.output
+    human = args.human
+
+    # Auto-enable human format for TTY if output is auto
+    if fmt == "auto" and not human:
+        import sys
+        human = sys.stdout.isatty()
+
+    # Use table formatters for human-readable output
+    if human and "ok" in data and data["ok"]:
+        from .output import (
+            format_observations_table,
+            format_search_results,
+            format_sessions_table,
+            format_stats_table,
+            format_timeline_visual,
+        )
+
+        formatted = None
+        if command_type in ("search", "memory search") and "results" in data:
+            query = getattr(args, "query", "")
+            formatted = format_search_results(data["results"], query)
+        elif command_type in ("list", "memory list", "get", "memory get") and "results" in data:
+            formatted = format_observations_table(data["results"], verbose=args.verbose)
+        elif command_type in ("timeline", "memory timeline") and "results" in data:
+            group_by = getattr(args, "group_by", None)
+            formatted = format_timeline_visual(data["results"], group_by)
+        elif command_type == "session" and "sessions" in data:
+            formatted = format_sessions_table(data["sessions"])
+        elif command_type in ("manage", "admin manage", "stats"):
+            formatted = format_stats_table(data)
+
+        if formatted:
+            print(formatted)
+            return
+
+    # Default JSON output
+    import json
+    print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+
+
+def _handle_obs_add(conn, args):
     title = normalize_text(args.title)
     summary = normalize_text(args.summary)
     tags_list = normalize_tags_list(args.tags)
@@ -440,10 +659,10 @@ def _handle_add(conn, args):
     result = {"ok": True, "id": obs_id}
     if session_id:
         result["session_id"] = session_id
-    print(json.dumps(result, indent=2))
+    return result
 
 
-def _handle_search(conn, args):
+def _handle_memory_search(conn, args):
     required_tags = normalize_tags_list(args.require_tags)
     results = run_search(
         conn,
@@ -454,46 +673,46 @@ def _handle_search(conn, args):
         quote=args.fts_quote,
         required_tags=required_tags,
     )
-    print(json.dumps({"ok": True, "results": results}, indent=2))
+    return {"ok": True, "results": results}
 
 
-def _handle_timeline(conn, args):
+def _handle_memory_timeline(conn, args):
     results = run_timeline(conn, args.start, args.end, args.around_id, args.window_minutes, args.limit, offset=args.offset)
     output = {"ok": True, "results": [asdict(r) for r in results]}
     if args.visual:
         visual = generate_visual_timeline(results, group_by=args.group_by)
         output["visual"] = visual
         print(visual, file=sys.stderr)
-    print(json.dumps(output, indent=2))
+    return output
 
 
-def _handle_get(conn, args):
+def _handle_memory_get(conn, args):
     ids = parse_ids(args.ids)
     results = run_get(conn, ids)
-    print(json.dumps({"ok": True, "results": [asdict(r) for r in results]}, indent=2))
+    return {"ok": True, "results": [asdict(r) for r in results]}
 
 
-def _handle_edit(conn, args):
+def _handle_obs_edit(conn, args):
     result = run_edit(conn, args.id, args.project, args.kind, args.title, args.summary, args.tags, args.raw, args.timestamp, args.auto_tags)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2))
+    return result
 
 
-def _handle_delete(conn, args):
+def _handle_obs_delete(conn, args):
     result = run_delete(conn, parse_ids(args.ids), args.dry_run)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2))
+    return result
 
 
-def _handle_list(conn, args):
+def _handle_memory_list(conn, args):
     required_tags = normalize_tags_list(args.require_tags)
     results = run_list(conn, args.limit, offset=args.offset, required_tags=required_tags)
-    print(json.dumps({"ok": True, "results": [asdict(r) for r in results]}, indent=2))
+    return {"ok": True, "results": [asdict(r) for r in results]}
 
 
-def _handle_export(conn, args):
+def _handle_memory_export(conn, args):
     import csv
     results = run_export(conn, args.limit, offset=args.offset)
     output = sys.stdout
@@ -504,6 +723,8 @@ def _handle_export(conn, args):
             json.dump([asdict(r) for r in results], output, indent=2)
             if output is sys.stdout:
                 output.write("\n")
+            else:
+                return {"ok": True, "output": args.output, "count": len(results)}
         else:
             writer = csv.DictWriter(
                 output,
@@ -514,30 +735,33 @@ def _handle_export(conn, args):
                 row = asdict(item)
                 row["tags"] = tags_to_json(item.tags)
                 writer.writerow(row)
+            if output is not sys.stdout:
+                return {"ok": True, "output": args.output, "count": len(results)}
     finally:
         if output is not sys.stdout:
             output.close()
+    return {"ok": True, "count": len(results)}
 
 
-def _handle_clean(conn, args):
+def _handle_memory_clean(conn, args):
     result = run_clean(conn, args.before, args.older_than_days, args.project, args.kind, args.tag, args.all, args.dry_run, args.vacuum)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2))
+    return result
 
 
-def _handle_manage(conn, args):
+def _handle_admin_manage(conn, args):
     result = run_manage(conn, args.action, args.limit)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2))
+    return result
 
 
 def _handle_session(conn, args):
     if args.session_action == "start":
         session_id = start_session(conn, args.project, args.working_dir, args.agent_type, args.summary)
         set_active_session(args.profile, session_id, "")
-        print(json.dumps({"ok": True, "action": "start", "session_id": session_id}, indent=2))
+        return {"ok": True, "action": "start", "session_id": session_id}
     elif args.session_action == "stop":
         active = get_active_session(args.profile)
         if not active:
@@ -545,10 +769,10 @@ def _handle_session(conn, args):
         summary = args.summary or generate_session_summary(conn, active["session_id"])
         end_session(conn, active["session_id"], summary)
         clear_active_session(args.profile)
-        print(json.dumps({"ok": True, "action": "stop", "session_id": active["session_id"], "summary": summary}, indent=2))
+        return {"ok": True, "action": "stop", "session_id": active["session_id"], "summary": summary}
     elif args.session_action == "list":
         sessions = list_sessions(conn, status=args.status, limit=args.limit)
-        print(json.dumps({"ok": True, "action": "list", "sessions": [asdict(s) for s in sessions]}, indent=2))
+        return {"ok": True, "action": "list", "sessions": [asdict(s) for s in sessions]}
     elif args.session_action == "show":
         session = get_session(conn, args.session_id)
         if not session:
@@ -557,43 +781,43 @@ def _handle_session(conn, args):
         if args.observations:
             observations = get_session_observations(conn, args.session_id)
             result["observations"] = [asdict(o) for o in observations]
-        print(json.dumps(result, indent=2))
+        return result
     elif args.session_action == "resume":
         if args.session_id:
             set_active_session(args.profile, args.session_id, "")
-            print(json.dumps({"ok": True, "action": "resume", "session_id": args.session_id}, indent=2))
+            return {"ok": True, "action": "resume", "session_id": args.session_id}
         else:
             active = get_active_session(args.profile)
             if not active:
                 raise ValueError("No active session")
-            print(json.dumps({"ok": True, "action": "resume", "session_id": active["session_id"]}, indent=2))
+            return {"ok": True, "action": "resume", "session_id": active["session_id"]}
 
 
 def _handle_project(conn, args):
     if args.project_action == "list":
         projects = list_projects(conn, args.limit)
         active = get_active_project(args.profile)
-        print(json.dumps({"ok": True, "action": "list", "active_project": active, "projects": projects}, indent=2))
+        return {"ok": True, "action": "list", "active_project": active, "projects": projects}
     elif args.project_action == "switch":
         set_active_project(args.profile, args.project_name)
-        print(json.dumps({"ok": True, "action": "switch", "project": args.project_name}, indent=2))
+        return {"ok": True, "action": "switch", "project": args.project_name}
     elif args.project_action == "active":
         if args.project_name:
             set_active_project(args.profile, args.project_name)
-            print(json.dumps({"ok": True, "action": "active", "project": args.project_name}, indent=2))
+            return {"ok": True, "action": "active", "project": args.project_name}
         else:
             active = get_active_project(args.profile)
-            print(json.dumps({"ok": True, "action": "active", "project": active}, indent=2))
+            return {"ok": True, "action": "active", "project": active}
     elif args.project_action == "stats":
         project_name = args.project_name or get_active_project(args.profile) or "general"
         stats = get_project_stats(conn, project_name)
-        print(json.dumps({"ok": True, "action": "stats", **stats}, indent=2))
+        return {"ok": True, "action": "stats", **stats}
     elif args.project_action == "archive":
         new_name = f"archived/{args.project_name}"
         conn.execute("UPDATE observations SET project = ? WHERE project = ?", (new_name, args.project_name))
         conn.execute("UPDATE sessions SET project = ? WHERE project = ?", (new_name, args.project_name))
         conn.commit()
-        print(json.dumps({"ok": True, "action": "archive", "old_name": args.project_name, "new_name": new_name}, indent=2))
+        return {"ok": True, "action": "archive", "old_name": args.project_name, "new_name": new_name}
 
 
 def _handle_checkpoint(conn, args):
@@ -602,36 +826,36 @@ def _handle_checkpoint(conn, args):
         session_id = active_session["session_id"] if active_session else None
         project = get_active_project(args.profile) or "general"
         checkpoint_id = create_checkpoint(conn, args.name, args.description, args.tag, session_id, project)
-        print(json.dumps({"ok": True, "action": "create", "checkpoint_id": checkpoint_id}, indent=2))
+        return {"ok": True, "action": "create", "checkpoint_id": checkpoint_id}
     elif args.checkpoint_action == "list":
         checkpoints = list_checkpoints(conn, limit=args.limit)
-        print(json.dumps({"ok": True, "action": "list", "checkpoints": [asdict(c) for c in checkpoints]}, indent=2))
+        return {"ok": True, "action": "list", "checkpoints": [asdict(c) for c in checkpoints]}
     elif args.checkpoint_action == "show":
         checkpoint = get_checkpoint(conn, args.checkpoint_id)
         if not checkpoint:
             raise ValueError(f"Checkpoint {args.checkpoint_id} not found")
         observations = get_checkpoint_observations(conn, args.checkpoint_id)
-        print(json.dumps({"ok": True, "checkpoint": asdict(checkpoint), "observations": [asdict(o) for o in observations]}, indent=2))
+        return {"ok": True, "checkpoint": asdict(checkpoint), "observations": [asdict(o) for o in observations]}
     elif args.checkpoint_action == "resume":
         result = resume_from_checkpoint(conn, args.checkpoint_id, args.profile)
-        print(json.dumps({"ok": True, "action": "resume", **result}, indent=2))
+        return {"ok": True, "action": "resume", **result}
 
 
-def _handle_share(conn, args):
+def _handle_admin_share(conn, args):
     result = run_share(conn, args.output, args.format, args.project, args.kind, args.tag, args.session, args.since, args.limit)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2))
+    return result
 
 
-def _handle_import(conn, args):
+def _handle_admin_import(conn, args):
     result = run_import(conn, args.file, args.project, args.dry_run)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2))
+    return result
 
 
-def _handle_capture(conn, args):
+def _handle_obs_capture(conn, args):
     full_text = " ".join(args.text)
     sentences = full_text.replace("! ", "!|").replace("? ", "?|").replace(". ", ".|").split("|")
     if len(sentences) > 1 and len(sentences[0]) < 100:
@@ -663,25 +887,24 @@ def _handle_capture(conn, args):
     result = {"ok": True, "id": obs_id, "title": title, "project": project}
     if session_id:
         result["session_id"] = session_id
-    print(json.dumps(result, indent=2))
+    return result
 
 
-def _handle_feedback(conn, args):
+def _handle_obs_feedback(conn, args):
     full_text = " ".join(args.text)
 
     if args.history:
         history = get_feedback_history(conn, args.observation_id)
-        print(json.dumps({"ok": True, "observation_id": args.observation_id, "history": history}, indent=2, ensure_ascii=False))
-        return
+        return {"ok": True, "observation_id": args.observation_id, "history": history}
 
     result = apply_feedback(conn, args.observation_id, full_text, auto_apply=not args.dry_run)
     result["db"] = args.db
     result["profile"] = args.profile
     result["dry_run"] = args.dry_run
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return result
 
 
-def _handle_review_feedback(conn, args):
+def _handle_review_apply(conn, args):
     payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
     if isinstance(payload, dict):
         items = payload.get("items")
@@ -698,7 +921,7 @@ def _handle_review_feedback(conn, args):
     result = apply_review_feedback(conn, items, auto_apply=not args.dry_run)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return result
 
 
 def _handle_tool_log(conn, args):
@@ -714,10 +937,10 @@ def _handle_tool_log(conn, args):
         conn, args.tool, tool_input, tool_output,
         args.status, args.duration, project, session_id
     )
-    print(json.dumps({"ok": True, "id": obs_id, "tool": args.tool, "status": args.status}, indent=2))
+    return {"ok": True, "id": obs_id, "tool": args.tool, "status": args.status}
 
 
-def _handle_transition_log(conn, args):
+def _handle_tool_transition(conn, args):
     import json
 
     transition_input = json.loads(args.input)
@@ -737,19 +960,14 @@ def _handle_transition_log(conn, args):
         project=project,
         session_id=session_id,
     )
-    print(
-        json.dumps(
-            {"ok": True, "id": obs_id, "phase": args.phase, "action": args.action, "status": args.status},
-            indent=2,
-        )
-    )
+    return {"ok": True, "id": obs_id, "phase": args.phase, "action": args.action, "status": args.status}
 
 
 def _handle_tool_stats(conn, args):
     result = get_tool_stats(conn, args.project, args.limit)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2))
+    return result
 
 
 def _handle_tool_suggest(conn, args):
@@ -757,49 +975,80 @@ def _handle_tool_suggest(conn, args):
     result = suggest_tools_for_task(conn, task, args.limit)
     result["db"] = args.db
     result["profile"] = args.profile
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return result
 
 
-def _handle_link(conn, args):
+def _handle_obs_link(conn, args):
     link_id = create_link(conn, args.from_id, args.to_id, args.type)
-    print(json.dumps({
+    return {
         "ok": True,
         "link_id": link_id,
         "from_id": args.from_id,
         "to_id": args.to_id,
         "type": args.type,
-    }, indent=2))
+    }
 
 
-def _handle_unlink(conn, args):
+def _handle_obs_unlink(conn, args):
     deleted = delete_link(conn, args.from_id, args.to_id, args.type)
-    print(json.dumps({
+    return {
         "ok": True,
         "deleted": deleted,
         "from_id": args.from_id,
         "to_id": args.to_id,
         "type": args.type,
-    }, indent=2))
+    }
 
 
-def _handle_related(conn, args):
+def _handle_obs_related(conn, args):
     if args.suggest:
         suggestions = find_similar_observations(conn, args.id, args.limit)
-        print(json.dumps({
+        return {
             "ok": True,
             "observation_id": args.id,
             "mode": "suggested",
             "suggestions": suggestions,
-        }, indent=2, ensure_ascii=False))
+        }
     else:
         related = get_related_observations(conn, args.id, args.type, args.limit)
-        print(json.dumps({
+        return {
             "ok": True,
             "observation_id": args.id,
             "mode": "linked",
             "related": related,
-        }, indent=2, ensure_ascii=False))
+        }
+
+
+# Legacy wrapper functions for backward compatibility
+def _handle_review_apply_legacy(conn, args):
+    """Legacy wrapper for review-feedback command."""
+    return _handle_review_apply(conn, args)
+
+
+def _handle_tool_log_legacy(conn, args):
+    """Legacy wrapper for tool-log command."""
+    return _handle_tool_log(conn, args)
+
+
+def _handle_tool_transition_legacy(conn, args):
+    """Legacy wrapper for transition-log command."""
+    return _handle_tool_transition(conn, args)
+
+
+def _handle_obs_link_legacy(conn, args):
+    """Legacy wrapper for link command."""
+    return _handle_obs_link(conn, args)
+
+
+def _handle_obs_unlink_legacy(conn, args):
+    """Legacy wrapper for unlink command."""
+    return _handle_obs_unlink(conn, args)
+
+
+def _handle_admin_import_legacy(conn, args):
+    """Legacy wrapper for import command."""
+    return _handle_admin_import(conn, args)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

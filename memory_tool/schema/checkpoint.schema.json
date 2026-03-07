@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/checkpoint.schema.json",
+  "title": "Checkpoint Schema",
+  "description": "Schema for Checkpoint data model",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["id", "timestamp", "name", "description", "tag", "observation_count", "project"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "Unique checkpoint ID",
+      "minimum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the checkpoint was created"
+    },
+    "name": {
+      "type": "string",
+      "description": "Checkpoint name"
+    },
+    "description": {
+      "type": "string",
+      "description": "Checkpoint description"
+    },
+    "tag": {
+      "type": "string",
+      "description": "Checkpoint tag/label"
+    },
+    "session_id": {
+      "type": ["integer", "null"],
+      "description": "Associated session ID"
+    },
+    "observation_count": {
+      "type": "integer",
+      "description": "Number of observations at checkpoint",
+      "minimum": 0
+    },
+    "project": {
+      "type": "string",
+      "description": "Project identifier"
+    }
+  }
+}

@@ -50,7 +50,19 @@ from .checkpoints import (
 from .projects import list_projects
 from .share import run_share, run_import
 
+# Client API (optional import to avoid circular deps)
+try:
+    from .client import MemoryClient, memory, ObservationData, SessionData
+    _client_available = True
+except ImportError:
+    _client_available = False
+
 __all__ = [
+    # Client API (available if dependencies met)
+    "MemoryClient",
+    "memory",
+    "ObservationData",
+    "SessionData",
     # Models
     "Checkpoint",
     "Observation",

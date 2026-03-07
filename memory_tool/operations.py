@@ -1,12 +1,12 @@
 """CRUD operations for observations."""
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Iterable, List, Optional
 
 if TYPE_CHECKING:
-    import sqlite3
     from .models import Observation
 
 

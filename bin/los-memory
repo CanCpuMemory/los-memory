@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""
+Launcher script for los-memory CLI.
+
+This script provides a convenient entry point for the los-memory memory ledger tool.
+It handles Python environment detection and invokes the memory_tool CLI module.
+
+Usage:
+    los-memory [command] [options]
+
+Examples:
+    los-memory init --profile claude
+    los-memory observation add --title "Note" --summary "Content"
+    los-memory memory search "query"
+    los-memory admin doctor
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def find_module_path() -> Path | None:
+    """Find the memory_tool module path."""
+    # Check if running from source (development)
+    script_dir = Path(__file__).parent.resolve()
+    project_root = script_dir.parent
+
+    # Look for memory_tool in project root
+    module_path = project_root / "memory_tool"
+    if (module_path / "__init__.py").exists():
+        return project_root
+
+    # Check if installed via pip
+    try:
+        import memory_tool
+        return Path(memory_tool.__file__).parent.parent
+    except ImportError:
+        pass
+
+    return None
+
+
+def setup_python_path() -> None:
+    """Add project root to Python path if running from source."""
+    module_parent = find_module_path()
+    if module_parent and str(module_parent) not in sys.path:
+        sys.path.insert(0, str(module_parent))
+
+
+def main() -> int:
+    """Main entry point."""
+    setup_python_path()
+
+    try:
+        from memory_tool.cli import main as cli_main
+        return cli_main()
+    except ImportError as e:
+        print(
+            f"Error: Cannot import memory_tool module: {e}",
+            file=sys.stderr,
+        )
+        print(
+            "Please ensure los-memory is installed or run from source.",
+            file=sys.stderr,
+        )
+        return 127
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

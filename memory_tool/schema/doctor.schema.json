@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/doctor.schema.json",
+  "title": "Doctor Command Schema",
+  "description": "Schema for doctor command response",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["ok", "status", "capabilities", "checks"],
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "description": "Whether all critical checks passed"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["healthy", "degraded", "unhealthy"],
+      "description": "Overall health status"
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Machine-readable capability flags",
+      "required": ["can_read", "can_write", "can_search", "can_migrate"],
+      "properties": {
+        "can_read": {
+          "type": "boolean",
+          "description": "Can read data from the database"
+        },
+        "can_write": {
+          "type": "boolean",
+          "description": "Can write data to the database"
+        },
+        "can_search": {
+          "type": "boolean",
+          "description": "Full-text search is available"
+        },
+        "can_migrate": {
+          "type": "boolean",
+          "description": "Database schema migration is possible"
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "description": "Individual check results",
+      "properties": {
+        "python": {
+          "$ref": "#/definitions/check_result"
+        },
+        "sqlite": {
+          "$ref": "#/definitions/check_result"
+        },
+        "database": {
+          "$ref": "#/definitions/check_result"
+        },
+        "profile": {
+          "$ref": "#/definitions/check_result"
+        },
+        "schema": {
+          "$ref": "#/definitions/check_result"
+        },
+        "disk": {
+          "$ref": "#/definitions/check_result"
+        },
+        "fts": {
+          "$ref": "#/definitions/check_result"
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Non-critical warnings",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "description": "Suggested actions",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "definitions": {
+    "check_result": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

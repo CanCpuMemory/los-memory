@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/observation.schema.json",
+  "title": "Observation Schema",
+  "description": "Schema for Observation data model",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["id", "timestamp", "project", "kind", "title", "summary", "tags", "raw"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "Unique observation ID",
+      "minimum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the observation was created"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project identifier",
+      "minLength": 1
+    },
+    "kind": {
+      "$ref": "base.schema.json#/definitions/observation_kind"
+    },
+    "title": {
+      "type": "string",
+      "description": "Observation title",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "summary": {
+      "type": "string",
+      "description": "Observation summary/content"
+    },
+    "tags": {
+      "type": "array",
+      "description": "List of tags",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "raw": {
+      "type": "string",
+      "description": "Raw source text"
+    },
+    "session_id": {
+      "type": ["integer", "null"],
+      "description": "Associated session ID",
+      "minimum": 1
+    }
+  }
+}

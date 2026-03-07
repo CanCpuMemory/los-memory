@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/observation-link.schema.json",
+  "title": "Observation Link Schema",
+  "description": "Schema for ObservationLink data model",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["id", "from_id", "to_id", "link_type", "created_at"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "Unique link ID",
+      "minimum": 1
+    },
+    "from_id": {
+      "type": "integer",
+      "description": "Source observation ID",
+      "minimum": 1
+    },
+    "to_id": {
+      "type": "integer",
+      "description": "Target observation ID",
+      "minimum": 1
+    },
+    "link_type": {
+      "type": "string",
+      "enum": ["related", "child", "parent", "refines"],
+      "description": "Type of relationship"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the link was created"
+    }
+  }
+}

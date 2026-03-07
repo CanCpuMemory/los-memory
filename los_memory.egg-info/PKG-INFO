@@ -1,0 +1,112 @@
+Metadata-Version: 2.4
+Name: los-memory
+Version: 0.2.0
+Summary: Memory ledger for AI agent observations
+Author: los-memory contributors
+License: MIT
+Project-URL: Homepage, https://github.com/yourusername/los-memory
+Project-URL: Repository, https://github.com/yourusername/los-memory
+Project-URL: Issues, https://github.com/yourusername/los-memory/issues
+Keywords: memory,sqlite,ai,agent,observations
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0; extra == "dev"
+Requires-Dist: pytest-bdd>=6.0; extra == "dev"
+Requires-Dist: pytest-xdist>=3.0; extra == "dev"
+Requires-Dist: black>=23.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+Requires-Dist: mypy>=1.0; extra == "dev"
+Requires-Dist: rich>=13.0; extra == "dev"
+Requires-Dist: pyyaml>=6.0; extra == "dev"
+Provides-Extra: cli
+Requires-Dist: rich>=13.0; extra == "cli"
+Requires-Dist: pyyaml>=6.0; extra == "cli"
+
+# los-memory
+
+Local SQLite memory tool for Codex and Claude Code workflows.
+
+## What it provides
+- Durable memory records (`add`, `ingest`)
+- Record maintenance (`edit`, `delete`)
+- Fast retrieval (`search`, `timeline`, `get`, `list`)
+- Local viewer UI (`viewer.py`)
+- Maintenance and cleanup (`manage`, `clean`)
+
+## Agent profiles
+Use separate default databases by profile:
+
+- `codex`: `~/.codex_memory/memory.db`
+- `claude`: `~/.claude_memory/memory.db`
+- `shared`: `~/.local/share/llm-memory/memory.db`
+
+You can set a default profile:
+
+```bash
+export MEMORY_PROFILE=codex
+```
+
+Or override with `--profile` / `--db` on each command.
+
+## Quick start
+```bash
+python3 memory_tool/memory_tool.py --profile codex init
+python3 memory_tool/memory_tool.py --profile codex add --title "First note" --summary "Hello" --auto-tags
+python3 memory_tool/memory_tool.py --profile codex edit --id 1 --summary "Hello updated"
+python3 memory_tool/memory_tool.py --profile codex search "hello"
+python3 memory_tool/memory_tool.py --profile codex search "hello" --require-tags "tenant:default,user:alice"
+python3 memory_tool/memory_tool.py --profile codex delete "1" --dry-run
+python3 memory_tool/memory_tool.py --profile codex manage stats
+python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --dry-run
+python3 memory_tool/memory_tool.py --profile codex review-feedback --file review.json --dry-run
+```
+
+## Viewer
+```bash
+python3 memory_tool/viewer.py --profile codex
+python3 memory_tool/viewer.py --profile claude --auth-token "mytoken"
+```
+
+If using `--auth-token`, open with `?token=...` or send `Authorization: Bearer ...`.
+
+## Export
+```bash
+python3 memory_tool/memory_tool.py --profile codex export --format json --output export.json
+python3 memory_tool/memory_tool.py --profile claude export --format csv --output export.csv
+```
+
+## General memory usage guide
+See `docs/GENERAL_MEMORY.md` for practical workflows, cleanup strategy, and management commands.
+
+## Codex / Claude install and usage
+See `docs/CODEX_CLAUDE_INSTALL.md` for setup and daily usage from each assistant.
+
+## AI Agent usage guide
+See `docs/AI_USAGE_GUIDE.md` for comprehensive guidance on how AI agents should use this tool effectively, including best practices, workflows, and examples.
+
+## Makefile shortcuts
+```bash
+make help
+make init-codex
+make init-claude
+make stats PROFILE=codex
+```
+
+## Latency benchmark
+```bash
+python3 memory_tool/benchmark.py --iterations 20
+```
+
+## Skill layout
+- `skills/memory-retrieval/` contains retrieval guidance and references.

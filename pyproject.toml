@@ -1,0 +1,180 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "los-memory"
+version = "0.2.0"
+description = "Memory ledger for AI agent observations"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "los-memory contributors"}
+]
+keywords = ["memory", "sqlite", "ai", "agent", "observations"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.9"
+dependencies = [
+    # Core dependencies only
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-bdd>=6.0",
+    "pytest-xdist>=3.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+]
+cli = [
+    "rich>=13.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+los-memory = "memory_tool.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/los-memory"
+Repository = "https://github.com/yourusername/los-memory"
+Issues = "https://github.com/yourusername/los-memory/issues"
+
+[tool.setuptools]
+packages = ["memory_tool"]
+
+[tool.setuptools.package-data]
+memory_tool = ["schema/*.json"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# BDD configuration
+bdd_features_base_dir = "tests/bdd/features"
+
+# Test markers
+markers = [
+    "unit: marks tests as unit tests (fast, isolated)",
+    "integration: marks tests as integration tests (uses database)",
+    "cli: marks tests as CLI tests (uses subprocess)",
+    "contract: marks tests as contract tests (API stability)",
+    "e2e: marks tests as end-to-end tests (full workflows)",
+    "performance: marks tests as performance tests (slow)",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+# Default options
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["memory_tool"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "memory_tool/viewer.py",
+    "memory_tool/llm_hook_example.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "@abc.abstractmethod",
+]
+fail_under = 80
+show_missing = true
+skip_covered = false
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "D",   # pydocstyle
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "D100",  # Missing docstring in public module
+    "D104",  # Missing docstring in public package
+    "D203",  # 1 blank line required before class docstring
+    "D212",  # Multi-line docstring summary should start at the first line
+]
+
+[tool.ruff.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

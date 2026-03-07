@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.local/schemas/session.schema.json",
+  "title": "Session Schema",
+  "description": "Schema for Session data model",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["id", "start_time", "project", "working_dir", "agent_type", "status"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "Unique session ID",
+      "minimum": 1
+    },
+    "start_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the session started"
+    },
+    "end_time": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When the session ended (null if active)"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project identifier"
+    },
+    "working_dir": {
+      "type": "string",
+      "description": "Working directory path"
+    },
+    "agent_type": {
+      "type": "string",
+      "description": "Type of agent (claude, codex, etc.)"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Session summary"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "ended"],
+      "description": "Current session status"
+    }
+  }
+}

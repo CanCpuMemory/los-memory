@@ -10,7 +10,7 @@ from .utils import ISO_FORMAT, utc_now
 if TYPE_CHECKING:
     pass
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 12
 
 
 def connect_db(path: str) -> sqlite3.Connection:
@@ -20,7 +20,25 @@ def connect_db(path: str) -> sqlite3.Connection:
         os.makedirs(directory, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    optimize_connection(conn)
     return conn
+
+
+def optimize_connection(conn: sqlite3.Connection) -> None:
+    """Apply PRAGMA optimizations for better performance.
+
+    These settings optimize SQLite for the los-memory workload:
+    - WAL mode for better concurrent read/write
+    - Normal synchronous mode for performance/safety balance
+    - Memory temp store for faster temp tables
+    - 64MB cache for better query performance
+    - 256MB memory-mapped I/O for faster access
+    """
+    conn.execute("PRAGMA journal_mode=WAL")          # WAL mode for better concurrency
+    conn.execute("PRAGMA synchronous=NORMAL")        # Balance performance and safety
+    conn.execute("PRAGMA temp_store=MEMORY")         # Store temp tables in memory
+    conn.execute("PRAGMA cache_size=-64000")         # 64MB cache (negative = KB)
+    conn.execute("PRAGMA mmap_size=268435456")       # 256MB memory-mapped I/O
 
 
 def ensure_meta_table(conn: sqlite3.Connection) -> None:
@@ -225,6 +243,404 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             """
         )
         set_schema_version(conn, 6)
+        version = 6
+
+    if version < 7:
+        # Performance indexes for T009-T010
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observations_project_timestamp
+            ON observations(project, timestamp DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observations_project_kind_timestamp
+            ON observations(project, kind, timestamp DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observations_tags_text
+            ON observations(tags_text)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observations_session_id
+            ON observations(session_id) WHERE session_id IS NOT NULL
+            """
+        )
+        set_schema_version(conn, 7)
+        version = 7
+
+    if version < 8:
+        # Phase 1: Incident management tables
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS incidents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'detected',
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                source_observation_id INTEGER REFERENCES observations(id),
+                context_snapshot TEXT NOT NULL DEFAULT '{}',
+                detected_at TEXT NOT NULL,
+                resolved_at TEXT,
+                project TEXT NOT NULL DEFAULT 'general'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS incident_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+                link_type TEXT NOT NULL DEFAULT 'related',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # Indexes for incident queries
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_incidents_status
+            ON incidents(status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_incidents_project
+            ON incidents(project)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_incidents_detected_at
+            ON incidents(detected_at DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_incident_observations_incident
+            ON incident_observations(incident_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_incident_observations_observation
+            ON incident_observations(observation_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_observations_unique
+            ON incident_observations(incident_id, observation_id, link_type)
+            """
+        )
+        set_schema_version(conn, 8)
+        version = 8
+
+    if version < 9:
+        # Phase 2: L1自动恢复系统表
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                action_type TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                description TEXT DEFAULT '',
+                enabled BOOLEAN DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_executions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                action_id INTEGER REFERENCES recovery_actions(id),
+                status TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT,
+                completed_at TEXT,
+                output_text TEXT DEFAULT '',
+                error_message TEXT DEFAULT '',
+                retry_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trigger_id TEXT NOT NULL,
+                trigger_type TEXT NOT NULL,
+                action_ids TEXT NOT NULL,
+                execution_strategy TEXT DEFAULT 'sequential',
+                timeout_seconds INTEGER DEFAULT 300,
+                enabled BOOLEAN DEFAULT 1,
+                description TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        # Indexes for recovery queries
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_recovery_executions_incident
+            ON recovery_executions(incident_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_recovery_executions_status
+            ON recovery_executions(status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_recovery_policies_trigger
+            ON recovery_policies(trigger_id)
+            """
+        )
+        # Pre-insert default recovery actions
+        from .utils import utc_now
+        now = utc_now()
+        default_actions = [
+            ('restart_service', 'shell', '{"command": "systemctl restart {{service}}"}', 'Restart a system service', now, now),
+            ('clear_cache', 'shell', '{"command": "rm -rf {{cache_path}}/*"}', 'Clear application cache', now, now),
+            ('send_alert', 'webhook', '{"method": "POST", "url": "{{webhook_url}}"}', 'Send alert notification', now, now),
+            ('switch_database', 'database', '{"action": "failover", "target": "{{backup_db}}"}', 'Switch to backup database', now, now),
+        ]
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO recovery_actions
+            (name, action_type, config, description, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            default_actions
+        )
+        set_schema_version(conn, 9)
+        version = 9
+
+    if version < 10:
+        # Phase 3: L2审批恢复系统表
+        # Approval requests with optimistic locking
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approval_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL UNIQUE,
+                command TEXT NOT NULL,
+                risk_level TEXT NOT NULL DEFAULT 'medium',
+                status TEXT NOT NULL DEFAULT 'pending',
+                version INTEGER NOT NULL DEFAULT 1,
+                requested_by TEXT,
+                approved_by TEXT,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                context TEXT DEFAULT '{}'
+            )
+            """
+        )
+        # Approval audit log
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approval_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                actor_id TEXT,
+                previous_status TEXT,
+                new_status TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                reason TEXT,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (request_id) REFERENCES approval_requests(id)
+            )
+            """
+        )
+        # Approval events for SSE
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approval_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # Nonce storage for replay attack prevention
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approval_nonces (
+                nonce TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        # Indexes for approval queries
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_approval_status
+            ON approval_requests(status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_approval_expires
+            ON approval_requests(expires_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_approval_job
+            ON approval_requests(job_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_request
+            ON approval_audit_log(request_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_timestamp
+            ON approval_audit_log(timestamp)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_approval_events_job
+            ON approval_events(job_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_approval_events_created
+            ON approval_events(created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_nonce_expires
+            ON approval_nonces(expires_at)
+            """
+        )
+        set_schema_version(conn, 10)
+        version = 10
+
+    if version < 11:
+        # Phase 3: 归因分析系统表
+        # Attribution reports for incident root cause analysis
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attribution_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                root_cause_category TEXT NOT NULL,
+                root_cause_description TEXT NOT NULL,
+                confidence_score REAL NOT NULL DEFAULT 0.0,
+                contributing_factors TEXT NOT NULL DEFAULT '[]',
+                evidence_observation_ids TEXT NOT NULL DEFAULT '[]',
+                recommended_prevention TEXT NOT NULL DEFAULT '[]',
+                time_window_minutes INTEGER DEFAULT 30,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # Incident attributions linking table
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS incident_attributions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                attribution_report_id INTEGER NOT NULL REFERENCES attribution_reports(id) ON DELETE CASCADE,
+                factor_type TEXT NOT NULL,
+                factor_description TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                observation_id INTEGER REFERENCES observations(id),
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # Indexes for attribution queries
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attribution_incident
+            ON attribution_reports(incident_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attribution_category
+            ON attribution_reports(root_cause_category)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_incident_attributions_report
+            ON incident_attributions(attribution_report_id)
+            """
+        )
+        set_schema_version(conn, 11)
+        version = 11
+
+    if version < 12:
+        # Phase 4: 经验沉淀系统 - Knowledge Base
+        # Knowledge entries for reusable solutions
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS knowledge_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                symptoms_pattern TEXT NOT NULL,
+                root_cause_summary TEXT NOT NULL,
+                solution_steps TEXT NOT NULL DEFAULT '[]',
+                prerequisites TEXT DEFAULT '[]',
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
+                source_incident_ids TEXT DEFAULT '[]',
+                tags TEXT DEFAULT '[]',
+                last_used_at TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # Indexes for knowledge queries
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_knowledge_type_severity
+            ON knowledge_entries(incident_type, severity)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_knowledge_success_rate
+            ON knowledge_entries(success_count, failure_count)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_knowledge_last_used
+            ON knowledge_entries(last_used_at)
+            """
+        )
+        set_schema_version(conn, 12)
 
 
 def ensure_fts(conn: sqlite3.Connection) -> bool:
