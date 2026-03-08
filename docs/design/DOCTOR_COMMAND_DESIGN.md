@@ -59,7 +59,7 @@ The `doctor` command provides comprehensive environment health checks for los-me
 ### Human-Readable (Default)
 
 ```
-$ memory_tool doctor
+$ memory_tool admin doctor
 
 🔍 los-memory Environment Health Check
 ======================================
@@ -751,19 +751,18 @@ def handle_doctor(args) -> None:
 Add to CLI parser:
 
 ```python
-doctor_parser = subparsers.add_parser("doctor", help="Run environment health checks")
-doctor_parser.add_argument("--json", action="store_true", help="Output JSON format")
-doctor_parser.add_argument("--fix", action="store_true", help="Apply auto-fixes")
+admin_parser = subparsers.add_parser("admin", help="Administrative commands")
+admin_subparsers = admin_parser.add_subparsers(dest="admin_action", required=True)
+admin_doctor = admin_subparsers.add_parser("doctor", help="Run health checks")
+admin_doctor.add_argument("--fix", action="store_true", help="Attempt auto-fixes")
 ```
 
 ## Exit Codes
 
 | Exit Code | Meaning |
 |-----------|---------|
-| 0 | Healthy - all checks passed |
-| 1 | Degraded - warnings present |
-| 2 | Unhealthy - errors present |
-| 3 | Doctor command failed |
+| 0 | Healthy - checks passed |
+| 1 | Unhealthy/Degraded - checks failed or warnings present |
 
 ## Testing Strategy
 

@@ -1,6 +1,6 @@
 # los-memory 外部项目接入指南
 
-**版本**: 0.2.0
+**版本**: 2.0.0
 **日期**: 2026-03-07
 **状态**: 生产就绪 (Production Ready)
 
@@ -13,7 +13,7 @@
 ```bash
 # 1. 安装验证
 pip install -e .
-los-memory --version  # 应输出 0.2.0
+los-memory --help
 
 # 2. 数据库初始化
 los-memory --profile shared init
@@ -36,7 +36,7 @@ python -m pytest tests/unit/test_attribution.py tests/unit/test_knowledge_base.p
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    los-memory v0.2.0                         │
+│                    los-memory v2.0.0                         │
 │                                                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
 │  │  Phase 1     │  │  Phase 2     │  │  Phase 3     │       │
@@ -85,20 +85,20 @@ los-memory --help
 
 ```bash
 # 在其他项目的 requirements.txt 中添加
--e git+https://github.com/your-org/los-memory.git@v0.2.0#egg=los-memory
+-e git+https://github.com/your-org/los-memory.git@v2.0.0#egg=los-memory
 
 # 或使用 pip
-pip install git+https://github.com/your-org/los-memory.git@v0.2.0
+pip install git+https://github.com/your-org/los-memory.git@v2.0.0
 ```
 
 ### 3.3 环境要求
 
 | 依赖 | 最低版本 | 说明 |
 |------|----------|------|
-| Python | 3.10+ | 必需 |
-| SQLite | 3.35+ | 必需 (支持 RETURNING 语法) |
-| pytest | 8.0+ | 仅开发 |
-| black | 24.0+ | 仅开发 |
+| Python | 3.9+ | 必需 |
+| SQLite | 3.25+ | 必需 (支持 FTS5) |
+| pytest | 7.0+ | 仅开发 |
+| black | 23.0+ | 仅开发 |
 
 ---
 
@@ -294,7 +294,7 @@ jobs:
     steps:
       - name: Check Recovery System Health
         run: |
-          los-memory --profile shared admin health-check
+          los-memory --profile shared admin doctor
 
       - name: Create Deployment Incident
         if: failure()
@@ -315,7 +315,7 @@ jobs:
 
 ```bash
 # 运行所有测试
-make test
+python -m pytest tests -v --tb=short
 
 # 仅运行自愈系统测试
 python -m pytest tests/unit/test_recovery*.py tests/unit/test_approval*.py \
@@ -339,18 +339,13 @@ python scripts/test_tiered_recovery.py
 
 ```bash
 # 系统健康检查
-los-memory admin health-check
+los-memory admin doctor
 
 # 预期输出:
 # {
-#   "status": "healthy",
-#   "database": "connected",
-#   "schema_version": 12,
-#   "components": {
-#     "incident_manager": "ok",
-#     "recovery_executor": "ok",
-#     "approval_workflow": "ok",
-#     "knowledge_base": "ok"
+#   "ok": true,
+#   "data": {
+#     "status": "healthy"
 #   }
 # }
 ```
@@ -377,16 +372,16 @@ los-memory admin health-check
 **Q: 数据库初始化失败**
 ```bash
 # 检查 SQLite 版本
-sqlite3 --version  # 需要 >= 3.35.0
+sqlite3 --version  # 需要 >= 3.25.0
 
 # 手动初始化
-los-memory init --force
+los-memory init
 ```
 
 **Q: 审批请求超时**
 ```bash
 # 检查配置
-los-memory admin config --key approval.max_age
+los-memory admin doctor
 
 # 调整超时时间
 export APPROVAL_MAX_AGE=600  # 10分钟
@@ -395,30 +390,30 @@ export APPROVAL_MAX_AGE=600  # 10分钟
 **Q: 知识库搜索无结果**
 ```bash
 # 检查 FTS 表状态
-los-memory admin diagnose --component knowledge_base
+los-memory admin doctor
 
 # 重建 FTS 索引
-los-memory knowledge rebuild-index
+los-memory admin doctor --fix
 ```
 
 ### 9.2 诊断命令
 
 ```bash
 # 系统诊断
-los-memory admin diagnose
+los-memory admin doctor
 
 # 数据库状态
-los-memory admin db-stats
+los-memory admin manage stats
 
 # 清理过期数据
-los-memory admin cleanup --older-than-days 90 --dry-run
+los-memory memory clean --older-than-days 90 --dry-run
 ```
 
 ---
 
 ## 10. 升级指南
 
-### 从 v0.1.x 升级到 v0.2.0
+### 从旧版本升级到 v2.0.0
 
 ```bash
 # 1. 备份现有数据库
@@ -431,10 +426,10 @@ git pull origin main
 pip install -e .
 
 # 4. 自动迁移数据库
-los-memory admin migrate
+los-memory init
 
 # 5. 验证升级
-los-memory admin health-check
+los-memory admin doctor
 ```
 
 ### 数据库迁移历史

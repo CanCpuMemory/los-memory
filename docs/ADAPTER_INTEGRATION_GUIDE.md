@@ -1,7 +1,7 @@
 # Approval Adapter 对接集成指南
 
 **文档版本**: 1.0
-**适用版本**: los-memory >= 2.1.0
+**适用版本**: los-memory >= 2.0.0
 **最后更新**: 2026-03-07
 
 ---
@@ -17,6 +17,8 @@
 7. [常见问题与故障排查](#常见问题与故障排查)
 8. [性能优化建议](#性能优化建议)
 9. [安全注意事项](#安全注意事项)
+10. [跨系统对接方案](#跨系统对接方案)
+11. [持续集成对接方案](#持续集成对接方案)
 
 ---
 
@@ -531,6 +533,42 @@ if status.get("statistics", {}).get("sync_needed"):
 # 3. 切换到远程模式
 config.phase = MigrationPhase.REMOTE_ONLY
 ```
+
+---
+
+## 跨系统对接方案
+
+推荐按以下顺序推进：
+
+1. 先完成 `lsclaw` 的 memory adapter scope 强隔离（`requiredTags`）。
+2. 再接入 team orchestrator 的 `tool transition` 与 reviewer 的 `review apply`。
+3. 同步推进 `approval` 从 `local-only` 到 `dual-write`，再逐步切换 `remote-only`。
+
+完整方案见：
+
+- `docs/LSCLAW_VPS_CI_INTEGRATION_PLAN.md`
+- `docs/LSCLAW_MEMORY_UPGRADE_GUIDE.md`
+- `docs/LSCLAW_PATCH_CHECKLIST.md`
+
+---
+
+## 持续集成对接方案
+
+建议将以下任务纳入主干流水线：
+
+1. `docs-command-lint`
+   - 扫描文档命令示例，阻断旧扁平命令回流。
+2. `cli-contract-test`
+   - 校验核心命令输出结构与退出码行为。
+3. `lsclaw-adapter-e2e`
+   - 验证 `requiredTags` 隔离与回忆降级策略。
+4. `approval-migration-e2e`
+   - 验证 `local-only/dual-write/remote-only` 迁移链路与回退策略。
+
+建议发布闸门：
+
+- 主干合并前必须通过 `docs-command-lint + cli-contract-test`
+- 发布分支增加 `lsclaw-adapter-e2e + approval-migration-e2e`
 
 ---
 

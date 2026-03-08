@@ -75,6 +75,8 @@ class VPSAgentWebConfig:
             )
         if timeout := os.environ.get("APPROVAL_MIGRATION_TIMEOUT"):
             self.timeout_seconds = int(timeout)
+        if retry := os.environ.get("APPROVAL_MIGRATION_RETRY"):
+            self.retry_count = int(retry)
 
 
 @dataclass
@@ -91,7 +93,7 @@ class SSEProxyConfig:
 class DualWriteConfig:
     """Dual-write configuration."""
 
-    mode: DualWriteMode = None  # type: ignore
+    mode: Optional[DualWriteMode] = None
     sync_interval_seconds: int = 300  # 5 minutes
     conflict_resolution: str = "remote-wins"  # remote-wins, local-wins, manual
 
@@ -166,7 +168,8 @@ class MigrationConfig:
         if self.phase == MigrationPhase.LOCAL_ONLY:
             return "local-only"
         elif self.phase == MigrationPhase.DUAL_WRITE:
-            return f"dual-write ({self.dual_write.mode.value})"
+            mode = self.dual_write.mode or DualWriteMode.STRICT
+            return f"dual-write ({mode.value})"
         elif self.phase == MigrationPhase.REMOTE_ONLY:
             return "remote-only"
         else:

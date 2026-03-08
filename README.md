@@ -60,10 +60,10 @@ Or override with `--profile` / `--db` on each command.
 ### v2.0.0+ CLI (推荐)
 ```bash
 # 初始化
-los-memory init --profile codex
+los-memory --profile codex init
 
 # 添加观察记录
-los-memory memory add --title "First note" --summary "Hello"
+los-memory observation add --title "First note" --summary "Hello"
 los-memory observation add --title "API设计决策" --summary "使用REST而非GraphQL"
 
 # 检索
@@ -72,8 +72,8 @@ los-memory memory list --limit 10
 los-memory memory get 1
 
 # 编辑和删除
-los-memory memory edit --id 1 --summary "Hello updated"
-los-memory memory delete 1 --execute
+los-memory observation edit --id 1 --summary "Hello updated"
+los-memory observation delete 1 --dry-run
 
 # 会话和检查点
 los-memory session start --description "Sprint planning"
@@ -87,10 +87,10 @@ los-memory admin extensions list
 ### 传统 CLI (向后兼容)
 ```bash
 python3 memory_tool/memory_tool.py --profile codex init
-python3 memory_tool/memory_tool.py --profile codex add --title "First note" --summary "Hello" --auto-tags
-python3 memory_tool/memory_tool.py --profile codex edit --id 1 --summary "Hello updated"
-python3 memory_tool/memory_tool.py --profile codex search "hello"
-python3 memory_tool/memory_tool.py --profile codex delete "1" --dry-run
+python3 memory_tool/memory_tool.py --profile codex observation add --title "First note" --summary "Hello" --auto-tags
+python3 memory_tool/memory_tool.py --profile codex observation edit --id 1 --summary "Hello updated"
+python3 memory_tool/memory_tool.py --profile codex memory search "hello"
+python3 memory_tool/memory_tool.py --profile codex observation delete "1" --dry-run
 ```
 
 ## Viewer
@@ -103,8 +103,8 @@ If using `--auth-token`, open with `?token=...` or send `Authorization: Bearer .
 
 ## Export
 ```bash
-python3 memory_tool/memory_tool.py --profile codex export --format json --output export.json
-python3 memory_tool/memory_tool.py --profile claude export --format csv --output export.csv
+python3 memory_tool/memory_tool.py --profile codex memory export --format json --output export.json
+python3 memory_tool/memory_tool.py --profile claude memory export --format csv --output export.csv
 ```
 
 ## General memory usage guide

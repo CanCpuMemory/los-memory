@@ -3,13 +3,13 @@
 本文档给出在 `lsclaw` 仓库可直接执行的改造步骤，目标：
 
 1. 检索强隔离（`tenant/user/session`）
-2. 结构化轨迹写入（`transition-log`）
-3. review 结果自动回写（`review-feedback`）
+2. 结构化轨迹写入（`tool transition`）
+3. review 结果自动回写（`review apply`）
 
 前置：`los-memory` 已升级，支持：
 - `search/list --require-tags`
-- `transition-log`
-- `review-feedback --file`
+- `tool transition`
+- `review apply --file`
 
 ## 0. 环境变量（建议先补）
 
@@ -90,11 +90,11 @@ if (requiredTags) {
 
 ## 3. `control-plane/scripts/team-agent-orchestrator.mjs`
 
-## 3.1 阶段完成后追加 `transition-log`
+## 3.1 阶段完成后追加 `tool transition`
 
 在每个 stage 执行后，除原 `POST /api/users/:id/memory` 外，新增本地 memory_tool 调用（或经控制平面代理）：
 
-- command: `transition-log`
+- command: `tool transition`
 - phase: `team_stage`
 - action: `${stage.id}:${stage.role}:${stage.agent}`
 - input: 阶段 prompt 摘要
@@ -104,7 +104,7 @@ if (requiredTags) {
   - 验证通过：`1`
   - 有失败：`0`
 
-## 3.2 review 阶段后自动 `review-feedback`
+## 3.2 review 阶段后自动 `review apply`
 
 约定 reviewer 输出产物：`review-feedback.json`，格式：
 
@@ -121,14 +121,14 @@ if (requiredTags) {
 
 ```bash
 python3 /path/to/los-memory/memory_tool/memory_tool.py \
-  --profile shared review-feedback --file review-feedback.json
+  --profile shared review apply --file review-feedback.json
 ```
 
 灰度期先用：
 
 ```bash
 python3 /path/to/los-memory/memory_tool/memory_tool.py \
-  --profile shared review-feedback --file review-feedback.json --dry-run
+  --profile shared review apply --file review-feedback.json --dry-run
 ```
 
 ## 4. `control-plane/test/*` 建议新增用例
@@ -150,15 +150,15 @@ python3 /path/to/los-memory/memory_tool/memory_tool.py \
 
 在 `team-orchestrator-sync` 扩展：
 - 阶段结束后有 transition 记录
-- review-feedback dry-run/apply 都能返回结构化结果
+- review apply dry-run/apply 都能返回结构化结果
 
 ## 5. 实施顺序（建议照此执行）
 
 1. adapter 支持 `requiredTags`
 2. server search/list/chat-recall 接入 `requiredTags`
 3. 补隔离测试（先测再改或边改边测）
-4. orchestrator 增加 `transition-log`
-5. orchestrator 接入 `review-feedback`（先 dry-run）
+4. orchestrator 增加 `tool transition`
+5. orchestrator 接入 `review apply`（先 dry-run）
 6. 灰度开关放量
 
 ## 6. 发布验收清单
@@ -167,5 +167,5 @@ python3 /path/to/los-memory/memory_tool/memory_tool.py \
 - `GET /api/users/:userId/memory/list` 已受 tenant/user 强过滤
 - chat recall 日志可看到 requiredTags 生效
 - team stage 有 `agent_transition` 记录
-- review-feedback 执行报告包含 `applied/failed/errors`
+- review apply 执行报告包含 `applied/failed/errors`
 - 无新增高优先级回归

@@ -10,28 +10,28 @@ These options are available for all commands:
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--profile` | `-p` | `codex` | Memory profile (codex, claude, shared) |
+| `--profile` | | `codex` | Memory profile (codex, claude, shared) |
 | `--db` | | auto | Path to SQLite database (overrides --profile) |
-| `--json` | `-j` | false | Output JSON format |
-| `--json-version` | | `1.0` | JSON schema version |
-| `--quiet` | `-q` | false | Suppress non-error output |
-| `--verbose` | `-v` | false | Verbose output |
-| `--help` | `-h` | | Show help message |
+| `--output` | | `json` | Output format (json, yaml, table) |
+| `--human` | | false | Human-readable output |
+| `--color` | | `auto` | Color output (auto, always, never) |
+| `--verbose` | | false | Verbose output |
+| `--help` | | | Show help message |
 
 ### Global Option Examples
 
 ```bash
 # Use specific profile
-memory_tool --profile claude search "query"
+memory_tool --profile claude memory search "query"
 
 # Use custom database
-memory_tool --db ~/custom/memory.db list
+memory_tool --db ~/custom/memory.db memory list
 
 # JSON output
-memory_tool --json search "query"
+memory_tool --output json memory search "query"
 
 # Combined options
-memory_tool --profile claude --json --quiet search "query"
+memory_tool --profile claude --output json memory search "query"
 ```
 
 ## Command Reference
@@ -49,7 +49,7 @@ memory_tool init [OPTIONS]
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--force` | Reinitialize even if database exists |
+| 无 | `init` 为幂等初始化，重复执行安全 |
 
 **Examples:**
 ```bash
@@ -59,8 +59,8 @@ memory_tool init
 # Initialize with specific profile
 memory_tool --profile shared init
 
-# Force reinitialize
-memory_tool init --force
+# Reinitialize (idempotent)
+memory_tool init
 ```
 
 **Output:**
@@ -87,7 +87,7 @@ memory_tool init --force
 Add a new observation to the memory store.
 
 ```bash
-memory_tool add [OPTIONS]
+memory_tool observation add [OPTIONS]
 ```
 
 **Options:**
@@ -106,16 +106,16 @@ memory_tool add [OPTIONS]
 **Examples:**
 ```bash
 # Basic observation
-memory_tool add --title "API Design" --summary "Designed REST endpoints"
+memory_tool observation add --title "API Design" --summary "Designed REST endpoints"
 
 # With tags
-memory_tool add --title "Bug Fix" --summary "Fixed null pointer" --kind fix --tags "bug,critical"
+memory_tool observation add --title "Bug Fix" --summary "Fixed null pointer" --kind fix --tags "bug,critical"
 
 # Auto-generate tags
-memory_tool add --title "Database Migration" --summary "Migrated to PostgreSQL" --auto-tags
+memory_tool observation add --title "Database Migration" --summary "Migrated to PostgreSQL" --auto-tags
 
 # With raw context
-memory_tool add --title "Decision" --summary "Use JWT" --raw "Meeting notes..."
+memory_tool observation add --title "Decision" --summary "Use JWT" --raw "Meeting notes..."
 ```
 
 **Output:**
@@ -136,7 +136,7 @@ memory_tool add --title "Decision" --summary "Use JWT" --raw "Meeting notes..."
 Search observations using FTS or LIKE queries.
 
 ```bash
-memory_tool search [OPTIONS] QUERY
+memory_tool memory search [OPTIONS] QUERY
 ```
 
 **Arguments:**
@@ -156,19 +156,19 @@ memory_tool search [OPTIONS] QUERY
 **Examples:**
 ```bash
 # Basic search
-memory_tool search "authentication"
+memory_tool memory search "authentication"
 
 # With limit
-memory_tool search "API" --limit 20
+memory_tool memory search "API" --limit 20
 
 # FTS mode with quoted query
-memory_tool search "JWT token" --mode fts --fts-quote
+memory_tool memory search "JWT token" --mode fts --fts-quote
 
 # Require specific tags
-memory_tool search "database" --require-tags "migration,postgres"
+memory_tool memory search "database" --require-tags "migration,postgres"
 
 # Pagination
-memory_tool search "bug" --limit 10 --offset 20
+memory_tool memory search "bug" --limit 10 --offset 20
 ```
 
 **Output:**
@@ -195,7 +195,7 @@ memory_tool search "bug" --limit 10 --offset 20
 Retrieve specific observations by their IDs.
 
 ```bash
-memory_tool get IDS
+memory_tool memory get IDS
 ```
 
 **Arguments:**
@@ -206,13 +206,13 @@ memory_tool get IDS
 **Examples:**
 ```bash
 # Single ID
-memory_tool get 123
+memory_tool memory get 123
 
 # Multiple IDs
-memory_tool get 1,2,3,4,5
+memory_tool memory get 1,2,3,4,5
 
 # Range (if supported)
-memory_tool get 100-110
+memory_tool memory get 100-110
 ```
 
 **Output:**
@@ -235,7 +235,7 @@ memory_tool get 100-110
 List the most recent observations.
 
 ```bash
-memory_tool list [OPTIONS]
+memory_tool memory list [OPTIONS]
 ```
 
 **Options:**
@@ -250,13 +250,13 @@ memory_tool list [OPTIONS]
 **Examples:**
 ```bash
 # List recent
-memory_tool list
+memory_tool memory list
 
 # With filters
-memory_tool list --project myapp --kind decision --limit 50
+memory_tool memory list --project myapp --kind decision --limit 50
 
 # Tagged observations
-memory_tool list --require-tags "critical"
+memory_tool memory list --require-tags "critical"
 ```
 
 ---
@@ -266,7 +266,7 @@ memory_tool list --require-tags "critical"
 Edit an existing observation.
 
 ```bash
-memory_tool edit [OPTIONS]
+memory_tool observation edit [OPTIONS]
 ```
 
 **Options:**
@@ -285,13 +285,13 @@ memory_tool edit [OPTIONS]
 **Examples:**
 ```bash
 # Edit title
-memory_tool edit --id 123 --title "Updated Title"
+memory_tool observation edit --id 123 --title "Updated Title"
 
 # Edit multiple fields
-memory_tool edit --id 123 --title "New" --summary "New summary" --tags "updated"
+memory_tool observation edit --id 123 --title "New" --summary "New summary" --tags "updated"
 
 # Auto-update tags
-memory_tool edit --id 123 --title "New Title" --summary "New Summary" --auto-tags
+memory_tool observation edit --id 123 --title "New Title" --summary "New Summary" --auto-tags
 ```
 
 ---
@@ -301,7 +301,7 @@ memory_tool edit --id 123 --title "New Title" --summary "New Summary" --auto-tag
 Delete observations by ID.
 
 ```bash
-memory_tool delete [OPTIONS] IDS
+memory_tool observation delete [OPTIONS] IDS
 ```
 
 **Arguments:**
@@ -317,13 +317,13 @@ memory_tool delete [OPTIONS] IDS
 **Examples:**
 ```bash
 # Delete single
-memory_tool delete 123
+memory_tool observation delete 123
 
 # Delete multiple
-memory_tool delete 1,2,3
+memory_tool observation delete 1,2,3
 
 # Preview deletion
-memory_tool delete 100,101 --dry-run
+memory_tool observation delete 100,101 --dry-run
 ```
 
 **Output:**
@@ -346,7 +346,7 @@ memory_tool delete 100,101 --dry-run
 Query observations by time range.
 
 ```bash
-memory_tool timeline [OPTIONS]
+memory_tool memory timeline [OPTIONS]
 ```
 
 **Options:**
@@ -364,16 +364,16 @@ memory_tool timeline [OPTIONS]
 **Examples:**
 ```bash
 # Recent observations
-memory_tool timeline
+memory_tool memory timeline
 
 # Specific range
-memory_tool timeline --start 2026-03-01 --end 2026-03-07
+memory_tool memory timeline --start 2026-03-01 --end 2026-03-07
 
 # Around observation
-memory_tool timeline --around-id 123 --window-minutes 60
+memory_tool memory timeline --around-id 123 --window-minutes 60
 
 # Visual timeline
-memory_tool timeline --visual --group-by day
+memory_tool memory timeline --visual --group-by day
 ```
 
 ---
@@ -544,7 +544,7 @@ memory_tool checkpoint resume CHECKPOINT_ID
 #### `manage stats` - Database Statistics
 
 ```bash
-memory_tool manage stats [OPTIONS]
+memory_tool admin manage stats [OPTIONS]
 ```
 
 **Options:**
@@ -557,7 +557,7 @@ memory_tool manage stats [OPTIONS]
 #### `manage projects` - List Projects
 
 ```bash
-memory_tool manage projects [OPTIONS]
+memory_tool admin manage projects [OPTIONS]
 ```
 
 ---
@@ -565,7 +565,7 @@ memory_tool manage projects [OPTIONS]
 #### `manage tags` - List Tags
 
 ```bash
-memory_tool manage tags [OPTIONS]
+memory_tool admin manage tags [OPTIONS]
 ```
 
 ---
@@ -573,7 +573,7 @@ memory_tool manage tags [OPTIONS]
 #### `manage vacuum` - Vacuum Database
 
 ```bash
-memory_tool manage vacuum
+memory_tool admin manage vacuum
 ```
 
 ---
@@ -601,7 +601,7 @@ memory_tool capture "Bug: login fails with special chars" --kind fix --tags "bug
 Delete old or filtered observations.
 
 ```bash
-memory_tool clean [OPTIONS]
+memory_tool memory clean [OPTIONS]
 ```
 
 **Options:**
@@ -619,14 +619,14 @@ memory_tool clean [OPTIONS]
 **Examples:**
 ```bash
 # Clean old observations
-memory_tool clean --older-than-days 90
+memory_tool memory clean --older-than-days 90
 
 # Clean specific project
-memory_tool clean --project oldproject --dry-run
-memory_tool clean --project oldproject
+memory_tool memory clean --project oldproject --dry-run
+memory_tool memory clean --project oldproject
 
 # Vacuum database
-memory_tool clean --vacuum
+memory_tool memory clean --vacuum
 ```
 
 ---
@@ -634,7 +634,7 @@ memory_tool clean --vacuum
 #### `export` - Export Observations
 
 ```bash
-memory_tool export [OPTIONS]
+memory_tool memory export [OPTIONS]
 ```
 
 **Options:**
@@ -686,7 +686,7 @@ memory_tool share [OPTIONS]
 #### `link` - Create Link
 
 ```bash
-memory_tool link [OPTIONS]
+memory_tool observation link [OPTIONS]
 ```
 
 **Options:**
@@ -701,7 +701,7 @@ memory_tool link [OPTIONS]
 #### `unlink` - Remove Link
 
 ```bash
-memory_tool unlink [OPTIONS]
+memory_tool observation unlink [OPTIONS]
 ```
 
 **Options:**
@@ -716,7 +716,7 @@ memory_tool unlink [OPTIONS]
 #### `related` - Find Related Observations
 
 ```bash
-memory_tool related [OPTIONS] ID
+memory_tool observation related [OPTIONS] ID
 ```
 
 **Options:**
@@ -733,7 +733,7 @@ memory_tool related [OPTIONS] ID
 #### `feedback` - Provide Feedback
 
 ```bash
-memory_tool feedback [OPTIONS] TEXT...
+memory_tool observation feedback [OPTIONS] TEXT...
 ```
 
 **Options:**
@@ -745,10 +745,10 @@ memory_tool feedback [OPTIONS] TEXT...
 
 ---
 
-#### `review-feedback` - Batch Apply Feedback
+#### `review apply` - Batch Apply Feedback
 
 ```bash
-memory_tool review-feedback [OPTIONS]
+memory_tool review apply [OPTIONS]
 ```
 
 **Options:**
@@ -761,10 +761,10 @@ memory_tool review-feedback [OPTIONS]
 
 ### Tool Memory Commands
 
-#### `tool-log` - Log Tool Call
+#### `tool log` - Log Tool Call
 
 ```bash
-memory_tool tool-log [OPTIONS]
+memory_tool tool log [OPTIONS]
 ```
 
 **Options:**
@@ -779,10 +779,10 @@ memory_tool tool-log [OPTIONS]
 
 ---
 
-#### `transition-log` - Log Agent Transition
+#### `tool transition` - Log Agent Transition
 
 ```bash
-memory_tool transition-log [OPTIONS]
+memory_tool tool transition [OPTIONS]
 ```
 
 **Options:**
@@ -798,10 +798,10 @@ memory_tool transition-log [OPTIONS]
 
 ---
 
-#### `tool-stats` - Tool Usage Statistics
+#### `tool stats` - Tool Usage Statistics
 
 ```bash
-memory_tool tool-stats [OPTIONS]
+memory_tool tool stats [OPTIONS]
 ```
 
 **Options:**
@@ -812,10 +812,10 @@ memory_tool tool-stats [OPTIONS]
 
 ---
 
-#### `tool-suggest` - Suggest Tools
+#### `tool suggest` - Suggest Tools
 
 ```bash
-memory_tool tool-suggest [OPTIONS] TASK...
+memory_tool tool suggest [OPTIONS] TASK...
 ```
 
 **Options:**
@@ -827,29 +827,29 @@ memory_tool tool-suggest [OPTIONS] TASK...
 
 ### Diagnostic Commands
 
-#### `doctor` - Environment Health Check
+#### `admin doctor` - Environment Health Check
 
 ```bash
-memory_tool doctor [OPTIONS]
+memory_tool admin doctor [OPTIONS]
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--json` | Output JSON format |
 | `--fix` | Apply auto-fixes |
-| `--check` | Run specific check |
+| `--output {json,yaml,table}` | Set output format (global option) |
+| `--human` | Use human-readable format (global option) |
 
 **Examples:**
 ```bash
 # Run all checks
-memory_tool doctor
+memory_tool admin doctor
 
 # JSON output
-memory_tool doctor --json
+memory_tool --output json admin doctor
 
 # Apply fixes
-memory_tool doctor --fix
+memory_tool admin doctor --fix
 ```
 
 ---
@@ -859,32 +859,25 @@ memory_tool doctor --fix
 | Exit Code | Meaning | When Used |
 |-----------|---------|-----------|
 | 0 | Success | Command completed successfully |
-| 1 | General error | Unexpected error occurred |
-| 2 | Validation error | Invalid input parameters |
-| 3 | Database error | Database connection or query error |
-| 4 | Not found | Requested resource not found |
-| 5 | Permission denied | Insufficient permissions |
-| 6 | Conflict | Resource conflict (e.g., duplicate) |
-| 10 | Degraded | Doctor: warnings present |
-| 11 | Unhealthy | Doctor: errors present |
+| 1 | Command failed | 参数错误、业务失败或 doctor 检查未通过 |
 
 ### Exit Code Examples
 
 ```bash
 # Success
-memory_tool list; echo $?  # 0
+memory_tool memory list; echo $?  # 0
 
 # Not found
-memory_tool get 99999; echo $?  # 4
+memory_tool memory get 99999; echo $?  # 4
 
 # Validation error
-memory_tool add --title; echo $?  # 2
+memory_tool observation add --title; echo $?  # 1
 
 # Doctor degraded
-memory_tool doctor; echo $?  # 10 (warnings present)
+memory_tool admin doctor; echo $?  # 1 (unhealthy)
 
 # Doctor unhealthy
-memory_tool doctor; echo $?  # 11 (errors present)
+memory_tool admin doctor; echo $?  # 1 (unhealthy)
 ```
 
 ## Error Handling Strategy
@@ -990,17 +983,17 @@ Configuration file location: `~/.config/los-memory/config.json`
 ```bash
 # Alias for common use
 alias mt='memory_tool'
-alias mtj='memory_tool --json'
+alias mtj='memory_tool --output json'
 
 # Function for quick capture
 mcapture() {
-    memory_tool capture "$*"
+    memory_tool observation add --title "Quick Capture" --summary "$*"
 }
 
 # Function for project-aware search
 msearch() {
-    local project=$(memory_tool project active --json | jq -r '.data.project')
-    memory_tool search "$1" --project "$project"
+    local project=$(memory_tool --output json project active | jq -r '.data.project')
+    memory_tool memory search "$1" --project "$project"
 }
 ```
 
@@ -1011,13 +1004,13 @@ msearch() {
 # Backup observations before cleanup
 
 # Export all observations
-memory_tool --json export --output backup.json
+memory_tool --output json memory export --output backup.json
 
 # Clean old observations
-memory_tool clean --older-than-days 90 --vacuum
+memory_tool memory clean --older-than-days 90 --vacuum
 
 # Verify cleanup
-memory_tool --json manage stats
+memory_tool --output json admin manage stats
 ```
 
 ```python
@@ -1029,7 +1022,7 @@ import json
 
 def get_recent_observations(limit=10):
     result = subprocess.run(
-        ['memory_tool', '--json', 'list', '--limit', str(limit)],
+        ['memory_tool', '--output', 'json', 'memory', 'list', '--limit', str(limit)],
         capture_output=True,
         text=True
     )
@@ -1042,23 +1035,4 @@ for obs in get_recent_observations():
 
 ## Backward Compatibility
 
-### Legacy Mode
-
-For backward compatibility, legacy output format can be enabled:
-
-```bash
-# Legacy format (old style)
-memory_tool search "query" --legacy
-
-# New format (default)
-memory_tool search "query"
-memory_tool search "query" --json
-```
-
-### Deprecation Timeline
-
-| Version | Change |
-|---------|--------|
-| 1.0 | New JSON format becomes default |
-| 1.1 | `--legacy` flag still supported |
-| 2.0 | Legacy format removed |
+兼容模式通过旧命令别名维持（如 `tool-log`、`review-feedback` 等），推荐优先使用分组命令。

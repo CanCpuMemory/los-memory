@@ -320,22 +320,29 @@ los-memory [全局选项] <命令> [子命令] [选项]
 
 ```
 los-memory
-├── memory (默认)       - 核心记忆操作
-│   ├── add, search, list, get, edit, delete
-│   ├── timeline, feedback, link, related
-│   └── export, import
+├── init                - 初始化数据库
+├── observation         - 观察记录写入/修正
+│   ├── add, edit, delete
+│   ├── feedback
+│   └── link, unlink, related
+├── memory              - 检索与治理
+│   ├── search, list, get, timeline
+│   ├── export, clean
+│   └── --require-tags (search/list)
 ├── session             - 会话管理
 │   └── start, stop, list, show, resume
 ├── checkpoint          - 检查点管理
 │   └── create, list, show, resume
 ├── tool                - 工具追踪
-│   └── log, stats, suggest
+│   └── log, stats, suggest, transition
 ├── project             - 项目管理
-│   └── list, switch, stats, active
-└── admin               - 管理维护
-    ├── init, doctor, stats
-    ├── vacuum, clean
-    └── config
+│   └── list, switch, stats, active, archive
+├── admin               - 管理维护
+│   ├── doctor, manage
+│   ├── share, import
+│   └── extensions
+└── review              - 评审回写
+    └── apply
 ```
 
 ### 4.4 Python API 改进

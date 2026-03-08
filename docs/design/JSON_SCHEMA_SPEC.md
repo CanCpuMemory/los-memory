@@ -576,7 +576,7 @@ All responses follow this base structure:
       "path": "~/.codex_memory/memory.db",
       "expanded": "/home/user/.codex_memory/memory.db"
     },
-    "suggestion": "Run 'memory_tool doctor' to diagnose database issues"
+    "suggestion": "Run 'memory_tool admin doctor' to diagnose database issues"
   },
   "meta": {
     "duration_ms": 10
@@ -795,7 +795,7 @@ def handle_command(args) -> None:
             code="DB_ERROR",
             message=f"Database error: {e}",
             category="database",
-            suggestion="Run 'memory_tool doctor' to diagnose"
+            suggestion="Run 'memory_tool admin doctor' to diagnose"
         )
         print_json_response(result)
         sys.exit(3)

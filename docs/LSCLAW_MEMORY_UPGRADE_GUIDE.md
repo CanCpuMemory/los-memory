@@ -12,9 +12,9 @@
 
 1. `search/list` 新增 `--require-tags`（AND 语义）
    - 示例：`--require-tags "tenant:tenant-a,user:alice,session:s1"`
-2. 新增 `transition-log`
+2. 新增 `tool transition`
    - 写入 `kind=agent_transition` 的结构化轨迹
-3. 新增 `review-feedback`
+3. 新增 `review apply`
    - 批量读取 review JSON，对 observation 自动执行 `feedback` 修订
 4. 修复 `export --format csv` 对 `session_id` 的兼容
 
@@ -62,7 +62,7 @@
 
 收益：可解释、可审计、可测。
 
-## 2.4 团队编排：阶段结果写 transition-log
+## 2.4 团队编排：阶段结果写 tool transition
 
 建议修改文件：`control-plane/scripts/team-agent-orchestrator.mjs`
 
@@ -75,7 +75,7 @@
 - `status`: `success|error`
 - `reward`: 可选（如验证通过=1，不通过=0）
 
-## 2.5 review 闭环：落地 review-feedback
+## 2.5 review 闭环：落地 review 回写
 
 建议在 reviewer 阶段后生成 `review-feedback.json`，格式：
 
@@ -92,14 +92,14 @@
 
 ```bash
 python3 /path/to/los-memory/memory_tool/memory_tool.py \
-  --profile shared review-feedback --file review-feedback.json
+  --profile shared review apply --file review-feedback.json
 ```
 
 预检用：
 
 ```bash
 python3 /path/to/los-memory/memory_tool/memory_tool.py \
-  --profile shared review-feedback --file review-feedback.json --dry-run
+  --profile shared review apply --file review-feedback.json --dry-run
 ```
 
 ## 3. 验收标准（建议）
@@ -109,7 +109,7 @@ python3 /path/to/los-memory/memory_tool/memory_tool.py \
 2. 轨迹
    - 每个 team stage 至少有一条 `agent_transition`
 3. 闭环
-   - review-feedback 执行后，目标 observation 的 summary/title 可见更新
+   - review apply 执行后，目标 observation 的 summary/title 可见更新
 4. 导出
    - CSV 里包含 `session_id` 列
 
@@ -117,6 +117,6 @@ python3 /path/to/los-memory/memory_tool/memory_tool.py \
 
 1. adapter + server 强隔离（最优先）
 2. chat recall 改为 `requiredTags` 硬过滤
-3. team orchestrator 增加 `transition-log`
-4. reviewer 增加 `review-feedback` 自动回写
+3. team orchestrator 增加 `tool transition`
+4. reviewer 增加 `review apply` 自动回写
 5. 增补 e2e 测试与运维手册

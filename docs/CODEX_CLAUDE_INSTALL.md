@@ -28,9 +28,9 @@ Then commands can omit `--profile`.
 Common commands:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex add --project app --kind note --title "Deploy fix" --summary "Use migration flag"
-python3 memory_tool/memory_tool.py --profile codex search "deploy fix"
-python3 memory_tool/memory_tool.py --profile codex manage stats
+python3 memory_tool/memory_tool.py --profile codex observation add --project app --kind note --title "Deploy fix" --summary "Use migration flag"
+python3 memory_tool/memory_tool.py --profile codex memory search "deploy fix"
+python3 memory_tool/memory_tool.py --profile codex admin manage stats
 ```
 
 Skill files live at `skills/memory-retrieval/` for retrieval-oriented workflows.
@@ -39,9 +39,9 @@ Skill files live at `skills/memory-retrieval/` for retrieval-oriented workflows.
 Common commands:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile claude add --project api --kind decision --title "Timeout budget" --summary "30s total request timeout"
-python3 memory_tool/memory_tool.py --profile claude search "timeout"
-python3 memory_tool/memory_tool.py --profile claude manage tags
+python3 memory_tool/memory_tool.py --profile claude observation add --project api --kind decision --title "Timeout budget" --summary "30s total request timeout"
+python3 memory_tool/memory_tool.py --profile claude memory search "timeout"
+python3 memory_tool/memory_tool.py --profile claude admin manage tags
 ```
 
 Agent prompt metadata includes `skills/memory-retrieval/agents/anthropic.yaml`.
@@ -50,50 +50,50 @@ Agent prompt metadata includes `skills/memory-retrieval/agents/anthropic.yaml`.
 Add:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex add --title "T1" --summary "S1"
+python3 memory_tool/memory_tool.py --profile codex observation add --title "T1" --summary "S1"
 ```
 
 Edit by id:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex edit --id 1 --summary "Updated summary" --tags "ops,incident"
+python3 memory_tool/memory_tool.py --profile codex observation edit --id 1 --summary "Updated summary" --tags "ops,incident"
 ```
 
 Delete by ids:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex delete "1,2" --dry-run
-python3 memory_tool/memory_tool.py --profile codex delete "1,2"
+python3 memory_tool/memory_tool.py --profile codex observation delete "1,2" --dry-run
+python3 memory_tool/memory_tool.py --profile codex observation delete "1,2"
 ```
 
 Retrieve:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex search "incident"
-python3 memory_tool/memory_tool.py --profile codex timeline --around-id 10 --window-minutes 120
-python3 memory_tool/memory_tool.py --profile codex get "10,11"
+python3 memory_tool/memory_tool.py --profile codex memory search "incident"
+python3 memory_tool/memory_tool.py --profile codex memory timeline --around-id 10 --window-minutes 120
+python3 memory_tool/memory_tool.py --profile codex memory get "10,11"
 ```
 
 ## 6) Clean and manage
 Preview cleanup:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --dry-run
+python3 memory_tool/memory_tool.py --profile codex memory clean --older-than-days 90 --dry-run
 ```
 
 Apply cleanup:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --project api
+python3 memory_tool/memory_tool.py --profile codex memory clean --older-than-days 90 --project api
 ```
 
 Manage:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex manage stats
-python3 memory_tool/memory_tool.py --profile codex manage projects --limit 10
-python3 memory_tool/memory_tool.py --profile codex manage tags --limit 20
-python3 memory_tool/memory_tool.py --profile codex manage vacuum
+python3 memory_tool/memory_tool.py --profile codex admin manage stats
+python3 memory_tool/memory_tool.py --profile codex admin manage projects --limit 10
+python3 memory_tool/memory_tool.py --profile codex admin manage tags --limit 20
+python3 memory_tool/memory_tool.py --profile codex admin manage vacuum
 ```
 
 ## 7) Makefile shortcuts

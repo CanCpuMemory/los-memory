@@ -48,6 +48,9 @@ class ApprovalMigrationAdapter:
         config: MigrationConfig,
         local_conn: "sqlite3.Connection",
     ):
+        config_errors = config.validate()
+        if config_errors:
+            raise RuntimeError("Invalid migration config: " + "; ".join(config_errors))
         self.config = config
         self.local_conn = local_conn
         self._local_api: Optional[ApprovalAPI] = None

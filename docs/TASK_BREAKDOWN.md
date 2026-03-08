@@ -67,7 +67,7 @@
 ### 后端实现任务
 
 #### T004: doctor 命令 - 检查项框架
-- **描述**: 实现 `memory_tool doctor` 命令的核心框架
+- **描述**: 实现 `memory_tool admin doctor` 命令的核心框架
 - **技术方案**: 创建 `doctor.py` 模块，定义 Check 和 CheckResult 数据类，实现检查项注册器模式
 - **依赖**: 无
 - **估算**: 4小时
@@ -138,7 +138,7 @@
 
 #### T011: CLI 接口重构
 - **描述**: 重构 CLI 命令结构，实现命令分组和全局选项
-- **技术方案**: 命令分组 (memory/session/checkpoint/tool/project/admin)，全局选项 (--profile, --output, --config)
+- **技术方案**: 命令分组 (observation/memory/session/checkpoint/tool/project/admin/review)，全局选项 (--profile, --db, --output, --human)
 - **依赖**: T007, T008
 - **估算**: 3天
 - **负责人**: 后端工程师 + CLI专家
@@ -171,8 +171,8 @@
 - **可维护性**: ★★★★★ 集中入口管理，便于统一升级
 
 #### T014: 命令分组架构重构
-- **描述**: 将 30+ 个扁平命令重组为 6 个逻辑分组
-- **技术方案**: los-memory memory/session/checkpoint/tool/project/admin，保留旧命令作为别名
+- **描述**: 将 30+ 个扁平命令重组为 8 个逻辑分组
+- **技术方案**: los-memory observation/memory/session/checkpoint/tool/project/admin/review，保留旧命令作为兼容别名
 - **依赖**: T013
 - **估算**: 8小时
 - **负责人**: CLI专家

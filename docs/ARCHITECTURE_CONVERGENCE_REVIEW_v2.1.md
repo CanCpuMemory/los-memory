@@ -500,7 +500,7 @@ extensions:
 ### 附录 C: CLI 命令差异
 
 **文档声明命令**: init, memory, observation, session, checkpoint, project, tool, admin, review
-**实际存在命令**: +incident, recovery, approval, knowledge
+**实际存在命令**: +incident, recovery, approval, knowledge, attribution
 
 ---
 

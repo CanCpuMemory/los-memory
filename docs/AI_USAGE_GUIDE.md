@@ -80,7 +80,7 @@ Add relevant tags for discoverability:
 Use `--auto-tags` to automatically generate tags from content:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile claude add \
+python3 memory_tool/memory_tool.py --profile claude observation add \
   --title "Database connection pool optimization" \
   --summary "Increased max connections from 20 to 100, added connection retry logic" \
   --auto-tags
@@ -93,13 +93,13 @@ python3 memory_tool/memory_tool.py --profile claude add \
 
 1. **Check recent context**:
 ```bash
-python3 memory_tool/memory_tool.py --profile claude timeline --limit 10
+python3 memory_tool/memory_tool.py --profile claude memory timeline --limit 10
 ```
 
 2. **Search for relevant context**:
 ```bash
-python3 memory_tool/memory_tool.py --profile claude search "authentication"
-python3 memory_tool/memory_tool.py --profile claude search "project:payments decision"
+python3 memory_tool/memory_tool.py --profile claude memory search "authentication"
+python3 memory_tool/memory_tool.py --profile claude memory search "project:payments decision"
 ```
 
 3. **Resume from checkpoint** (if available):
@@ -111,7 +111,7 @@ python3 memory_tool/memory_tool.py --profile claude checkpoint resume checkpoint
 
 1. **Store decisions immediately**:
 ```bash
-python3 memory_tool/memory_tool.py --profile claude add \
+python3 memory_tool/memory_tool.py --profile claude observation add \
   --project "payments-service" \
   --kind "decision" \
   --title "Stripe webhook handling strategy" \
@@ -121,7 +121,7 @@ python3 memory_tool/memory_tool.py --profile claude add \
 
 2. **Record incidents with root cause**:
 ```bash
-python3 memory_tool/memory_tool.py --profile claude add \
+python3 memory_tool/memory_tool.py --profile claude observation add \
   --project "infra" \
   --kind "incident" \
   --title "Memory leak in image processing worker" \
@@ -148,7 +148,7 @@ python3 memory_tool/memory_tool.py --profile claude checkpoint create \
 
 2. **List recent memories to confirm storage**:
 ```bash
-python3 memory_tool/memory_tool.py --profile claude manage stats
+python3 memory_tool/memory_tool.py --profile claude admin manage stats
 ```
 
 ### Feedback and Corrections
@@ -157,23 +157,23 @@ Correct or supplement existing memories using natural language:
 
 ```bash
 # Correct an observation
-python3 memory_tool/memory_tool.py --profile claude feedback \
+python3 memory_tool/memory_tool.py --profile claude observation feedback \
   "修正: API密钥是yyy而非xxx" \
   --id 123
 
 # Supplement with additional information
-python3 memory_tool/memory_tool.py --profile claude feedback \
+python3 memory_tool/memory_tool.py --profile claude observation feedback \
   "补充: 还需要考虑边界情况" \
   --id 456
 
 # Preview changes without applying
-python3 memory_tool/memory_tool.py --profile claude feedback \
+python3 memory_tool/memory_tool.py --profile claude observation feedback \
   "修正: 数据库使用PostgreSQL而非MySQL" \
   --id 789 \
   --dry-run
 
 # View feedback history for an observation
-python3 memory_tool/memory_tool.py --profile claude feedback \
+python3 memory_tool/memory_tool.py --profile claude observation feedback \
   "查看历史" \
   --id 123 \
   --history
@@ -185,7 +185,7 @@ Log tool calls to track usage patterns and get recommendations:
 
 ```bash
 # Log a successful tool call
-python3 memory_tool/memory_tool.py --profile claude tool-log \
+python3 memory_tool/memory_tool.py --profile claude tool log \
   --tool "search_files" \
   --input '{"query": "TODO"}' \
   --output '{"results": [1, 2, 3]}' \
@@ -193,21 +193,21 @@ python3 memory_tool/memory_tool.py --profile claude tool-log \
   --duration 150
 
 # Log a failed tool call
-python3 memory_tool/memory_tool.py --profile claude tool-log \
+python3 memory_tool/memory_tool.py --profile claude tool log \
   --tool "api_request" \
   --input '{"url": "http://api.test"}' \
   --output '{"error": "Timeout"}' \
   --status error
 
 # View tool usage statistics
-python3 memory_tool/memory_tool.py --profile claude tool-stats
+python3 memory_tool/memory_tool.py --profile claude tool stats
 
 # Filter by project
-python3 memory_tool/memory_tool.py --profile claude tool-stats \
+python3 memory_tool/memory_tool.py --profile claude tool stats \
   --project "api-service"
 
 # Get tool suggestions for a task
-python3 memory_tool/memory_tool.py --profile claude tool-suggest \
+python3 memory_tool/memory_tool.py --profile claude tool suggest \
   "find code patterns in the codebase"
 ```
 
@@ -217,30 +217,30 @@ Create relationships between related observations:
 
 ```bash
 # Create a link between observations
-python3 memory_tool/memory_tool.py --profile claude link \
+python3 memory_tool/memory_tool.py --profile claude observation link \
   --from 123 \
   --to 456 \
   --type refines
 
 # Link types: related, child, parent, refines
-python3 memory_tool/memory_tool.py --profile claude link \
+python3 memory_tool/memory_tool.py --profile claude observation link \
   --from 100 \
   --to 101 \
   --type child
 
 # Find related observations
-python3 memory_tool/memory_tool.py --profile claude related 123
+python3 memory_tool/memory_tool.py --profile claude observation related 123
 
 # Filter by link type
-python3 memory_tool/memory_tool.py --profile claude related 123 \
+python3 memory_tool/memory_tool.py --profile claude observation related 123 \
   --type refines
 
 # Suggest potentially related observations based on similarity
-python3 memory_tool/memory_tool.py --profile claude related 123 \
+python3 memory_tool/memory_tool.py --profile claude observation related 123 \
   --suggest
 
 # Remove a link
-python3 memory_tool/memory_tool.py --profile claude unlink \
+python3 memory_tool/memory_tool.py --profile claude observation unlink \
   --from 123 \
   --to 456
 ```
@@ -434,13 +434,13 @@ For memories that should be shared across agents:
 
 ```bash
 # Store in shared profile
-python3 memory_tool/memory_tool.py --profile shared add \
+python3 memory_tool/memory_tool.py --profile shared observation add \
   --project "shared-docs" \
   --title "Project onboarding guide" \
   ...
 
 # Retrieve from shared profile
-python3 memory_tool/memory_tool.py --profile shared search "onboarding"
+python3 memory_tool/memory_tool.py --profile shared memory search "onboarding"
 ```
 
 ## Error Handling
@@ -477,7 +477,7 @@ export MEMORY_LLM_HOOK="python3 /path/to/summarize_hook.py"
 Then use with auto-tags:
 
 ```bash
-add --title "Complex discussion" --raw-file meeting.txt --auto-tags
+python3 memory_tool/memory_tool.py --profile claude observation add --title "Complex discussion" --summary "LLM hook summary" --raw "$(cat meeting.txt)" --auto-tags
 ```
 
 ### Checkpoints
@@ -486,13 +486,13 @@ Save and resume work states:
 
 ```bash
 # Create checkpoint
-checkpoint create --name "before-refactor" --tag "safe-point"
+python3 memory_tool/memory_tool.py --profile claude checkpoint create --name "before-refactor" --tag "safe-point"
 
 # List checkpoints
-checkpoint list
+python3 memory_tool/memory_tool.py --profile claude checkpoint list
 
 # Resume from checkpoint (restores project and shows recent observations)
-checkpoint resume checkpoint-id
+python3 memory_tool/memory_tool.py --profile claude checkpoint resume 1
 ```
 
 ### Web Viewer
@@ -514,13 +514,13 @@ python3 memory_tool/viewer.py --profile claude --auth-token "my-secret"
 
 ```bash
 # Store the bug and fix
-add --project "api-service" --kind "incident" \
+python3 memory_tool/memory_tool.py --profile claude observation add --project "api-service" --kind "incident" \
   --title "Race condition in user registration" \
   --summary "Concurrent registrations with same email caused unique constraint violations. Fixed by adding SELECT FOR SKIP LOCKED before INSERT." \
   --tags "race-condition,postgres,registration,bug"
 
 # Link to related code
-add --project "api-service" --kind "snippet" \
+python3 memory_tool/memory_tool.py --profile claude observation add --project "api-service" --kind "snippet" \
   --title "Registration race condition fix" \
   --summary "Code pattern for handling concurrent registration attempts" \
   --tags "race-condition,python,postgres"
@@ -529,7 +529,7 @@ add --project "api-service" --kind "snippet" \
 ### Architecture Decision
 
 ```bash
-add --project "data-pipeline" --kind "decision" \
+python3 memory_tool/memory_tool.py --profile claude observation add --project "data-pipeline" --kind "decision" \
   --title "Chose Apache Kafka over RabbitMQ" \
   --summary "Selected Kafka for event streaming due to better throughput (1M+ msg/s), persistence guarantees, and replay capability. Trade-off: operational complexity." \
   --tags "kafka,architecture,event-streaming,decision-record"
@@ -538,7 +538,7 @@ add --project "data-pipeline" --kind "decision" \
 ### Performance Optimization
 
 ```bash
-add --project "frontend" --kind "note" \
+python3 memory_tool/memory_tool.py --profile claude observation add --project "frontend" --kind "note" \
   --title "Bundle size optimization results" \
   --summary "Tree-shaking reduced bundle from 450KB to 180KB. Main wins: removed lodash (use native), dynamic imports for charts, lazy loading for routes." \
   --tags "performance,bundle-size,webpack,optimization"
@@ -551,21 +551,21 @@ add --project "frontend" --kind "note" \
 python3 memory_tool/memory_tool.py --profile claude init
 
 # Add memory
-python3 memory_tool/memory_tool.py --profile claude add \
+python3 memory_tool/memory_tool.py --profile claude observation add \
   --project "X" --kind "decision" \
   --title "Y" --summary "Z" --tags "a,b"
 
 # Search
-python3 memory_tool/memory_tool.py --profile claude search "query"
+python3 memory_tool/memory_tool.py --profile claude memory search "query"
 
 # Recent activity
-python3 memory_tool/memory_tool.py --profile claude timeline
+python3 memory_tool/memory_tool.py --profile claude memory timeline
 
 # Stats
-python3 memory_tool/memory_tool.py --profile claude manage stats
+python3 memory_tool/memory_tool.py --profile claude admin manage stats
 
 # Export
-python3 memory_tool/memory_tool.py --profile claude export --format json --output backup.json
+python3 memory_tool/memory_tool.py --profile claude memory export --format json --output backup.json
 ```
 
 ## See Also

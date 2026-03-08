@@ -13,14 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .output import JSONResponse, success, error
+from .output import JSONResponse, ResponseMeta
 from .database import SCHEMA_VERSION
-from .errors import (
-    DB_NOT_FOUND,
-    DB_SCHEMA_MISMATCH,
-    CFG_INVALID_PROFILE,
-    format_error_response,
-)
+from .errors import DB_NOT_FOUND, DB_SCHEMA_MISMATCH, CFG_INVALID_PROFILE, format_error_response
 
 
 @dataclass
@@ -190,7 +185,7 @@ def check_db_exists(db_path: str) -> Tuple[bool, str, Optional[str]]:
     path = Path(db_path)
     ok = path.exists()
     message = f"Database: {db_path}"
-    suggestion = None if ok else f"Run 'los-memory admin init' to create database"
+    suggestion = None if ok else "Run 'los-memory init' to create database"
     return ok, message, suggestion
 
 
@@ -244,10 +239,10 @@ def check_db_schema_version(conn: sqlite3.Connection) -> Tuple[bool, str, Option
         version = get_schema_version(conn)
         ok = version == SCHEMA_VERSION
         message = f"Schema version: {version} (expected {SCHEMA_VERSION})"
-        suggestion = None if ok else f"Run 'los-memory admin migrate' to upgrade"
+        suggestion = None if ok else "Run 'los-memory init' to ensure latest schema"
         return ok, message, suggestion
     except sqlite3.Error as e:
-        return False, f"Schema check failed: {e}", "Run 'los-memory admin init'"
+        return False, f"Schema check failed: {e}", "Run 'los-memory init'"
 
 
 @register_check(
@@ -284,7 +279,7 @@ def check_db_tables(conn: sqlite3.Connection) -> Tuple[bool, str, Optional[str]]
 
     ok = len(missing) == 0
     message = f"Tables: {', '.join(existing & set(required))}"
-    suggestion = None if ok else f"Missing tables: {', '.join(missing)}. Run 'los-memory admin init'"
+    suggestion = None if ok else f"Missing tables: {', '.join(missing)}. Run 'los-memory init'"
     return ok, message, suggestion
 
 
@@ -576,10 +571,10 @@ def doctor_command(
     """
     report = run_all_checks(db_path, profile, conn, fix)
 
-    return success(
+    return JSONResponse(
+        ok=report["ok"],
         data=report,
-        profile=profile,
-        db_path=db_path,
+        meta=ResponseMeta(profile=profile, db_path=db_path),
     )
 
 

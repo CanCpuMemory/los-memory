@@ -23,7 +23,7 @@ Use the official public API instead:
 CLI Usage (this file remains valid for CLI):
 --------------------------------------------
     python3 memory_tool/memory_tool.py --profile codex init
-    python3 memory_tool/memory_tool.py --profile codex add --title "..."
+    python3 memory_tool/memory_tool.py --profile codex observation add --title "..."
 
     # Or use the modern module syntax:
     python3 -m memory_tool --profile codex init
@@ -55,4 +55,4 @@ if str(_PROJECT_ROOT) not in sys.path:
 from memory_tool.cli import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

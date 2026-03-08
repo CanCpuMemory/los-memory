@@ -351,24 +351,24 @@ los-memory incident list  # 将不可用
 **类型 1: Memory CRUD**
 | 接口 | 说明 | 对应 CLI |
 |------|------|----------|
-| `add` | 写入观察记录 | `add` |
+| `add` | 写入观察记录 | `observation add` |
 | `ingest` | 从文件/stdin 摄入 | `ingest` |
-| `search` | 全文检索 | `search` |
-| `timeline` | 时间线查询 | `timeline` |
-| `get` | 按 ID 获取 | `get` |
-| `list` | 列表查询 | `list` |
-| `edit` | 编辑记忆 | `edit` |
-| `delete` | 删除记忆 | `delete` |
+| `search` | 全文检索 | `memory search` |
+| `timeline` | 时间线查询 | `memory timeline` |
+| `get` | 按 ID 获取 | `memory get` |
+| `list` | 列表查询 | `memory list` |
+| `edit` | 编辑记忆 | `observation edit` |
+| `delete` | 删除记忆 | `observation delete` |
 
 **类型 2: Memory Governance**
 | 接口 | 说明 | 对应 CLI |
 |------|------|----------|
-| `feedback` | 反馈修正 | `feedback` |
-| `link` | 创建关联 | `link` |
-| `unlink` | 移除关联 | `unlink` |
-| `related` | 查询关联 | `related` |
-| `clean` | 清理记忆 | `clean` |
-| `manage` | 维护管理 | `manage` |
+| `feedback` | 反馈修正 | `observation feedback` |
+| `link` | 创建关联 | `observation link` |
+| `unlink` | 移除关联 | `observation unlink` |
+| `related` | 查询关联 | `observation related` |
+| `clean` | 清理记忆 | `memory clean` |
+| `manage` | 维护管理 | `admin manage` |
 
 **类型 3: Session & Checkpoint**
 | 接口 | 说明 | 对应 CLI |
@@ -381,28 +381,29 @@ los-memory incident list  # 将不可用
 **类型 4: Tool Tracking**
 | 接口 | 说明 | 对应 CLI |
 |------|------|----------|
-| `tool_log` | 记录工具调用 | `tool-log` |
-| `tool_stats` | 工具统计 | `tool-stats` |
-| `tool_suggest` | 工具推荐 | `tool-suggest` |
+| `tool_log` | 记录工具调用 | `tool log` |
+| `tool_stats` | 工具统计 | `tool stats` |
+| `tool_suggest` | 工具推荐 | `tool suggest` |
 
 **类型 5: Utility**
 | 接口 | 说明 | 对应 CLI |
 |------|------|----------|
-| `doctor` | 环境检查 | `doctor` |
-| `export` | 导出数据 | `export` |
-| `import` | 导入数据 | `import` |
+| `doctor` | 环境检查 | `admin doctor` |
+| `export` | 导出数据 | `memory export` |
+| `import` | 导入数据 | `admin import` |
 | `init` | 初始化数据库 | `init` |
 
 #### 集成契约
 
 **CLI 调用规范**:
 ```bash
-python -m memory_tool [command] [options] [--json]
+python -m memory_tool [global-options] <group> <action> [options]
 
 # 全局选项
 --profile {claude,codex,shared}  # 选择 profile
---json                           # JSON 输出
---db-path PATH                   # 指定数据库路径
+--db PATH                        # 指定数据库路径
+--output {json,yaml,table}       # 输出格式
+--human                          # 人类可读输出
 ```
 
 **JSON 输出 Schema**:
@@ -424,7 +425,7 @@ python -m memory_tool [command] [options] [--json]
   "error": {
     "code": "NOT_FOUND",
     "message": "Observation 123 not found",
-    "suggestion": "Use 'search' to find valid IDs"
+    "suggestion": "Use 'memory search' to find valid IDs"
   }
 }
 ```
@@ -434,7 +435,7 @@ python -m memory_tool [command] [options] [--json]
 |--------|------|----------|
 | 0 | 成功 | - |
 | 1 | 参数错误或业务错误 | 查看 JSON 错误消息 |
-| 2 | 配置错误 | 运行 `doctor` 命令 |
+| 2 | 配置错误 | 运行 `admin doctor` 命令 |
 | 3 | 数据库错误 | 检查 DB 路径和权限 |
 | 127 | 命令未找到 | 检查 Python 环境 |
 
@@ -668,7 +669,7 @@ VPS Agent Web 展示结果
 **模式 A: 子进程调用（通用）**:
 ```bash
 # VPS Agent Web 或其他项目调用
-result=$(python -m memory_tool search "API设计" --profile claude --json)
+result=$(python -m memory_tool --profile claude memory search "API设计" --output json)
 ```
 
 **模式 B: Python API（同进程）**:
@@ -711,7 +712,7 @@ MVP 阶段优先使用：
 
 **健康检查**:
 ```bash
-python -m memory_tool doctor
+python -m memory_tool admin doctor
 # 输出: {python_ok, sqlite_ok, db_path, profile, writable}
 ```
 

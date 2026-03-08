@@ -40,9 +40,9 @@
 |------|----------|------|
 | 记忆增删改查 | ✅ 已实现 | CLI + Python API |
 | 多 Profile 隔离 | ✅ 已实现 | claude/codex/shared |
-| 反馈与修正 | ✅ 已实现 | feedback 命令 |
-| 工具调用追踪 | ✅ 已实现 | tool-log/tool-stats |
-| 记忆关联 | ✅ 已实现 | link/related/unlink |
+| 反馈与修正 | ✅ 已实现 | observation feedback |
+| 工具调用追踪 | ✅ 已实现 | tool log/tool stats |
+| 记忆关联 | ✅ 已实现 | observation link/related/unlink |
 | Session 管理 | ✅ 已实现 | start/end 会话 |
 | Checkpoint | ✅ 已实现 | create/resume 检查点 |
 | Web Viewer | ✅ 已实现 | 本地浏览界面 |

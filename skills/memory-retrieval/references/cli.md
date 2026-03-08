@@ -21,11 +21,11 @@ Initialize the database schema.
 python3 memory_tool/memory_tool.py --profile codex init
 ```
 
-### add
+### observation add
 Add an observation record.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex add \
+python3 memory_tool/memory_tool.py --profile codex observation add \
   --title "<title>" \
   --summary "<summary>" \
   --project "general" \
@@ -41,38 +41,38 @@ Notes:
 - `--auto-tags` derives tags from title/summary when tags is empty.
 - `--llm-hook` (or `MEMORY_LLM_HOOK`) reads JSON from stdin and may return `title`, `summary`, `tags`.
 
-### search
+### memory search
 Returns summary results with IDs and optional scores.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex search "<query>" --limit 10
-python3 memory_tool/memory_tool.py --profile codex search "<query>" \
+python3 memory_tool/memory_tool.py --profile codex memory search "<query>" --limit 10
+python3 memory_tool/memory_tool.py --profile codex memory search "<query>" \
   --require-tags "tenant:default,user:alice"
 ```
 
-### timeline
+### memory timeline
 Returns observations in a time window (timestamp or around an ID).
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex timeline --around-id 42 --window-minutes 120
+python3 memory_tool/memory_tool.py --profile codex memory timeline --around-id 42 --window-minutes 120
 ```
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex timeline --start 2026-02-01T00:00:00Z --end 2026-02-08T00:00:00Z
+python3 memory_tool/memory_tool.py --profile codex memory timeline --start 2026-02-01T00:00:00Z --end 2026-02-08T00:00:00Z
 ```
 
-### get
+### memory get
 Fetch full records by ID.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex get "1,2,3"
+python3 memory_tool/memory_tool.py --profile codex memory get "1,2,3"
 ```
 
-### edit
+### observation edit
 Edit one observation by id.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex edit --id 10 --summary "Updated text" --tags "ops,incident"
+python3 memory_tool/memory_tool.py --profile codex observation edit --id 10 --summary "Updated text" --tags "ops,incident"
 ```
 
 Editable fields:
@@ -85,28 +85,28 @@ Editable fields:
 - `--raw`
 - `--auto-tags` (recompute tags from title/summary)
 
-### delete
+### observation delete
 Delete observations by ids.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex delete "10,11" --dry-run
-python3 memory_tool/memory_tool.py --profile codex delete "10,11"
+python3 memory_tool/memory_tool.py --profile codex observation delete "10,11" --dry-run
+python3 memory_tool/memory_tool.py --profile codex observation delete "10,11"
 ```
 
-### list
+### memory list
 List latest observations.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex list --limit 20 --offset 0
-python3 memory_tool/memory_tool.py --profile codex list \
+python3 memory_tool/memory_tool.py --profile codex memory list --limit 20 --offset 0
+python3 memory_tool/memory_tool.py --profile codex memory list \
   --require-tags "tenant:default,user:alice"
 ```
 
-### transition-log
+### tool transition
 Write a structured agent transition record (`kind=agent_transition`).
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex transition-log \
+python3 memory_tool/memory_tool.py --profile codex tool transition \
   --phase "review" \
   --action "check-regression" \
   --input '{"files":["a.py"]}' \
@@ -131,26 +131,26 @@ Input JSON can be either an array or an object with `items`:
 ```
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex review-feedback --file review.json
-python3 memory_tool/memory_tool.py --profile codex review-feedback --file review.json --dry-run
+python3 memory_tool/memory_tool.py --profile codex review apply --file review.json
+python3 memory_tool/memory_tool.py --profile codex review apply --file review.json --dry-run
 ```
 
 ### export
 Export observations.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex export --format json --output export.json
-python3 memory_tool/memory_tool.py --profile codex export --format csv --output export.csv
+python3 memory_tool/memory_tool.py --profile codex memory export --format json --output export.json
+python3 memory_tool/memory_tool.py --profile codex memory export --format csv --output export.csv
 ```
 
 ### clean
 Delete observations with safety checks.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --dry-run
-python3 memory_tool/memory_tool.py --profile codex clean --older-than-days 90 --project ops
-python3 memory_tool/memory_tool.py --profile codex clean --tag temp,noise
-python3 memory_tool/memory_tool.py --profile codex clean --all
+python3 memory_tool/memory_tool.py --profile codex memory clean --older-than-days 90 --dry-run
+python3 memory_tool/memory_tool.py --profile codex memory clean --older-than-days 90 --project ops
+python3 memory_tool/memory_tool.py --profile codex memory clean --tag temp,noise
+python3 memory_tool/memory_tool.py --profile codex memory clean --all
 ```
 
 Flags:
@@ -164,10 +164,10 @@ Flags:
 Inspect and maintain memory.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex manage stats
-python3 memory_tool/memory_tool.py --profile codex manage projects --limit 20
-python3 memory_tool/memory_tool.py --profile codex manage tags --limit 20
-python3 memory_tool/memory_tool.py --profile codex manage vacuum
+python3 memory_tool/memory_tool.py --profile codex admin manage stats
+python3 memory_tool/memory_tool.py --profile codex admin manage projects --limit 20
+python3 memory_tool/memory_tool.py --profile codex admin manage tags --limit 20
+python3 memory_tool/memory_tool.py --profile codex admin manage vacuum
 ```
 
 ### ingest helper
