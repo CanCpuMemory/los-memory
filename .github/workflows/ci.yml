@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   docs-command-lint:
     runs-on: ubuntu-latest
@@ -30,7 +34,7 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Run CLI contract tests
         run: |
-          pytest tests/cli/test_cli_contract.py -q
+          pytest tests/cli -m contract -q
 
   unit-and-integration:
     runs-on: ubuntu-latest
@@ -45,10 +49,25 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Run unit tests
         run: |
-          pytest tests/unit -q
+          pytest tests/unit -m "not e2e" -q
       - name: Run lsclaw integration smoke
         run: |
           pytest tests/integration/test_lsclaw_smoke.py -q
+
+  approval-migration-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run approval migration e2e
+        run: |
+          pytest tests/integration/test_approval_migration_e2e.py -m e2e -q
 
   bdd-smoke:
     runs-on: ubuntu-latest

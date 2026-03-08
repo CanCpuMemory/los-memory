@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CLI_PATH = ROOT / "memory_tool" / "memory_tool.py"
@@ -24,6 +26,7 @@ def _run_cli(db_path: Path, *args: str) -> dict:
     return json.loads(result.stdout)
 
 
+@pytest.mark.e2e
 def test_lsclaw_integration_smoke(tmp_path: Path) -> None:
     db_path = tmp_path / "smoke.db"
     review_file = tmp_path / "review-feedback.json"
