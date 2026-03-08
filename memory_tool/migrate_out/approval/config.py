@@ -91,17 +91,19 @@ class SSEProxyConfig:
 class DualWriteConfig:
     """Dual-write configuration."""
 
-    mode: DualWriteMode = DualWriteMode.STRICT
+    mode: DualWriteMode = None  # type: ignore
     sync_interval_seconds: int = 300  # 5 minutes
     conflict_resolution: str = "remote-wins"  # remote-wins, local-wins, manual
 
     def __post_init__(self):
-        """Load mode from environment if specified."""
-        mode_str = os.environ.get("APPROVAL_MIGRATION_MODE", "strict")
-        try:
-            self.mode = DualWriteMode(mode_str)
-        except ValueError:
-            self.mode = DualWriteMode.STRICT
+        """Load mode from environment if not explicitly specified."""
+        # Only apply env variable if mode wasn't explicitly set
+        if self.mode is None:
+            mode_str = os.environ.get("APPROVAL_MIGRATION_MODE", "strict")
+            try:
+                self.mode = DualWriteMode(mode_str)
+            except ValueError:
+                self.mode = DualWriteMode.STRICT
 
 
 @dataclass
@@ -121,12 +123,15 @@ class MigrationConfig:
 
     def __post_init__(self):
         """Load configuration from environment."""
-        # Determine phase from environment
-        phase_str = os.environ.get("APPROVAL_MIGRATION_PHASE", "local-only")
-        try:
-            self.phase = MigrationPhase(phase_str)
-        except ValueError:
-            self.phase = MigrationPhase.LOCAL_ONLY
+        # Determine phase from environment only if not explicitly set
+        # Note: Since MigrationPhase.LOCAL_ONLY is the default, we check if
+        # an environment variable is set to override it
+        phase_str = os.environ.get("APPROVAL_MIGRATION_PHASE")
+        if phase_str:
+            try:
+                self.phase = MigrationPhase(phase_str)
+            except ValueError:
+                self.phase = MigrationPhase.LOCAL_ONLY
 
         # Feature flags based on phase
         if self.phase == MigrationPhase.LOCAL_ONLY:

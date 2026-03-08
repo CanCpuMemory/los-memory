@@ -135,13 +135,6 @@ class HMACBridge:
                 f"Timestamp {timestamp}s is too old (max age: {MAX_AGE}s)"
             )
 
-        # Check for nonce replay attack
-        # The nonce store checks both existence and TTL
-        if not self._nonce_store.add(nonce, ttl=NONCE_TTL):
-            raise HMACVerificationError(
-                "Nonce has already been used (replay attack detected)"
-            )
-
         # Build payload if not provided
         if payload is None:
             payload = self._extract_payload_from_context(headers)

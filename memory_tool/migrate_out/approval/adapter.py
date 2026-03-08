@@ -340,6 +340,22 @@ class ApprovalMigrationAdapter:
                 raise RuntimeError("Local API not configured")
             return self._local_api.list_pending_requests(limit=limit)
 
+    def list_requests(
+        self,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """List all approval requests (alias for list_all_requests).
+
+        Args:
+            status: Filter by status
+            limit: Maximum results
+
+        Returns:
+            List of requests
+        """
+        return self.list_all_requests(status=status, limit=limit)
+
     def list_all_requests(
         self,
         status: Optional[str] = None,
