@@ -116,7 +116,7 @@ python3 memory_tool/memory_tool.py --profile codex tool transition \
   --project "tenant:default"
 ```
 
-### review-feedback
+### review apply
 Batch apply review findings as feedback updates.
 
 Input JSON can be either an array or an object with `items`:

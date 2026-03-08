@@ -19,7 +19,7 @@ Use the standalone memory tool to search, timeline, and fetch stored observation
 Use the CLI search to get candidate IDs and summaries.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex search "<query>"
+python3 memory_tool/memory_tool.py --profile codex memory search "<query>"
 ```
 
 ### 2) Launch local viewer
@@ -33,14 +33,14 @@ python3 memory_tool/viewer.py --profile codex
 Use a window around a known ID to capture nearby context.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex timeline --around-id <id> --window-minutes 120
+python3 memory_tool/memory_tool.py --profile codex memory timeline --around-id <id> --window-minutes 120
 ```
 
 ### 4) Fetch full records
 Use IDs from search/timeline to retrieve full JSON records.
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex get "1,2,3"
+python3 memory_tool/memory_tool.py --profile codex memory get "1,2,3"
 ```
 
 ## Database Location

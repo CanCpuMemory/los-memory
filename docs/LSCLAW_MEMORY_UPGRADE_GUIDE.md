@@ -6,7 +6,12 @@
 - 结构化轨迹：为训练与回放准备 transition 数据
 - review 闭环：把评审结论自动回写到记忆
 
-更新时间：2026-02-13
+配套契约基线请同时参考：
+
+- `docs/LSCLAW_INTEGRATION_CONTRACT_MINIMUM.md`
+- `docs/LSCLAW_INTEGRATION_DESIGN_REVIEW.md`
+
+更新时间：2026-03-08
 
 ## 1. 本次 los-memory 已新增能力
 
