@@ -63,6 +63,13 @@ from .config import (
 )
 from .dual_write import DualWriteManager, DualWriteResult
 from .hmac_bridge import HMACBridge, HMACVerificationError
+from .sse_proxy import (
+    EventBufferManager,
+    EventTransformer,
+    SSEConnectionError,
+    SSEConnectionManager,
+    SSEProxy,
+)
 from .vps_client import VPSAgentWebClient, VPSAgentWebError
 
 __all__ = [
@@ -77,11 +84,16 @@ __all__ = [
     "DualWriteManager",
     "DualWriteMode",
     "DualWriteResult",
+    "EventBufferManager",
+    "EventTransformer",
     "HMACBridge",
     "HMACConfig",
     "HMACVerificationError",
     "MigrationConfig",
     "MigrationPhase",
+    "SSEConnectionError",
+    "SSEConnectionManager",
+    "SSEProxy",
     "SSEProxyConfig",
     "VPSAgentWebClient",
     "VPSAgentWebConfig",

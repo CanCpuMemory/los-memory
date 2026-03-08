@@ -404,11 +404,18 @@ class ApprovalMigrationAdapter:
     def get_event_stream(
         self,
         last_event_id: Optional[str] = None,
+        client_id: Optional[str] = None,
     ) -> Generator[str, None, None]:
         """Get SSE event stream.
 
+        In REMOTE_ONLY mode, uses SSE proxy to stream events from
+        VPS Agent Web with automatic reconnection and buffering.
+
+        In other modes, uses local event stream.
+
         Args:
             last_event_id: Last event ID for replay
+            client_id: Optional client identifier for tracking
 
         Yields:
             SSE-formatted event strings
@@ -416,12 +423,31 @@ class ApprovalMigrationAdapter:
         self._ensure_not_removed()
 
         if self.config.phase == MigrationPhase.REMOTE_ONLY:
-            # Return URL for remote stream
-            if self._remote_client:
-                url = self._remote_client.get_event_stream_url(last_event_id)
-                yield f"event: info\ndata: {{\"message\": \"Connect to {url}\"}}\n\n"
-            else:
+            # Use SSE proxy for full event streaming
+            if not self._remote_client:
                 raise RuntimeError("Remote client not configured")
+
+            # Initialize SSE proxy if needed
+            if not hasattr(self, "_sse_proxy") or self._sse_proxy is None:
+                from .sse_proxy import SSEProxy
+
+                self._sse_proxy = SSEProxy(
+                    config=self.config.sse,
+                    vps_client=self._remote_client,
+                )
+                self._sse_proxy.start()
+
+            # Yield from proxy
+            try:
+                yield from self._sse_proxy.subscribe(
+                    last_event_id=last_event_id,
+                    client_id=client_id,
+                )
+            finally:
+                # Cleanup stale clients periodically
+                if self._sse_proxy:
+                    self._sse_proxy.cleanup_stale_clients()
+
         else:
             # Use local event stream
             if not self._local_api:
