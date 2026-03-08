@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -78,6 +79,25 @@ def test_search_and_list_contract_fields(tmp_path: Path) -> None:
     list_payload = json.loads(list_result.stdout)
     assert list_payload["ok"] is True
     assert isinstance(list_payload["results"], list)
+
+
+@pytest.mark.contract
+def test_doctor_returns_degraded_when_fts_missing(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_result = _run_cli("--db", str(db_path), "init")
+    assert init_result.returncode == 0
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("DROP TABLE IF EXISTS observations_fts")
+    conn.commit()
+    conn.close()
+
+    doctor_result = _run_cli("--db", str(db_path), "admin", "doctor")
+    assert doctor_result.returncode == 0
+    doctor_payload = json.loads(doctor_result.stdout)
+    assert doctor_payload["ok"] is True
+    assert doctor_payload["data"]["status"] == "degraded"
+    assert doctor_payload["data"]["capabilities"]["can_search"] is False
 
 
 @pytest.mark.contract

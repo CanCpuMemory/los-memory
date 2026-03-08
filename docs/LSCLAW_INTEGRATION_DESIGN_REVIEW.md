@@ -37,13 +37,14 @@
 
 1. docs lint 仍是正则方案，复杂代码块上下文下可能出现漏检。
 2. 契约测试目前覆盖核心路径，尚未覆盖全部错误码与失败语义矩阵。
-3. CI job 仍有依赖安装重复，执行时长存在优化空间。
+3. docs lint 规则仍以正则为主，尚未引入代码块语义感知。
 
 ### 3.2 改进方向
 
 1. 新增 `approval-migration-e2e`，对齐迁移阶段回归。
 2. 增加 `@pytest.mark.contract` 与按 marker 执行策略。
 3. 增加 CI 缓存与并发取消，降低重复构建开销。
+4. 增强 `admin doctor` 的 degraded/unhealthy 契约矩阵覆盖。
 
 ## 4. 可追溯进度
 
@@ -59,6 +60,8 @@
 2. 完成 skill 文档命令口径对齐。（已完成）
 3. 增加 CI 侧 marker 维度执行策略。（已完成）
 4. 增加 `approval-migration-e2e` 作业。（已完成）
+5. 抽取 CI 复合动作并启用 pip 缓存。（已完成）
+6. 增加 `admin doctor` degraded 契约用例。（已完成）
 
 ### M3（中期）
 
