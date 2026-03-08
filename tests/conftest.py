@@ -256,19 +256,35 @@ def memory_client_with_data(
 def parse_datatable(datatable: list[list[str]]) -> dict[str, str]:
     """Convert pytest-bdd 8.x datatable (list of lists) to dict.
 
-    Assumes first row is header with 'field' and 'value' columns,
-    or header with column names that become keys.
+    Supports two formats:
+    1. Field/value pairs (vertical): Each row is [field_name, field_value]
+    2. Column-based (horizontal): First row is headers, subsequent rows are data
+
+    For field/value format, returns {field: value} dict.
+    For column-based format, returns list of dicts or single dict if one row.
     """
     if not datatable:
         return {}
     headers = datatable[0]
     if len(datatable) == 1:
         return {}
-    # If table has 'field' and 'value' columns, return dict from those
+
+    # Check if this is field/value format (2 columns, first row headers like ["title", "..."])
+    # Detect by: 2 columns and data rows also have 2 elements
+    if len(headers) == 2 and len(datatable) > 1:
+        # Check if it looks like field/value pairs (first column looks like field names)
+        # Include datatable[0] (the first row) in the check since it's also data
+        first_col_values = [row[0] for row in datatable if len(row) >= 2]
+        common_fields = {"title", "summary", "tags", "kind", "project", "auto_tags", "raw", "timestamp"}
+        if any(v in common_fields for v in first_col_values):
+            return {row[0]: row[1] for row in datatable if len(row) >= 2}
+
+    # If table has explicit 'field' and 'value' columns, return dict from those
     if "field" in headers and "value" in headers:
         field_idx = headers.index("field")
         value_idx = headers.index("value")
         return {row[field_idx]: row[value_idx] for row in datatable[1:]}
+
     # Otherwise, return list of dicts for each row
     return [dict(zip(headers, row)) for row in datatable[1:]]
 
@@ -281,8 +297,17 @@ def parse_datatable_rows(datatable: list[list[str]]) -> list[dict[str, str]]:
     return [dict(zip(headers, row)) for row in datatable[1:]]
 
 
-# Re-export common step functions for pytest-bdd discovery
-# These are defined in steps/common_steps.py but need to be discoverable
+# Import all step definitions for pytest-bdd discovery
+# Add tests directory to path for relative imports
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Import step modules to register step definitions with pytest-bdd
+try:
+    from steps import common_steps, checkpoint_steps, session_steps, sharing_steps
+    from steps import project_steps, observation_steps, observation_links_steps
+    from steps import tool_memory_steps, feedback_steps
+except Exception:
+    pass
 
 
 @given("a new memory database")

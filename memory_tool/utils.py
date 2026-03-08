@@ -17,7 +17,7 @@ PROFILE_DB_PATHS = {
     "shared": "~/.local/share/llm-memory/memory.db",
 }
 PROFILE_CHOICES = tuple(PROFILE_DB_PATHS.keys())
-DEFAULT_PROFILE = os.environ.get("MEMORY_PROFILE", "codex").strip().lower() or "codex"
+DEFAULT_PROFILE = os.environ.get("MEMORY_PROFILE", "claude").strip().lower() or "claude"
 if DEFAULT_PROFILE not in PROFILE_DB_PATHS:
     DEFAULT_PROFILE = "codex"
 
@@ -46,16 +46,65 @@ def resolve_db_path(profile: str, explicit_db: str | None) -> str:
     return os.path.expanduser(PROFILE_DB_PATHS[profile_name])
 
 
+def get_profile_db_path(profile: str) -> str:
+    """Get database path for a profile.
+
+    Args:
+        profile: Profile name (claude, codex, shared)
+
+    Returns:
+        Database path for the profile
+
+    Raises:
+        ValueError: If profile is unknown
+    """
+    profile_name = (profile or DEFAULT_PROFILE).strip().lower()
+    if profile_name not in PROFILE_DB_PATHS:
+        raise ValueError(f"Unknown profile '{profile_name}'. Expected one of: {', '.join(PROFILE_CHOICES)}")
+    return os.path.expanduser(PROFILE_DB_PATHS[profile_name])
+
+
 def normalize_text(value: str) -> str:
     """Normalize whitespace in text."""
     return re.sub(r"\s+", " ", value).strip()
 
 
 def stem_token(token: str) -> str:
-    """Simple stemming for common suffixes."""
-    for suffix in ("ing", "ed", "es", "s"):
-        if token.endswith(suffix) and len(token) > len(suffix) + 2:
-            return token[: -len(suffix)]
+    """Simple stemming for common suffixes.
+
+    Handles common English word endings:
+    - running -> run (double consonant reduction)
+    - files -> file (plural removal, just remove 's' not 'es')
+    - configuration -> configur (ation removal)
+    """
+    # Handle 'ation' suffix (configuration -> configur)
+    if token.endswith("ation") and len(token) > 6:
+        return token[:-5]
+
+    # Handle 'ing' suffix with double consonant reduction
+    if token.endswith("ing"):
+        base = token[:-3]
+        if len(base) >= 3:
+            # Reduce double consonant: running -> run, not runn
+            if len(base) >= 2 and base[-1] == base[-2]:
+                base = base[:-1]
+            return base
+        return token
+
+    # Handle 'ed' suffix
+    if token.endswith("ed"):
+        base = token[:-2]
+        if len(base) >= 2:
+            return base
+        return token
+
+    # Handle simple 's' suffix (tests -> test, files -> file)
+    # Just remove 's' at the end
+    if token.endswith("s") and not token.endswith("ss"):
+        base = token[:-1]
+        if len(base) >= 2:
+            return base
+
     return token
 
 
@@ -137,8 +186,28 @@ def auto_tags_from_text(title: str, summary: str, limit: int = 6) -> List[str]:
 
 
 def parse_ids(ids_raw: str) -> List[int]:
-    """Parse comma-separated IDs into unique list of integers."""
-    ids = [int(part.strip()) for part in ids_raw.split(",") if part.strip()]
+    """Parse comma-separated IDs into unique list of integers.
+
+    Supports ranges like "1-3" which expands to [1, 2, 3].
+    """
+    ids: List[int] = []
+    for part in ids_raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            # Range like "1-3"
+            try:
+                start, end = part.split("-", 1)
+                start_val = int(start.strip())
+                end_val = int(end.strip())
+                ids.extend(range(start_val, end_val + 1))
+            except ValueError:
+                continue
+        else:
+            ids.append(int(part))
+
+    # Remove duplicates while preserving order
     unique_ids: List[int] = []
     seen: set[int] = set()
     for item in ids:
@@ -181,6 +250,16 @@ def run_llm_hook(payload: dict, hook_cmd: str | List[str]) -> dict:
 
 
 def quote_fts_query(query: str) -> str:
-    """Quote query for safe FTS parsing."""
+    """Quote query for safe FTS parsing.
+
+    Single words are returned as-is. Multi-word queries are quoted.
+    Empty string returns empty string.
+    """
+    if not query:
+        return ""
+    # Single word - no quotes needed
+    if " " not in query and "\t" not in query:
+        return query
+    # Multi-word - escape quotes and wrap in quotes
     escaped = query.replace('"', '""')
     return f'"{escaped}"'

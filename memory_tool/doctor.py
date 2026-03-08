@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .output import JSONResponse, success, error
-from .schema import SCHEMA_VERSION
+from .database import SCHEMA_VERSION
 from .errors import (
     DB_NOT_FOUND,
     DB_SCHEMA_MISMATCH,
@@ -562,7 +562,6 @@ def doctor_command(
     profile: str,
     conn: Optional[sqlite3.Connection] = None,
     fix: bool = False,
-    human: bool = False,
 ) -> JSONResponse:
     """Run doctor command and return response.
 
@@ -571,17 +570,11 @@ def doctor_command(
         profile: Profile name
         conn: Optional database connection
         fix: Whether to attempt auto-fixes
-        human: Whether to use human-readable output
 
     Returns:
         JSONResponse with doctor report
     """
     report = run_all_checks(db_path, profile, conn, fix)
-
-    if human:
-        output = format_human_output(report)
-        print(output)
-        return JSONResponse(ok=report["ok"], meta={})  # Human output is printed directly
 
     return success(
         data=report,

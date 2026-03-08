@@ -1,5 +1,21 @@
 """Core CLI commands for los-memory.
 
+INTERNAL MODULE WARNING:
+------------------------
+This is an INTERNAL module for the memory_tool package. It is not intended
+for direct external use and may change without notice.
+
+PUBLIC API:
+-----------
+For stable CLI usage, use:
+    - `los-memory` command (recommended)
+    - `python3 -m memory_tool` (alternative)
+    - `python3 memory_tool/memory_tool.py` (legacy compatibility)
+
+For programmatic Python API:
+    - `from memory_tool import MemoryClient` (recommended)
+    - `from memory_tool import connect_db, add_observation` (procedural)
+
 This module provides CLI commands for core memory capabilities only.
 Extension commands are handled separately by the extension loading mechanism.
 """
@@ -9,9 +25,9 @@ import argparse
 from typing import TYPE_CHECKING
 
 from memory_tool import config
-from memory_tool.config import get_database_path
-from memory_tool.database import get_connection
-from memory_tool.output import output_json, print_error, print_success
+from memory_tool.config import get_db_path
+from memory_tool.database import connect_db
+from memory_tool.output import success, error
 from memory_tool.projects import get_active_project, set_active_project
 
 if TYPE_CHECKING:
@@ -303,12 +319,13 @@ def handle_memory_command(args: argparse.Namespace, conn: "sqlite3.Connection") 
             session_id=args.session,
             auto_tags=not args.no_auto_tags,
         )
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     elif args.memory_command == "get":
         results = run_get(conn, args.ids)
-        output_json({"ok": True, "count": len(results), "observations": results})
+        JSONResponse(ok=True, data={"count": len(results), "observations": results}).print()
         return 0
 
     elif args.memory_command == "list":
@@ -321,7 +338,7 @@ def handle_memory_command(args: argparse.Namespace, conn: "sqlite3.Connection") 
             limit=args.limit,
             offset=args.offset,
         )
-        output_json({"ok": True, "count": len(results), "observations": results})
+        JSONResponse(ok=True, data={"count": len(results), "observations": results}).print()
         return 0
 
     elif args.memory_command == "search":
@@ -332,12 +349,13 @@ def handle_memory_command(args: argparse.Namespace, conn: "sqlite3.Connection") 
             kind=args.kind,
             limit=args.limit,
         )
-        output_json({"ok": True, "count": len(results), "observations": results})
+        JSONResponse(ok=True, data={"count": len(results), "observations": results}).print()
         return 0
 
     elif args.memory_command == "delete":
         result = run_delete(conn, args.ids, dry_run=not args.execute)
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     elif args.memory_command == "edit":
@@ -351,26 +369,31 @@ def handle_memory_command(args: argparse.Namespace, conn: "sqlite3.Connection") 
             tags=args.tags,
             raw=args.raw,
         )
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     elif args.memory_command == "link":
         if args.link_command == "add":
             try:
                 link_id = create_link(conn, args.from_id, args.to_id, args.type)
-                print_success(f"Created link {link_id}")
+                from memory_tool.output import JSONResponse
+                JSONResponse(ok=True, data={"link_id": link_id, "message": f"Created link {link_id}"}).print()
                 return 0
             except ValueError as e:
-                print_error(str(e))
+                from memory_tool.output import JSONResponse
+                JSONResponse(ok=False, error={"code": "LINK_ERROR", "message": str(e)}).print()
                 return 1
 
         elif args.link_command == "delete":
             deleted = delete_link(conn, args.from_id, args.to_id, args.type)
             if deleted:
-                print_success("Link deleted")
+                from memory_tool.output import JSONResponse
+                JSONResponse(ok=True, data={"message": "Link deleted"}).print()
                 return 0
             else:
-                print_error("Link not found")
+                from memory_tool.output import JSONResponse
+                JSONResponse(ok=False, error={"code": "NOT_FOUND", "message": "Link not found"}).print()
                 return 1
 
         elif args.link_command == "related":
@@ -380,7 +403,7 @@ def handle_memory_command(args: argparse.Namespace, conn: "sqlite3.Connection") 
                 link_type=args.type,
                 limit=args.limit,
             )
-            output_json({"ok": True, "count": len(results), "related": results})
+            JSONResponse(ok=True, data={"count": len(results), "related": results}).print()
             return 0
 
     return 1
@@ -402,7 +425,8 @@ def handle_observation_command(args: argparse.Namespace, conn: "sqlite3.Connecti
             raw=args.raw,
             session_id=args.session,
         )
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     elif args.obs_command == "list":
@@ -412,7 +436,7 @@ def handle_observation_command(args: argparse.Namespace, conn: "sqlite3.Connecti
             kind=args.kind,
             limit=args.limit,
         )
-        output_json({"ok": True, "count": len(results), "observations": results})
+        JSONResponse(ok=True, data={"count": len(results), "observations": results}).print()
         return 0
 
     return 1
@@ -424,31 +448,34 @@ def handle_session_command(args: argparse.Namespace, conn: "sqlite3.Connection")
 
     if args.session_command == "start":
         result = start_session(conn, profile, args.description)
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     elif args.session_command == "end":
         result = end_session(conn, profile)
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     elif args.session_command == "list":
         results = list_sessions(conn, profile, args.limit)
-        output_json({"ok": True, "count": len(results), "sessions": results})
+        JSONResponse(ok=True, data={"count": len(results), "sessions": results}).print()
         return 0
 
     elif args.session_command == "get":
         session = get_session(conn, args.id)
         if session:
-            output_json({"ok": True, "session": session})
+            JSONResponse(ok=True, data={"session": session}).print()
             return 0
         else:
-            print_error(f"Session {args.id} not found")
+            from memory_tool.output import JSONResponse
+            JSONResponse(ok=False, error={"code": "NOT_FOUND", "message": f"Session {args.id} not found"}).print()
             return 1
 
     elif args.session_command == "observations":
         observations = get_session_observations(conn, args.id, args.limit)
-        output_json({"ok": True, "count": len(observations), "observations": observations})
+        JSONResponse(ok=True, data={"count": len(observations), "observations": observations}).print()
         return 0
 
     return 1
@@ -467,35 +494,37 @@ def handle_checkpoint_command(args: argparse.Namespace, conn: "sqlite3.Connectio
             session_id=args.session,
             project=get_active_project(profile) or "default",
         )
-        print_success(f"Created checkpoint {checkpoint_id}")
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=True, data={"checkpoint_id": checkpoint_id, "message": f"Created checkpoint {checkpoint_id}"}).print()
         return 0
 
     elif args.checkpoint_command == "list":
         results = list_checkpoints(conn, args.limit, args.tag)
-        output_json({"ok": True, "count": len(results), "checkpoints": results})
+        JSONResponse(ok=True, data={"count": len(results), "checkpoints": results}).print()
         return 0
 
     elif args.checkpoint_command == "get":
         checkpoint = get_checkpoint(conn, args.id)
         if checkpoint:
-            output_json({"ok": True, "checkpoint": checkpoint})
+            JSONResponse(ok=True, data={"checkpoint": checkpoint}).print()
             return 0
         else:
-            print_error(f"Checkpoint {args.id} not found")
+            from memory_tool.output import JSONResponse
+            JSONResponse(ok=False, error={"code": "NOT_FOUND", "message": f"Checkpoint {args.id} not found"}).print()
             return 1
 
     elif args.checkpoint_command == "observations":
         observations = get_checkpoint_observations(conn, args.id, args.limit)
-        output_json({"ok": True, "count": len(observations), "observations": observations})
+        JSONResponse(ok=True, data={"count": len(observations), "observations": observations}).print()
         return 0
 
     elif args.checkpoint_command == "resume":
         try:
             result = resume_from_checkpoint(conn, args.id, profile)
-            output_json({"ok": True, "result": result})
+            JSONResponse(ok=True, data={"result": result}).print()
             return 0
         except ValueError as e:
-            print_error(str(e))
+            JSONResponse(ok=False, error={"code": "ERROR", "message": str(e)}).print()
             return 1
 
     return 1
@@ -507,7 +536,8 @@ def handle_project_command(args: argparse.Namespace, conn: "sqlite3.Connection")
 
     if args.project_command == "set":
         set_active_project(profile, args.name)
-        print_success(f"Set active project to '{args.name}'")
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=True, data={"message": f"Set active project to '{args.name}'"}).print()
         return 0
 
     elif args.project_command == "get":
@@ -524,12 +554,14 @@ def handle_tool_command(args: argparse.Namespace, conn: "sqlite3.Connection") ->
 
     if args.tool_command == "stats":
         result = get_tool_stats(conn, args.project, args.limit)
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     elif args.tool_command == "suggest":
         result = suggest_tools_for_task(conn, args.task, args.limit)
-        output_json(result)
+        from memory_tool.output import JSONResponse
+        JSONResponse(ok=result.get("ok", True), data=result).print()
         return 0 if result.get("ok") else 1
 
     return 1
@@ -545,15 +577,17 @@ def handle_review_command(args: argparse.Namespace, conn: "sqlite3.Connection") 
                 args.text,
                 auto_apply=not args.no_apply,
             )
-            output_json(result)
+            from memory_tool.output import JSONResponse
+            JSONResponse(ok=result.get("ok", True), data=result).print()
             return 0 if result.get("ok") else 1
         except ValueError as e:
-            print_error(str(e))
+            from memory_tool.output import JSONResponse
+            JSONResponse(ok=False, error={"code": "FEEDBACK_ERROR", "message": str(e)}).print()
             return 1
 
     elif args.review_command == "history":
         history = get_feedback_history(conn, args.observation_id)
-        output_json({"ok": True, "count": len(history), "history": history})
+        JSONResponse(ok=True, data={"count": len(history), "history": history}).print()
         return 0
 
     return 1
@@ -574,8 +608,8 @@ def handle_core_command(args: argparse.Namespace) -> int:
             return 0
 
     # Commands that need a database connection
-    db_path = get_database_path()
-    conn = get_connection(db_path)
+    db_path = get_db_path()
+    conn = connect_db(db_path)
 
     try:
         if hasattr(args, "command"):

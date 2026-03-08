@@ -103,6 +103,8 @@ def run_share(
     if fmt == "json":
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(bundle, f, indent=2)
+    elif fmt == "csv":
+        _write_csv_bundle(output_path, bundle)
     elif fmt == "markdown":
         _write_markdown_bundle(output_path, bundle)
     elif fmt == "html":
@@ -115,6 +117,30 @@ def run_share(
         "observations": len(observations),
         "sessions": len(sessions),
     }
+
+
+def _write_csv_bundle(output_path: str, bundle: dict) -> None:
+    """Write bundle as CSV."""
+    import csv
+
+    observations = bundle["observations"]
+    if not observations:
+        # Write empty file with headers
+        with open(output_path, "w", encoding="utf-8", newline="") as f:
+            f.write("id,timestamp,project,kind,title,summary,tags,session_id\n")
+        return
+
+    # Get all fieldnames from first observation
+    fieldnames = list(observations[0].keys())
+    # Ensure consistent ordering
+    preferred_order = ["id", "timestamp", "project", "kind", "title", "summary", "tags", "session_id", "raw"]
+    fieldnames = [f for f in preferred_order if f in fieldnames] + [f for f in fieldnames if f not in preferred_order]
+
+    with open(output_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for obs in observations:
+            writer.writerow(obs)
 
 
 def _write_markdown_bundle(output_path: str, bundle: dict) -> None:

@@ -1,2 +1,0 @@
-[console_scripts]
-los-memory = memory_tool.cli:main

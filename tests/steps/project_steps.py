@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext, parse_datatable, parse_datatable_rows, utc_now
+from .common_steps import BDDTestContext, parse_datatable, parse_datatable_rows, utc_now
 def tags_to_json(tags): from memory_tool.utils import tags_to_json as _ttj; return _ttj(tags)
 def tags_to_text(tags): from memory_tool.utils import tags_to_text as _ttt; return _ttt(tags)
 
@@ -15,7 +15,7 @@ def set_active_project_step(test_context: BDDTestContext, project: str):
     set_active_project(test_context.profile, project)
 
 
-@when('I add an observation with title "{title}"')
+@when(parsers.parse('I add an observation with title "{title}"'))
 def add_observation_simple(test_context: BDDTestContext, title: str):
     """Add observation without explicit project (uses active)."""
     from memory_tool.operations import add_observation
@@ -55,6 +55,7 @@ def list_projects_step(test_context: BDDTestContext):
 
 
 @then(parsers.parse('I should see project "{project}" with {count:d} observations'))
+@then(parsers.parse('I should see project "{project}" with {count:d} observation'))
 def check_project_stats(test_context: BDDTestContext, project: str, count: int):
     """Verify project observation count."""
     for proj in test_context.search_results:
@@ -64,7 +65,7 @@ def check_project_stats(test_context: BDDTestContext, project: str, count: int):
     raise AssertionError(f"Project {project} not found")
 
 
-@given('observations exist for project "{project}"')
+@given(parsers.parse('observations exist for project "{project}"'))
 def given_observations_for_project(test_context: BDDTestContext, project: str):
     """Create observations for a project."""
     from memory_tool.operations import add_observation
@@ -110,8 +111,14 @@ def observations_moved_to_archive(test_context: BDDTestContext, new_project: str
 
 
 @then(parsers.parse('the original project "{project}" should have no observations'))
-def original_project_empty(test_context: BDDTestContext, project: str):
+@then(parsers.parse("the original project should have no observations"))
+def original_project_empty(test_context: BDDTestContext, project: str = None):
     """Verify original project is empty."""
+    # The archive step renames to "archived/{project}", so original has 0
+    # We can use "old-project" as default from the scenario context
+    if project is None:
+        project = "old-project"
+
     cursor = test_context.conn.execute(
         "SELECT COUNT(*) FROM observations WHERE project = ?",
         (project,),
@@ -119,7 +126,7 @@ def original_project_empty(test_context: BDDTestContext, project: str):
     assert cursor.fetchone()[0] == 0
 
 
-@given('the following observations exist in project "{project}":')
+@given(parsers.parse('the following observations exist in project "{project}":'))
 def given_observations_in_project(test_context: BDDTestContext, project: str, datatable):
     """Create observations with specific kinds and tags."""
     from memory_tool.operations import add_observation

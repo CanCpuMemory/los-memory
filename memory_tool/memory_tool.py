@@ -1,127 +1,58 @@
 #!/usr/bin/env python3
-"""
-Standalone memory tool for logging and retrieving observations.
+"""CLI entrypoint for backward compatibility.
 
-This module re-exports all functionality from the memory_tool package
-for backwards compatibility. New code should import directly from
-the submodules:
-    from memory_tool.models import Observation
-    from memory_tool.database import connect_db
+WARNING: Python API Compatibility Notice
+----------------------------------------
+This file is a CLI wrapper ONLY. It does not export any Python API.
+
+If you are importing from this file in external code:
+    import memory_tool.memory_tool as m
+    m.connect_db(...)  # This will BREAK - no longer available
+
+Recommended Python API Usage:
+-----------------------------
+Use the official public API instead:
+
+    from memory_tool import connect_db, add_observation
+    # or
+    from memory_tool import MemoryClient
+
+    with MemoryClient(profile="codex") as client:
+        obs = client.add_observation(title="...", summary="...")
+
+CLI Usage (this file remains valid for CLI):
+--------------------------------------------
+    python3 memory_tool/memory_tool.py --profile codex init
+    python3 memory_tool/memory_tool.py --profile codex add --title "..."
+
+    # Or use the modern module syntax:
+    python3 -m memory_tool --profile codex init
+
+Migration Guide:
+----------------
+See docs/design/PYTHON_API_IMPROVEMENTS.md for detailed migration instructions
+from the old procedural API to the new MemoryClient-based API.
+
+Breaking Changes in v2.0.0:
+---------------------------
+- This file no longer re-exports Python functions (connect_db, add_observation, etc.)
+- All procedural functions moved to memory_tool.core.operations
+- Public API is now available through memory_tool package root only
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Bootstrap: add parent directory to path for imports when run as script
+# This ensures `python3 memory_tool/memory_tool.py` works correctly
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-# Re-export everything from the package for backwards compatibility
-from memory_tool.models import Checkpoint, Observation, Session
-from memory_tool.database import connect_db, ensure_fts, ensure_schema, init_db, SCHEMA_VERSION
-from memory_tool.utils import (
-    auto_tags_from_text,
-    normalize_tags_list,
-    normalize_text,
-    parse_ids,
-    resolve_db_path,
-    tags_to_json,
-    tags_to_text,
-    utc_now,
-    DEFAULT_PROFILE,
-    PROFILE_CHOICES,
-    PROFILE_DB_PATHS,
-)
-from memory_tool.operations import (
-    add_observation,
-    normalize_rows,
-    run_search,
-    run_timeline,
-    run_get,
-    run_list,
-    run_export,
-    run_edit,
-    run_delete,
-    run_clean,
-    run_manage,
-    generate_visual_timeline,
-)
-from memory_tool.sessions import (
-    get_active_session,
-    set_active_session,
-    clear_active_session,
-    start_session,
-    end_session,
-    get_session,
-    list_sessions,
-    get_session_observations,
-    generate_session_summary,
-)
-from memory_tool.checkpoints import (
-    get_checkpoint,
-    list_checkpoints,
-    get_checkpoint_observations,
-    resume_from_checkpoint,
-)
-from memory_tool.projects import get_active_project, set_active_project, list_projects, get_project_stats
-from memory_tool.share import run_share, run_import
-from memory_tool.cli import parse_args, main
-
-# Backwards compatibility aliases
-__all__ = [
-    "Checkpoint",
-    "Observation",
-    "Session",
-    "connect_db",
-    "ensure_fts",
-    "ensure_schema",
-    "init_db",
-    "SCHEMA_VERSION",
-    "auto_tags_from_text",
-    "normalize_tags_list",
-    "normalize_text",
-    "parse_ids",
-    "resolve_db_path",
-    "tags_to_json",
-    "tags_to_text",
-    "utc_now",
-    "DEFAULT_PROFILE",
-    "PROFILE_CHOICES",
-    "PROFILE_DB_PATHS",
-    "add_observation",
-    "normalize_rows",
-    "run_search",
-    "run_timeline",
-    "run_get",
-    "run_list",
-    "run_export",
-    "run_edit",
-    "run_delete",
-    "run_clean",
-    "run_manage",
-    "generate_visual_timeline",
-    "get_active_session",
-    "set_active_session",
-    "clear_active_session",
-    "start_session",
-    "end_session",
-    "get_session",
-    "list_sessions",
-    "get_session_observations",
-    "generate_session_summary",
-    "get_checkpoint",
-    "list_checkpoints",
-    "get_checkpoint_observations",
-    "resume_from_checkpoint",
-    "get_active_project",
-    "set_active_project",
-    "list_projects",
-    "get_project_stats",
-    "run_share",
-    "run_import",
-    "parse_args",
-    "main",
-]
+# Import and run the main CLI
+from memory_tool.cli import main
 
 if __name__ == "__main__":
     main()

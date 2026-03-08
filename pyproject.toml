@@ -54,7 +54,19 @@ Repository = "https://github.com/yourusername/los-memory"
 Issues = "https://github.com/yourusername/los-memory/issues"
 
 [tool.setuptools]
-packages = ["memory_tool"]
+packages = [
+    "memory_tool",
+    "memory_tool.core",
+    "memory_tool.extensions",
+    "memory_tool.extensions.incident",
+    "memory_tool.extensions.recovery",
+    "memory_tool.extensions.knowledge",
+    "memory_tool.extensions.attribution",
+    "memory_tool.migrate_out",
+    "memory_tool.migrate_out.approval",
+    "memory_tool.migrate_out.approval.sse_proxy",
+    "memory_tool.schema",
+]
 
 [tool.setuptools.package-data]
 memory_tool = ["schema/*.json"]
@@ -67,7 +79,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 
 # BDD configuration
-bdd_features_base_dir = "tests/bdd/features"
+bdd_features_base_dir = "tests/features"
 
 # Test markers
 markers = [

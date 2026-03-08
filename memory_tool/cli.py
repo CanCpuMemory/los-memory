@@ -97,15 +97,16 @@ from .extensions import (
     register_extensions,
 )
 
-# Migration imports (with deprecation warnings)
-try:
+# Migration imports (lazy-loaded to avoid import-time deprecation warnings)
+_approval_available = True
+
+def _load_approval():
+    """Lazy load approval module to avoid import-time warnings."""
     from .migrate_out.approval import (
         add_approval_subcommands,
         handle_approval_command,
     )
-    _approval_available = True
-except ImportError:
-    _approval_available = False
+    return add_approval_subcommands, handle_approval_command
 
 
 def parse_args() -> argparse.Namespace:
@@ -413,9 +414,11 @@ def parse_args() -> argparse.Namespace:
     registered = register_extensions(subparsers, show_warnings=False)
 
     # Register migrating approval with deprecation warning
+    # Use lazy import to avoid import-time deprecation warnings
     if _approval_available and "approval" not in get_disabled_extensions():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # Suppress immediate warning
+            add_approval_subcommands, _ = _load_approval()
             add_approval_subcommands(subparsers)
             registered.append("approval")
 
@@ -438,11 +441,35 @@ def main() -> int:
 
     # Handle doctor command with special output formatting
     if args.command == "admin" and getattr(args, "admin_action", None) == "doctor":
-        from .doctor import doctor_command
-        response = doctor_command(db_path, args.profile, human=args.human)
-        response.print(format=args.output, human=args.human)
+        from .doctor import doctor_command, format_human_output
+        import sqlite3
+
+        # Check if we can connect to database
+        conn = None
+        try:
+            conn = connect_db(db_path)
+        except sqlite3.Error:
+            pass  # Will be reported in doctor report
+
+        response = doctor_command(
+            db_path=db_path,
+            profile=args.profile,
+            conn=conn,
+            fix=getattr(args, "fix", False),
+        )
+        if conn:
+            conn.close()
+
+        # Determine if we should use human-readable output
+        use_human = args.human or args.output == "table"
+        if use_human:
+            # Use doctor-specific human-readable format
+            print(format_human_output(response.data))
+        else:
+            response.print(format=args.output, human=False)
         return 0 if response.ok else 1
 
+    # Regular command path - connect_db is imported at module level
     conn = connect_db(db_path)
     ensure_schema(conn)
     ensure_fts(conn)
@@ -552,6 +579,7 @@ def _dispatch_command(conn, args) -> dict | None:
             DeprecationWarning,
             stacklevel=2,
         )
+        _, handle_approval_command = _load_approval()
         return handle_approval_command(conn, args)
 
     # Backward compatibility: handle old flat commands

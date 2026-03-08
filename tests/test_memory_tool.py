@@ -90,7 +90,77 @@ def test_ingest_helper(tmp_path: Path) -> None:
     assert count == 1
 
 
-def test_export_json_csv(tmp_path: Path) -> None:
+def test_export_json_csv_unit(tmp_path: Path) -> None:
+    """Unit test: Direct call to run_share() for fast feedback."""
+    db_path = tmp_path / "memory.db"
+    conn = mem.connect_db(str(db_path))
+    mem.ensure_schema(conn)
+    mem.ensure_fts(conn)
+    mem.add_observation(
+        conn,
+        "2024-01-01T00:00:00Z",
+        "proj",
+        "note",
+        "Title",
+        "Summary",
+        mem.tags_to_json(["alpha"]),
+        mem.tags_to_text(["alpha"]),
+        "raw",
+        session_id=1,
+    )
+
+    json_out = tmp_path / "export.json"
+    csv_out = tmp_path / "export.csv"
+
+    # Direct API call - unit test style
+    from memory_tool.share import run_share
+
+    result_json = run_share(
+        conn,
+        output_path=str(json_out),
+        fmt="json",
+        project=None,
+        kind=None,
+        tag=None,
+        session_id=None,
+        since=None,
+        limit=1000,
+    )
+    assert result_json["ok"] is True
+    assert result_json["format"] == "json"
+    assert result_json["observations"] == 1
+
+    result_csv = run_share(
+        conn,
+        output_path=str(csv_out),
+        fmt="csv",
+        project=None,
+        kind=None,
+        tag=None,
+        session_id=None,
+        since=None,
+        limit=1000,
+    )
+    assert result_csv["ok"] is True
+    assert result_csv["format"] == "csv"
+
+    conn.close()
+
+    # Verify JSON output format (bundle format with observations key)
+    exported = json.loads(json_out.read_text(encoding="utf-8"))
+    assert "observations" in exported
+    assert len(exported["observations"]) == 1
+    assert exported["observations"][0]["title"] == "Title"
+
+    # Verify CSV output format
+    csv_text = csv_out.read_text(encoding="utf-8")
+    csv_header = csv_text.splitlines()[0]
+    assert "session_id" in csv_header
+    assert "Title" in csv_text
+
+
+def test_export_json_csv_cli(tmp_path: Path) -> None:
+    """Integration test: CLI path via subprocess to catch entrypoint/wrapper regressions."""
     db_path = tmp_path / "memory.db"
     conn = mem.connect_db(str(db_path))
     mem.ensure_schema(conn)
@@ -111,12 +181,16 @@ def test_export_json_csv(tmp_path: Path) -> None:
 
     json_out = tmp_path / "export.json"
     csv_out = tmp_path / "export.csv"
+
+    # Test the CLI path via subprocess to ensure entrypoint works
+    # This catches issues with CLI argument parsing, wrapper scripts, etc.
     subprocess.run(
         [
             sys.executable,
             str(MEMORY_DIR / "memory_tool.py"),
             "--db",
             str(db_path),
+            "memory",
             "export",
             "--format",
             "json",
@@ -133,6 +207,7 @@ def test_export_json_csv(tmp_path: Path) -> None:
             str(MEMORY_DIR / "memory_tool.py"),
             "--db",
             str(db_path),
+            "memory",
             "export",
             "--format",
             "csv",
@@ -144,7 +219,9 @@ def test_export_json_csv(tmp_path: Path) -> None:
         text=True,
     )
 
+    # Verify JSON output format (CLI returns list format via run_export)
     exported = json.loads(json_out.read_text(encoding="utf-8"))
+    assert isinstance(exported, list)
     assert len(exported) == 1
     assert exported[0]["title"] == "Title"
 

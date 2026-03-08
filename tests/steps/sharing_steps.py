@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext, parse_datatable, parse_datatable_rows
+from .common_steps import BDDTestContext, parse_datatable, parse_datatable_rows
 from memory_tool.utils import utc_now
 
 
@@ -145,6 +145,8 @@ def given_json_bundle_with_count(test_context: BDDTestContext, filepath: str, co
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, "w") as f:
         json.dump(bundle, f, indent=2)
+
+    test_context.last_export_path = filepath
 
 
 @when("I import with dry-run")

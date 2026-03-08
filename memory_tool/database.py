@@ -688,12 +688,25 @@ def ensure_fts(conn: sqlite3.Connection) -> bool:
 
 
 def rebuild_fts(conn: sqlite3.Connection) -> None:
-    """Rebuild FTS index."""
+    """Rebuild FTS index.
+
+    Drops and recreates the FTS table and triggers, then repopulates
+    with all existing observations.
+    """
     conn.execute("DROP TRIGGER IF EXISTS observations_ai")
     conn.execute("DROP TRIGGER IF EXISTS observations_ad")
     conn.execute("DROP TRIGGER IF EXISTS observations_au")
     conn.execute("DROP TABLE IF EXISTS observations_fts")
     ensure_fts(conn)
+
+    # Repopulate FTS index with existing observations
+    conn.execute(
+        """
+        INSERT INTO observations_fts (rowid, title, summary, tags_text, raw)
+        SELECT id, title, summary, tags_text, raw FROM observations
+        """
+    )
+    conn.commit()
 
 
 def init_db(path: str) -> None:

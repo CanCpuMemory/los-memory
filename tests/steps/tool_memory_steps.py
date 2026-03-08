@@ -5,7 +5,7 @@ import json
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext
+from .common_steps import BDDTestContext
 
 
 @when("I log a tool call with:")

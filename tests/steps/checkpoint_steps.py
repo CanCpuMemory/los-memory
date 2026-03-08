@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext, parse_datatable, parse_datatable_rows
+from pathlib import Path
+
+from .common_steps import BDDTestContext, parse_datatable, parse_datatable_rows
+from memory_tool.utils import utc_now
 
 
-@when("I create a checkpoint named \"{name}\" with tag \"{tag}\"")
+@when(parsers.parse('I create a checkpoint named "{name}" with tag "{tag}"'))
 def create_checkpoint_step(test_context: BDDTestContext, name: str, tag: str):
     """Create a checkpoint."""
     from memory_tool.checkpoints import create_checkpoint
@@ -105,20 +108,43 @@ def given_checkpoint_exists(test_context: BDDTestContext, checkpoint_id: int):
 def given_checkpoint_with_data(test_context: BDDTestContext, datatable):
     """Create a checkpoint from table data."""
     from memory_tool.checkpoints import create_checkpoint
+    from memory_tool.operations import add_observation
+    from memory_tool.utils import tags_to_json, tags_to_text
 
     data = parse_datatable(datatable)
     if isinstance(data, list):
         data = data[0] if data else {}
+
+    session_id = int(data["session_id"]) if "session_id" in data else None
+    project = data.get("project", "general")
+
+    # Create some observations for the checkpoint to reference
+    if session_id:
+        for i in range(3):
+            add_observation(
+                test_context.conn,
+                utc_now(),
+                project,
+                "note",
+                f"Checkpoint observation {i + 1}",
+                f"Summary {i + 1}",
+                tags_to_json([]),
+                tags_to_text([]),
+                "",
+                session_id,
+            )
 
     actual_id = create_checkpoint(
         test_context.conn,
         name=data.get("name", "test-checkpoint"),
         description=data.get("description", ""),
         tag=data.get("tag", ""),
-        session_id=int(data["session_id"]) if "session_id" in data else None,
-        project=data.get("project", "general"),
+        session_id=session_id,
+        project=project,
     )
     test_context.last_checkpoint_id = actual_id
+    if session_id:
+        test_context.last_session_id = session_id
 
 
 @given("a checkpoint exists with {count:d} observations")
@@ -207,7 +233,8 @@ def given_active_session_with_observations(test_context: BDDTestContext, count: 
     """Create an active session with observations."""
     from memory_tool.sessions import start_session, set_active_session
     from memory_tool.operations import add_observation
-    from memory_tool.utils import utc_now, tags_to_json
+    from memory_tool.utils import tags_to_json
+    from .common_steps import utc_now
 
     session_id = start_session(
         test_context.conn,
@@ -238,3 +265,53 @@ def given_active_session_with_observations(test_context: BDDTestContext, count: 
 def check_checkpoint_count(test_context: BDDTestContext, count: int):
     """Verify checkpoint count."""
     assert len(test_context.search_results) == count
+
+
+@then(parsers.parse("I should see {count:d} checkpoint"))
+def check_checkpoint_count_singular(test_context: BDDTestContext, count: int):
+    """Verify checkpoint count (singular form)."""
+    assert len(test_context.search_results) == count
+
+
+# Explicit step definition for feature file compatibility
+@given(parsers.parse('a checkpoint exists with {count:d} observations'))
+def given_checkpoint_with_n_observations(test_context: BDDTestContext, count: int):
+    """Create a checkpoint with N observations."""
+    from memory_tool.checkpoints import create_checkpoint
+    from memory_tool.sessions import start_session, set_active_session
+    from memory_tool.operations import add_observation
+    from memory_tool.utils import tags_to_json
+    from .common_steps import utc_now
+
+    # Create a session and add observations
+    session_id = start_session(
+        test_context.conn,
+        project="checkpoint-test",
+        working_dir="/tmp",
+        agent_type="test",
+    )
+
+    for i in range(count):
+        add_observation(
+            test_context.conn,
+            utc_now(),
+            "checkpoint-test",
+            "note",
+            f"Checkpoint observation {i + 1}",
+            f"Summary {i + 1}",
+            tags_to_json([]),
+            "",
+            "",
+            session_id,
+        )
+
+    checkpoint_id = create_checkpoint(
+        test_context.conn,
+        name="test-checkpoint",
+        description="",
+        tag="",
+        session_id=session_id,
+        project="checkpoint-test",
+    )
+    test_context.last_checkpoint_id = checkpoint_id
+    test_context.last_session_id = session_id

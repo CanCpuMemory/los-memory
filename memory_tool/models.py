@@ -35,11 +35,11 @@ class Checkpoint:
     id: int
     timestamp: str
     name: str
-    description: str
-    tag: str
-    session_id: Optional[int]
-    observation_count: int
     project: str
+    description: str = ""
+    tag: str = ""
+    session_id: Optional[int] = None
+    observation_count: int = 0
 
 
 @dataclass
@@ -70,10 +70,10 @@ class ToolCall:
 
     id: int
     timestamp: str
-    project: str
     tool_name: str
     tool_input: dict
     tool_output: Optional[dict]
-    status: str  # "success", "error"
-    duration_ms: Optional[int]
+    call_status: str  # "success", "error"
+    duration_ms: Optional[int] = None
+    project: str = "default"
     session_id: Optional[int] = None

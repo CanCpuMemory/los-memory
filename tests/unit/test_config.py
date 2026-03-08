@@ -71,16 +71,17 @@ class TestConfigLoader:
         config = ConfigLoader.load(cli_args={"profile": "codex"})
         assert config.profile == "codex"
 
-    def test_env_vars_override_files(self, isolated_env, tmp_path):
+    def test_env_vars_override_files(self, isolated_env, tmp_path, monkeypatch):
         """Test environment variables override file configs."""
+        from pathlib import Path
         config_dir = tmp_path / ".config" / "los-memory"
         config_dir.mkdir(parents=True)
 
-        with patch("memory_tool.config.USER_CONFIG_DIR", config_dir):
-            with patch("memory_tool.config.USER_CONFIG_PATH", config_dir / "config.yaml"):
-                os.environ["MEMORY_PROFILE"] = "shared"
-                config = ConfigLoader.load()
-                assert config.profile == "shared"
+        monkeypatch.setattr("memory_tool.config.USER_CONFIG_DIR", config_dir)
+        monkeypatch.setattr("memory_tool.config.USER_CONFIG_PATH", config_dir / "config.yaml")
+        os.environ["MEMORY_PROFILE"] = "shared"
+        config = ConfigLoader.load()
+        assert config.profile == "shared"
 
     def test_boolean_env_var_conversion_true(self, isolated_env):
         """Test boolean env vars are converted (true values)."""

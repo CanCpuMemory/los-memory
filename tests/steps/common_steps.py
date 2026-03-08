@@ -22,6 +22,12 @@ def parse_datatable(datatable: list[list[str]]) -> dict[str, str]:
     headers = datatable[0]
     if len(datatable) == 1:
         return {}
+    # Check if this is field/value format (2 columns, first column looks like field names)
+    if len(headers) == 2 and len(datatable) > 1:
+        first_col_values = [row[0] for row in datatable if len(row) >= 2]
+        common_fields = {"title", "summary", "tags", "kind", "project", "auto_tags", "raw", "timestamp"}
+        if any(v in common_fields for v in first_col_values):
+            return {row[0]: row[1] for row in datatable if len(row) >= 2}
     if "field" in headers and "value" in headers:
         field_idx = headers.index("field")
         value_idx = headers.index("value")

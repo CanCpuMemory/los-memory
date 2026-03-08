@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext
+from .common_steps import BDDTestContext
 
 
 @when(parsers.parse('I provide feedback "{feedback}" on that observation'))

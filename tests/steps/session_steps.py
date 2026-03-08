@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext, parse_datatable, parse_datatable_rows, utc_now
+from .common_steps import BDDTestContext, parse_datatable, parse_datatable_rows, utc_now
 def tags_to_json(tags): from memory_tool.utils import tags_to_json as _ttj; return _ttj(tags)
 def tags_to_text(tags): from memory_tool.utils import tags_to_text as _ttt; return _ttt(tags)
 
@@ -79,7 +79,7 @@ def given_active_session_with_observations(test_context: BDDTestContext, count: 
         )
 
 
-@when("I add another observation with title \"{title}\"")
+@when(parsers.parse('I add another observation with title "{title}"'))
 def add_another_observation(test_context: BDDTestContext, title: str):
     """Add another observation to the active session."""
     from memory_tool.operations import add_observation
@@ -209,7 +209,7 @@ def session_should_be_active(test_context: BDDTestContext, session_id: int):
     from memory_tool.sessions import get_active_session
     active = get_active_session(test_context.profile)
     assert active is not None
-    assert active["session_id"] == test_context.last_session_id
+    assert active["session_id"] == session_id
 
 
 @given("the following sessions exist:")

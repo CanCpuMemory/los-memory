@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext
+from .common_steps import BDDTestContext
 from .common_steps import parse_datatable
 
 
@@ -85,7 +85,7 @@ def given_another_observation_with_table(test_context: BDDTestContext, datatable
         test_context.observations_by_title[data["title"]] = obs_id
 
 
-@when("I create a link from the first observation to the second with type \"{link_type}\"")
+@when(parsers.parse('I create a link from the first observation to the second with type "{link_type}"'))
 def create_link_first_to_second(test_context: BDDTestContext, link_type: str):
     """Create a link between two observations."""
     from memory_tool.links import create_link

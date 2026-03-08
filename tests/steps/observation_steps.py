@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then, when
 
-from conftest import BDDTestContext, parse_datatable, parse_datatable_rows
+from .common_steps import BDDTestContext, parse_datatable, parse_datatable_rows
 
 
 @when("I add an observation with:")
@@ -14,9 +14,17 @@ def add_observation_with_table(test_context: BDDTestContext, datatable):
     from memory_tool.projects import get_active_project
     from memory_tool.utils import normalize_tags_list, auto_tags_from_text
 
+    # Handle both formats: field/value pairs or column-based table
     data = parse_datatable(datatable)
     if isinstance(data, list):
-        data = data[0] if data else {}
+        # If list of dicts (column-based), convert to single dict
+        if data and isinstance(data[0], dict):
+            merged = {}
+            for row in data:
+                merged.update(row)
+            data = merged
+        else:
+            data = data[0] if data else {}
 
     project = data.get("project", "")
     if not project or project == "general":
@@ -34,6 +42,7 @@ def add_observation_with_table(test_context: BDDTestContext, datatable):
     session_id = active_session["session_id"] if active_session else None
 
     from memory_tool.utils import tags_to_json, tags_to_text, utc_now
+    tags_json = tags_to_json(tags_list)
     obs_id = add_observation(
         test_context.conn,
         data.get("timestamp", utc_now()),
@@ -41,7 +50,7 @@ def add_observation_with_table(test_context: BDDTestContext, datatable):
         data.get("kind", "note"),
         data.get("title", ""),
         data.get("summary", ""),
-        tags_to_json(tags_list),
+        tags_json,
         tags_to_text(tags_list),
         data.get("raw", ""),
         session_id,
