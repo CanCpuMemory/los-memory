@@ -33,3 +33,8 @@ htmlcov/
 # Ruff
 .ruff_cache/
 uv.lock
+
+# Local runtime artifacts
+claude
+logs/
+control-plane/logs/

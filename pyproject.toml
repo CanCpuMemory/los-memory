@@ -90,6 +90,7 @@ markers = [
     "e2e: marks tests as end-to-end tests (full workflows)",
     "performance: marks tests as performance tests (slow)",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "hub_lite: marks tests as hub-lite integration tests (multi-repo coordination)",
 ]
 
 # Default options
