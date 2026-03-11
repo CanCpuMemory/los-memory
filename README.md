@@ -113,6 +113,13 @@ See `docs/manuals/GENERAL_MEMORY.md` for practical workflows, cleanup strategy, 
 ## Current implemented state
 See `docs/current/CURRENT_STATE.md` for the current implemented command surface, testing notes, and architecture status.
 Historical `memory_tool.core.*` imports are compatibility shims; new development should use the top-level `memory_tool.*` modules.
+Recent hardening also means active sessions are scoped to the current database path, and `los-memory admin doctor` now runs read-only diagnostics without creating a missing SQLite file.
+
+## CI coverage
+- Targeted Ruff checks cover maintained CLI/doctor/session surfaces
+- Docs command lint validates command examples under `docs/`
+- CLI contract tests lock structured output and exit-code behavior
+- Unit, selected integration smoke, hub-lite integration, approval migration E2E, and BDD smoke run in CI
 
 ## Codex / Claude install and usage
 See `docs/manuals/CODEX_CLAUDE_INSTALL.md` for setup and daily usage from each assistant.

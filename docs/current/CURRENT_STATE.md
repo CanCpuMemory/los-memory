@@ -21,11 +21,13 @@ This document records the current, implemented state of `los-memory`.
 - The active observation CRUD path is still served from `memory_tool/operations.py`
 - `memory_tool/core/` is now a compatibility layer that forwards historical imports to the active top-level modules
 - New development should target the top-level `memory_tool.*` modules rather than `memory_tool.core.*`
+- Active session state is now bound to the current database path, so profile-level session files do not leak session state across different SQLite databases
+- `admin doctor` performs read-only diagnostics and does not create a missing database file as a side effect of health checks
 
 ## Current Testing Notes
 
 - Test layout includes `tests/unit`, `tests/cli`, `tests/integration`, and BDD runners in `tests/test_*_bdd.py`
-- CI includes docs command lint, CLI contract tests, unit tests, selected integration smoke, one approval migration E2E path, and a BDD smoke run
+- CI includes targeted Ruff checks on maintained surfaces, docs command lint, CLI contract tests, unit tests, selected integration smoke, one approval migration E2E path, hub-lite integration coverage, and a BDD smoke run
 - Always treat live `pytest` and CI results as the source of truth for pass/fail counts
 
 ## Current Documentation Rule

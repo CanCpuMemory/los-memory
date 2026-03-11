@@ -17,7 +17,6 @@ def test_docs_indexes_exist() -> None:
 def test_archived_session_docs_are_not_in_docs_root() -> None:
     archived_names = [
         "CROSS_PROJECT_ADOPTION_REVIEW_2026-02-25.md",
-        "IMPLEMENTATION_SUMMARY_20260309070000.md",
         "WORKSPACE_CLEANUP_REPORT.md",
         "child-session-los-memory-20260309000327.md",
         "child-session-los-memory-20260309000327-final.md",
@@ -28,13 +27,13 @@ def test_archived_session_docs_are_not_in_docs_root() -> None:
     for name in archived_names:
         assert not (DOCS / name).exists()
     assert (DOCS / "archive" / "2026-02" / "CROSS_PROJECT_ADOPTION_REVIEW_2026-02-25.md").exists()
-    assert (DOCS / "archive" / "2026-03" / "IMPLEMENTATION_SUMMARY_20260309070000.md").exists()
     assert (DOCS / "archive" / "2026-03" / "WORKSPACE_CLEANUP_REPORT.md").exists()
     assert (DOCS / "archive" / "2026-03" / "child-session-los-memory-20260309000327.md").exists()
     assert (DOCS / "archive" / "2026-03" / "child-session-los-memory-20260309000327-final.md").exists()
     assert (DOCS / "archive" / "2026-03" / "child-session-los-memory-20260309000327-implementation.md").exists()
     assert (DOCS / "archive" / "2026-03" / "child-session-los-memory-20260309063153-final.md").exists()
     assert (DOCS / "archive" / "2026-03" / "child-session-los-memory-20260309063153-implementation.md").exists()
+    assert (DOCS / "archive" / "2026-03" / "README.md").exists()
 
 
 def test_lsclaw_design_docs_live_under_docs_design() -> None:

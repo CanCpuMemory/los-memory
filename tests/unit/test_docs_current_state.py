@@ -11,9 +11,13 @@ def test_current_state_marks_core_as_compatibility_layer() -> None:
     content = (ROOT / "docs" / "current" / "CURRENT_STATE.md").read_text(encoding="utf-8")
     assert "compatibility layer" in content
     assert "top-level `memory_tool.*` modules" in content
+    assert "read-only diagnostics" in content
+    assert "bound to the current database path" in content
 
 
 def test_readme_points_new_development_to_top_level_modules() -> None:
     content = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "Historical `memory_tool.core.*` imports are compatibility shims" in content
     assert "top-level `memory_tool.*` modules" in content
+    assert "read-only diagnostics" in content
+    assert "Targeted Ruff checks" in content
