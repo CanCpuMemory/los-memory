@@ -54,7 +54,7 @@ from .sessions import (
     clear_active_session,
     end_session,
     generate_session_summary,
-    get_active_session,
+    get_bound_active_session,
     get_session,
     get_session_observations,
     list_sessions,
@@ -912,7 +912,7 @@ def _handle_obs_add(conn, args):
     if args.auto_tags and not tags_list:
         tags_list = auto_tags_from_text(title, summary)
 
-    active_session = get_active_session(args.profile)
+    active_session = get_bound_active_session(conn, args.profile, args.db)
     session_id = active_session["session_id"] if active_session else None
 
     obs_id = add_observation(
@@ -1025,10 +1025,10 @@ def _handle_admin_manage(conn, args):
 def _handle_session(conn, args):
     if args.session_action == "start":
         session_id = start_session(conn, args.project, args.working_dir, args.agent_type, args.summary)
-        set_active_session(args.profile, session_id, "")
+        set_active_session(args.profile, session_id, args.db)
         return {"ok": True, "action": "start", "session_id": session_id}
     elif args.session_action == "stop":
-        active = get_active_session(args.profile)
+        active = get_bound_active_session(conn, args.profile, args.db)
         if not active:
             raise ValueError("No active session")
         summary = args.summary or generate_session_summary(conn, active["session_id"])
@@ -1049,10 +1049,10 @@ def _handle_session(conn, args):
         return result
     elif args.session_action == "resume":
         if args.session_id:
-            set_active_session(args.profile, args.session_id, "")
+            set_active_session(args.profile, args.session_id, args.db)
             return {"ok": True, "action": "resume", "session_id": args.session_id}
         else:
-            active = get_active_session(args.profile)
+            active = get_bound_active_session(conn, args.profile, args.db)
             if not active:
                 raise ValueError("No active session")
             return {"ok": True, "action": "resume", "session_id": active["session_id"]}
@@ -1087,7 +1087,7 @@ def _handle_project(conn, args):
 
 def _handle_checkpoint(conn, args):
     if args.checkpoint_action == "create":
-        active_session = get_active_session(args.profile)
+        active_session = get_bound_active_session(conn, args.profile, args.db)
         session_id = active_session["session_id"] if active_session else None
         project = get_active_project(args.profile) or "general"
         checkpoint_id = create_checkpoint(conn, args.name, args.description, args.tag, session_id, project)
@@ -1102,7 +1102,7 @@ def _handle_checkpoint(conn, args):
         observations = get_checkpoint_observations(conn, args.checkpoint_id)
         return {"ok": True, "checkpoint": asdict(checkpoint), "observations": [asdict(o) for o in observations]}
     elif args.checkpoint_action == "resume":
-        result = resume_from_checkpoint(conn, args.checkpoint_id, args.profile)
+        result = resume_from_checkpoint(conn, args.checkpoint_id, args.profile, args.db)
         return {"ok": True, "action": "resume", **result}
 
 
@@ -1167,7 +1167,7 @@ def _handle_obs_capture(conn, args):
     if args.auto_tags and not tags_list:
         tags_list = auto_tags_from_text(title, summary)
 
-    active_session = get_active_session(args.profile)
+    active_session = get_bound_active_session(conn, args.profile, args.db)
     session_id = active_session["session_id"] if active_session else None
 
     obs_id = add_observation(conn, utc_now(), project, args.kind, title, summary,
@@ -1219,7 +1219,7 @@ def _handle_tool_log(conn, args):
     tool_input = _load_json_argument("--input", args.input)
     tool_output = _load_json_argument("--output", args.output)
     project = args.project or get_active_project(args.profile) or "general"
-    active_session = get_active_session(args.profile)
+    active_session = get_bound_active_session(conn, args.profile, args.db)
     session_id = active_session["session_id"] if active_session else None
 
     obs_id = log_tool_call(
@@ -1233,7 +1233,7 @@ def _handle_tool_transition(conn, args):
     transition_input = _load_json_argument("--input", args.input)
     transition_output = _load_json_argument("--output", args.output)
     project = args.project or get_active_project(args.profile) or "general"
-    active_session = get_active_session(args.profile)
+    active_session = get_bound_active_session(conn, args.profile, args.db)
     session_id = active_session["session_id"] if active_session else None
 
     obs_id = log_agent_transition(

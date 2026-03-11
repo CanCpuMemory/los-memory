@@ -11,6 +11,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-python-dev
+        with:
+          python-version: "3.11"
+      - name: Run Ruff
+        run: |
+          ruff check memory_tool tests scripts
+
   docs-command-lint:
     runs-on: ubuntu-latest
     steps:
@@ -56,6 +67,17 @@ jobs:
       - name: Run approval migration e2e
         run: |
           pytest tests/integration/test_approval_migration_e2e.py -m e2e -q
+
+  hub-lite-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-python-dev
+        with:
+          python-version: "3.11"
+      - name: Run hub-lite integration tests
+        run: |
+          pytest tests/integration/test_hub_lite_integration.py -m hub_lite -q
 
   bdd-smoke:
     runs-on: ubuntu-latest

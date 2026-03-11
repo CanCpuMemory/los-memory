@@ -146,6 +146,7 @@ def resume_from_checkpoint(
     conn: sqlite3.Connection,
     checkpoint_id: int,
     profile: str,
+    db_path: str = "",
 ) -> dict:
     """Resume work from a checkpoint."""
     from dataclasses import asdict
@@ -158,7 +159,7 @@ def resume_from_checkpoint(
     set_active_project(profile, checkpoint.project)
 
     if checkpoint.session_id:
-        set_active_session(profile, checkpoint.session_id, "")
+        set_active_session(profile, checkpoint.session_id, db_path)
         session_info = {"session_id": checkpoint.session_id, "resumed": True}
     else:
         session_info = {"session_id": None}

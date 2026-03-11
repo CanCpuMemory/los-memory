@@ -56,6 +56,7 @@ from .sessions import (
     start_session,
     end_session,
     get_active_session,
+    get_bound_active_session,
     set_active_session,
     clear_active_session,
     list_sessions,
@@ -353,7 +354,7 @@ class MemoryClient:
             tags_list = auto_tags_from_text(title, summary)
 
         # Get active session
-        active_session = get_active_session(self.profile)
+        active_session = get_bound_active_session(conn, self.profile, self._resolve_db_path())
         session_id = active_session["session_id"] if active_session else None
 
         obs_id = add_observation(
@@ -672,7 +673,7 @@ class MemoryClient:
             agent_type = self.profile
 
         session_id = start_session(conn, project, working_dir, agent_type, summary)
-        set_active_session(self.profile, session_id, "")
+        set_active_session(self.profile, session_id, self._resolve_db_path())
 
         session = get_session(conn, session_id)
         return SessionData(session)
@@ -691,7 +692,7 @@ class MemoryClient:
         """
         conn = self._ensure_connected()
 
-        active = get_active_session(self.profile)
+        active = get_bound_active_session(conn, self.profile, self._resolve_db_path())
         if not active:
             raise NotFoundError("No active session")
 
@@ -710,7 +711,8 @@ class MemoryClient:
         Returns:
             Active session dict or None
         """
-        return get_active_session(self.profile)
+        conn = self._ensure_connected()
+        return get_bound_active_session(conn, self.profile, self._resolve_db_path())
 
     def list_sessions(
         self,
@@ -829,7 +831,7 @@ class MemoryClient:
         """
         conn = self._ensure_connected()
 
-        active_session = get_active_session(self.profile)
+        active_session = get_bound_active_session(conn, self.profile, self._resolve_db_path())
         session_id = active_session["session_id"] if active_session else None
         project = get_active_project(self.profile) or "general"
 
@@ -883,7 +885,7 @@ class MemoryClient:
             Resume result with restored session info
         """
         conn = self._ensure_connected()
-        return resume_from_checkpoint(conn, checkpoint_id, self.profile)
+        return resume_from_checkpoint(conn, checkpoint_id, self.profile, self._resolve_db_path())
 
     # ========================================================================
     # Feedback Operations
@@ -1037,7 +1039,7 @@ class MemoryClient:
         if project is None:
             project = get_active_project(self.profile) or "general"
 
-        active_session = get_active_session(self.profile)
+        active_session = get_bound_active_session(conn, self.profile, self._resolve_db_path())
         session_id = active_session["session_id"] if active_session else None
 
         obs_id = log_tool_call(
@@ -1082,7 +1084,7 @@ class MemoryClient:
         if project is None:
             project = get_active_project(self.profile) or "general"
 
-        active_session = get_active_session(self.profile)
+        active_session = get_bound_active_session(conn, self.profile, self._resolve_db_path())
         session_id = active_session["session_id"] if active_session else None
 
         obs_id = log_agent_transition(

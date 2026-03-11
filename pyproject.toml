@@ -49,9 +49,9 @@ cli = [
 los-memory = "memory_tool.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/los-memory"
-Repository = "https://github.com/yourusername/los-memory"
-Issues = "https://github.com/yourusername/los-memory/issues"
+Homepage = "https://github.com/CanCpuMemory/los-memory"
+Repository = "https://github.com/CanCpuMemory/los-memory"
+Issues = "https://github.com/CanCpuMemory/los-memory/issues"
 
 [tool.setuptools]
 packages = [

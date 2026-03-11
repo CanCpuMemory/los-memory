@@ -37,6 +37,32 @@ def get_active_session(profile: str) -> Optional[dict]:
         return None
 
 
+def get_bound_active_session(
+    conn: sqlite3.Connection,
+    profile: str,
+    db_path: Optional[str] = None,
+) -> Optional[dict]:
+    """Get the active session only if it belongs to the current database."""
+    active = get_active_session(profile)
+    if not active:
+        return None
+
+    current_db_path = os.path.expanduser(db_path) if db_path else ""
+    stored_db_path = os.path.expanduser(active.get("db_path") or "")
+    if current_db_path and stored_db_path and current_db_path != stored_db_path:
+        return None
+
+    session_id = active.get("session_id")
+    if not session_id:
+        return None
+
+    session = get_session(conn, session_id)
+    if session is None or session.status != "active":
+        return None
+
+    return active
+
+
 def set_active_session(profile: str, session_id: int, db_path: str) -> None:
     """Set the active session in the session file."""
     session_file = get_session_file_path(profile)

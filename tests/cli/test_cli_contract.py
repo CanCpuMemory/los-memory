@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -13,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 CLI_PATH = ROOT / "memory_tool" / "memory_tool.py"
 
 
-def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+def _run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     cmd = [sys.executable, str(CLI_PATH), "--output", "json", *args]
-    return subprocess.run(cmd, capture_output=True, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
 @pytest.mark.contract
@@ -128,6 +129,28 @@ def test_session_stop_without_active_session_returns_standardized_error(tmp_path
     assert payload["ok"] is False
     assert payload["error_code"] == "NF_ACTIVE_SESSION"
     assert payload["help_command"] == "los-memory session start --help"
+
+
+@pytest.mark.contract
+def test_session_stop_ignores_active_session_from_different_db(tmp_path: Path) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    env = dict(os.environ)
+    env["HOME"] = str(home_dir)
+
+    db_one = tmp_path / "one.db"
+    db_two = tmp_path / "two.db"
+
+    assert _run_cli("--db", str(db_one), "init", env=env).returncode == 0
+    assert _run_cli("--db", str(db_one), "session", "start", "--project", "alpha", env=env).returncode == 0
+    assert _run_cli("--db", str(db_two), "init", env=env).returncode == 0
+
+    stop_result = _run_cli("--db", str(db_two), "session", "stop", env=env)
+    assert stop_result.returncode == 5
+
+    payload = json.loads(stop_result.stdout)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "NF_ACTIVE_SESSION"
 
 
 @pytest.mark.contract
