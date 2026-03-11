@@ -1,9 +1,6 @@
 """Unit tests for hub_lite module."""
-import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 

@@ -300,13 +300,13 @@ class CrossRepoReporter:
         report = self.generate_report()
         
         with open(output_path, "w") as f:
-            f.write(f"# Cross-Repo Integration Report\n\n")
+            f.write("# Cross-Repo Integration Report\n\n")
             f.write(f"**Trace ID:** `{report.trace_id}`\n\n")
             f.write(f"**Parent Task:** `{report.parent_task_id}`\n\n")
             f.write(f"**Overall Status:** {report.overall_status.upper()}\n\n")
             f.write(f"**Generated:** {report.timestamp}\n\n")
             
-            f.write(f"## Summary\n\n")
+            f.write("## Summary\n\n")
             f.write(f"- **Total Records:** {report.aggregation['total_records']}\n")
             f.write(f"- **Child Sessions:** {report.aggregation['total_child_sessions']}\n")
             f.write(f"- **Complete:** {report.aggregation['complete_sessions']}\n")
@@ -314,7 +314,7 @@ class CrossRepoReporter:
             f.write(f"- **In Progress:** {report.aggregation['in_progress_sessions']}\n")
             f.write(f"- **Total Blockers:** {report.aggregation['total_blockers']}\n\n")
             
-            f.write(f"## Child Sessions\n\n")
+            f.write("## Child Sessions\n\n")
             for session in report.child_sessions:
                 status_icon = "✅" if session.status == "complete" else "❌" if session.status == "blocked" else "⏳"
                 f.write(f"### {status_icon} {session.repo_name} (`{session.child_task_id}`)\n\n")
@@ -325,16 +325,16 @@ class CrossRepoReporter:
                 f.write(f"- **Result Records:** {session.result_records}\n")
                 
                 if session.blockers:
-                    f.write(f"- **Blockers:**\n")
+                    f.write("- **Blockers:**\n")
                     for blocker in session.blockers:
                         f.write(f"  - {blocker['title']}\n")
                 
-                f.write(f"\n")
+                f.write("\n")
             
-            f.write(f"## Metadata\n\n")
-            f.write(f"```json\n")
+            f.write("## Metadata\n\n")
+            f.write("```json\n")
             f.write(json.dumps(report.metadata, indent=2))
-            f.write(f"\n```\n")
+            f.write("\n```\n")
         
         return output_path
     

@@ -4,8 +4,6 @@ import os
 import subprocess
 import sys
 
-import pytest
-
 
 class TestCLIEntryPoint:
     """Test CLI entry point."""

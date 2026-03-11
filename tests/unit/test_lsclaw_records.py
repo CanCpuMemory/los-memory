@@ -3,11 +3,8 @@ import json
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
@@ -126,7 +123,7 @@ class TestCreateObservation:
         """)
         
         try:
-            result = create_observation(
+            create_observation(
                 conn=conn,
                 title="Test",
                 summary="Test",

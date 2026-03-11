@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -227,7 +226,7 @@ def create_execution_records(dry_run: bool = False) -> list[dict[str, Any]]:
         results = []
         
         # 1. Execution/Progress record
-        print(f"Creating execution/progress record...")
+        print("Creating execution/progress record...")
         progress = create_execution_progress_record(conn, dry_run=dry_run)
         results.append({
             "type": "execution/progress",
@@ -236,7 +235,7 @@ def create_execution_records(dry_run: bool = False) -> list[dict[str, Any]]:
         print(f"  ✓ Execution/progress record: {progress.get('id', 'DRY_RUN')}")
         
         # 2. Verification/Checkpoint record
-        print(f"Creating verification/checkpoint record...")
+        print("Creating verification/checkpoint record...")
         checkpoint_data = {
             "database": "PASS",
             "schema": "PASS",
@@ -253,7 +252,7 @@ def create_execution_records(dry_run: bool = False) -> list[dict[str, Any]]:
         print(f"  ✓ Verification/checkpoint record: {checkpoint.get('id', 'DRY_RUN')}")
         
         # 3. Result/Artifact record
-        print(f"Creating result/artifact record...")
+        print("Creating result/artifact record...")
         result = create_result_artifact_record(conn, acceptance_state="ACCEPTED", dry_run=dry_run)
         results.append({
             "type": "result/artifact",

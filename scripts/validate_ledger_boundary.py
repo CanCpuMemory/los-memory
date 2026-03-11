@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sqlite3
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -354,7 +352,7 @@ def main():
     
     args = parser.parse_args()
     
-    print(f"Validating ledger boundary for los-memory...")
+    print("Validating ledger boundary for los-memory...")
     print(f"  Trace ID: {args.trace_id}")
     print(f"  Parent Task: {args.parent_task_id}")
     print(f"  Child Task: {args.child_task_id}")
@@ -379,15 +377,15 @@ def main():
     # Write human-readable summary
     summary_file = output_dir / f"ledger-boundary-summary-{args.child_task_id}.md"
     with open(summary_file, "w") as f:
-        f.write(f"# Ledger Boundary Validation Report\n\n")
+        f.write("# Ledger Boundary Validation Report\n\n")
         f.write(f"**Repository:** {report.repo_name}\n")
         f.write(f"**Status:** {report.overall_status.upper()}\n")
         f.write(f"**Timestamp:** {report.timestamp}\n\n")
-        f.write(f"## Task Context\n\n")
+        f.write("## Task Context\n\n")
         f.write(f"- **Trace ID:** `{report.trace_id}`\n")
         f.write(f"- **Parent Task:** `{report.parent_task_id}`\n")
         f.write(f"- **Child Task:** `{report.child_task_id}`\n\n")
-        f.write(f"## Validation Checks\n\n")
+        f.write("## Validation Checks\n\n")
         
         for check in report.checks:
             status_icon = "✅" if check.status == "pass" else "⚠️" if check.status == "warn" else "❌"
@@ -395,23 +393,23 @@ def main():
             f.write(f"**Status:** {check.status}\n\n")
             f.write(f"**Message:** {check.message}\n\n")
             if check.details:
-                f.write(f"**Details:**\n\n```json\n")
+                f.write("**Details:**\n\n```json\n")
                 f.write(json.dumps(check.details, indent=2, default=str))
-                f.write(f"\n```\n\n")
+                f.write("\n```\n\n")
         
-        f.write(f"## Test Results\n\n")
+        f.write("## Test Results\n\n")
         f.write(f"- **Tests Ran:** {report.test_results['ran']}\n")
         f.write(f"- **Passed:** {report.test_results['passed']}\n")
         f.write(f"- **Failed:** {report.test_results['failed']}\n")
         f.write(f"- **Errors:** {report.test_results['errors']}\n")
         f.write(f"- **Duration:** {report.test_results['duration_ms']}ms\n\n")
         
-        f.write(f"## Metadata\n\n")
-        f.write(f"```json\n")
+        f.write("## Metadata\n\n")
+        f.write("```json\n")
         f.write(json.dumps(report.metadata, indent=2, default=str))
-        f.write(f"\n```\n")
+        f.write("\n```\n")
     
-    print(f"\nValidation complete!")
+    print("\nValidation complete!")
     print(f"  Overall Status: {report.overall_status.upper()}")
     print(f"  Report: {report_file}")
     print(f"  Summary: {summary_file}")

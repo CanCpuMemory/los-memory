@@ -6,7 +6,6 @@ for the los-memory child session in the hub-lite parent epic.
 """
 from __future__ import annotations
 
-import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,7 +143,7 @@ def main() -> int:
     
     # 4. Generate and write report
     print("4. Generating report...")
-    report = session.generate_report()
+    session.generate_report()
     
     # Write JSON log file
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")

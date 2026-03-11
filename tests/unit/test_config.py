@@ -1,6 +1,5 @@
 """Tests for configuration management."""
 import os
-from pathlib import Path
 
 import pytest
 
@@ -73,7 +72,6 @@ class TestConfigLoader:
 
     def test_env_vars_override_files(self, isolated_env, tmp_path, monkeypatch):
         """Test environment variables override file configs."""
-        from pathlib import Path
         config_dir = tmp_path / ".config" / "los-memory"
         config_dir.mkdir(parents=True)
 

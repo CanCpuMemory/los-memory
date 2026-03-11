@@ -31,8 +31,25 @@ jobs:
             memory_tool/sessions.py \
             memory_tool/client.py \
             memory_tool/checkpoints.py \
+            memory_tool/hub_lite.py \
+            scripts/create_hub_lite_records.py \
+            scripts/create_lsclaw_records.py \
+            scripts/cross_repo_reporter.py \
+            scripts/validate_ledger_boundary.py \
+            scripts/check_docs_cli_commands.py \
             tests/cli/test_cli_contract.py \
-            tests/unit/test_doctor.py
+            tests/cli/test_cli_basic.py \
+            tests/unit/test_doctor.py \
+            tests/unit/test_hub_lite.py \
+            tests/unit/test_hub_lite_record_script.py \
+            tests/unit/test_cross_repo_reporter.py \
+            tests/unit/test_ledger_boundary.py \
+            tests/unit/test_lsclaw_records.py \
+            tests/unit/test_docs_command_lint.py \
+            tests/unit/test_docs_current_state.py \
+            tests/unit/test_docs_layout.py \
+            tests/unit/test_config.py \
+            tests/unit/test_core_compat.py
 
   docs-command-lint:
     runs-on: ubuntu-latest
