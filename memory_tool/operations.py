@@ -227,7 +227,7 @@ def generate_visual_timeline(observations: List["Observation"], group_by: Option
             if session_id:
                 lines.append(f"\n🔷 Session {session_id}")
             else:
-                lines.append(f"\n🔸 No Session")
+                lines.append("\n🔸 No Session")
             lines.append("-" * 40)
             for obs in obs_list:
                 time = obs.timestamp[11:16]
@@ -388,7 +388,7 @@ def run_clean(
     vacuum: bool,
 ) -> dict:
     """Delete old or filtered observations."""
-    from .utils import normalize_tags_list, utc_now
+    from .utils import normalize_tags_list
     if before and older_than_days is not None:
         raise ValueError("Use either --before or --older-than-days, not both")
     filters: List[str] = []

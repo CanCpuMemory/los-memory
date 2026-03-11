@@ -106,7 +106,11 @@ def _parse_correction_content(content: str) -> FeedbackIntent:
             # Try to extract summary if present
             remaining = content[match.end():].strip()
             if remaining:
-                new_summary = remaining.lstrip("summary:").lstrip("内容:").lstrip("正文:").strip()
+                for prefix in ("summary:", "内容:", "正文:"):
+                    if remaining.casefold().startswith(prefix.casefold()):
+                        remaining = remaining[len(prefix):].lstrip()
+                        break
+                new_summary = remaining.strip()
             break
     else:
         # No explicit separation, treat as summary correction

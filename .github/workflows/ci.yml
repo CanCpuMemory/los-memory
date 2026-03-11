@@ -32,6 +32,11 @@ jobs:
             memory_tool/client.py \
             memory_tool/checkpoints.py \
             memory_tool/hub_lite.py \
+            memory_tool/operations.py \
+            memory_tool/analytics.py \
+            memory_tool/projects.py \
+            memory_tool/feedback.py \
+            memory_tool/links.py \
             scripts/create_hub_lite_records.py \
             scripts/create_lsclaw_records.py \
             scripts/cross_repo_reporter.py \

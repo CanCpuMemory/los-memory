@@ -107,8 +107,6 @@ def get_related_observations(
     Returns:
         List of related observation dicts with link info
     """
-    from .operations import normalize_rows
-
     if link_type:
         rows = conn.execute(
             """
