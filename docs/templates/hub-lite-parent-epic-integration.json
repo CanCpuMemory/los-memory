@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Hub-Lite Parent Epic Integration Template",
+  "description": "Template for coordinating multi-repo child sessions via los-memory hub-lite control plane",
+  "version": "1.0.0",
+  "traceId": "trace-parent-epic-20260309000327",
+  "parentTaskId": "epic-20260309000327",
+  "metadata": {
+    "createdAt": "2026-03-09T00:03:27Z",
+    "purpose": "Cross-repo integration with structured record keeping",
+    "controlPlane": "los-memory",
+    "pattern": "hub-lite"
+  },
+  "parentSession": {
+    "description": "Hub-Lite Parent Epic: trace-parent-epic-20260309000327",
+    "requiredTags": [
+      "type:parent-epic",
+      "trace:trace-parent-epic-20260309000327",
+      "task:epic-20260309000327"
+    ],
+    "acceptanceCriteria": [
+      "Parent session created with trace metadata",
+      "All child sessions visible in los-memory with stable ordering",
+      "Linked task metadata recorded for each child",
+      "Artifact counts documented per child",
+      "Each child emitted at least one execution/progress record",
+      "Each child emitted at least one result or blocker record",
+      "Verification commands recorded as checkpoints",
+      "Parent summary records acceptance state, blockers, and next steps"
+    ]
+  },
+  "childSessions": {
+    "description": "Child session definitions for each participating repository",
+    "pattern": {
+      "traceId": "trace-parent-epic-20260309000327",
+      "parentTaskId": "epic-20260309000327",
+      "childTaskId": "{repo-name}-20260309000327",
+      "sessionId": "child-{repo-name}-20260309000327",
+      "targetProjectPath": "{resolved-local-path}",
+      "rules": [
+        "Only edit this repo",
+        "Do not mutate another repo interface directly",
+        "If repo path or frozen contract is unresolved, stop and escalate"
+      ]
+    },
+    "expectedRepos": [
+      {
+        "name": "los-memory",
+        "role": "control-plane",
+        "purpose": "Hub-lite control plane and session aggregation",
+        "acceptanceState": null,
+        "blockers": []
+      },
+      {
+        "name": "lsclaw",
+        "role": "child",
+        "purpose": "Validate law-specific memory patterns",
+        "acceptanceState": null,
+        "blockers": []
+      },
+      {
+        "name": "hapi",
+        "role": "child",
+        "purpose": "Validate API hub integration patterns",
+        "acceptanceState": null,
+        "blockers": []
+      },
+      {
+        "name": "other-repo",
+        "role": "child",
+        "purpose": "Additional repo as needed",
+        "acceptanceState": null,
+        "blockers": []
+      }
+    ]
+  },
+  "recordSchema": {
+    "executionProgress": {
+      "stage": "execution",
+      "kind": "progress",
+      "requiredFields": ["traceId", "parentTaskId", "childTaskId", "sessionId", "summary"],
+      "optionalFields": ["details", "timestamp", "agent"]
+    },
+    "verificationCheckpoint": {
+      "stage": "verification",
+      "kind": "checkpoint",
+      "requiredFields": ["traceId", "parentTaskId", "childTaskId", "sessionId", "summary", "result"],
+      "optionalFields": ["command", "output", "timestamp", "agent"],
+      "resultValues": ["PASS", "FAIL", "SKIP", "WARNING"]
+    },
+    "resultArtifact": {
+      "stage": "result",
+      "kind": "artifact",
+      "requiredFields": ["traceId", "parentTaskId", "childTaskId", "sessionId", "summary", "acceptanceState"],
+      "optionalFields": ["artifactPath", "verificationOutput", "recommendations", "timestamp", "agent"],
+      "acceptanceStates": ["ACCEPTED", "ACCEPTED_WITH_NOTES", "BLOCKED"]
+    },
+    "blockerEscalation": {
+      "stage": "result",
+      "kind": "blocker",
+      "requiredFields": ["traceId", "parentTaskId", "childTaskId", "sessionId", "summary", "acceptanceState", "blockerType", "escalationTarget"],
+      "optionalFields": ["details", "workaround", "timestamp", "agent"],
+      "blockerTypes": ["PATH_UNRESOLVED", "CONTRACT_UNRESOLVED", "DEPENDENCY_MISSING", "PERMISSION_DENIED", "SCHEMA_MISMATCH"]
+    }
+  },
+  "verificationCommands": {
+    "los-memory": [
+      "python3 -c \"from memory_tool import connect_db, run_search; print('OK')\"",
+      "los-memory memory list --limit 5",
+      "los-memory admin doctor --output json"
+    ],
+    "generic": [
+      "python3 -c \"import {module}; print('OK')\"",
+      "ls -la {repo_path}",
+      "git -C {repo_path} status"
+    ]
+  },
+  "artifactPaths": {
+    "manuals": "docs/manuals/hub-lite-parent-epic-first-run.md",
+    "template": "docs/templates/hub-lite-parent-epic-integration.json",
+    "controlPlaneLogs": "control-plane/logs/hub-lite-lsclaw-round1.md",
+    "dispatchLog": "logs/hub-lite-parent-epic-dispatch-20260309000327.json"
+  },
+  "lifecycle": {
+    "stages": [
+      "research",
+      "implementation",
+      "review",
+      "acceptance",
+      "archive"
+    ],
+    "currentStage": "implementation",
+    "nextStage": "review"
+  }
+}
