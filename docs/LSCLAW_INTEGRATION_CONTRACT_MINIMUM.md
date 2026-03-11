@@ -95,7 +95,8 @@
 
 说明：
 
-- `admin doctor` 在 `degraded`/`unhealthy` 时返回 `1`，用于上游触发降级或阻断。
+- `admin doctor` 在 `healthy`/`degraded` 时返回 `0`。
+- `admin doctor` 在 `unhealthy` 时返回 `1`，用于上游阻断或触发故障处理。
 
 ---
 

@@ -874,7 +874,7 @@ memory_tool memory get 99999; echo $?  # 4
 memory_tool observation add --title; echo $?  # 1
 
 # Doctor degraded
-memory_tool admin doctor; echo $?  # 1 (unhealthy)
+memory_tool admin doctor; echo $?  # 0 (degraded)
 
 # Doctor unhealthy
 memory_tool admin doctor; echo $?  # 1 (unhealthy)
