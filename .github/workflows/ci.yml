@@ -13,11 +13,15 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-dev
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - name: Run targeted Ruff checks on maintained surfaces
         run: |
           ruff check \
@@ -42,26 +46,35 @@ jobs:
 
   cli-contract-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-dev
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - name: Run CLI contract tests
         run: |
           pytest tests/cli -m contract -q
 
   unit-and-integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-dev
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - name: Run unit tests
         run: |
           pytest tests/unit -m "not e2e" -q
       - name: Run lsclaw integration smoke
+        if: matrix.python-version == '3.11'
         run: |
           pytest tests/integration/test_lsclaw_smoke.py -q
 
