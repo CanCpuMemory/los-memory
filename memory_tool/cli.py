@@ -22,13 +22,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import sqlite3
 import sys
 import warnings
 from pathlib import Path
 from dataclasses import asdict
 from typing import Optional
 
-# Core imports - using original modules for Phase 1 (to be migrated to core/ in Phase 2)
+# Core imports - top-level modules are the active implementation path
 from .database import connect_db, ensure_fts, ensure_schema, init_db
 from .models import Observation
 from .analytics import get_tool_stats, log_agent_transition, log_tool_call, suggest_tools_for_task
@@ -72,6 +74,28 @@ from .projects import (
     list_projects,
     set_active_project,
 )
+from .config import get_config
+from .errors import (
+    DB_CORRUPTED,
+    DB_LOCKED,
+    DB_NOT_FOUND,
+    DB_READONLY,
+    CFG_INVALID_PROFILE,
+    NF_ACTIVE_SESSION,
+    NF_CHECKPOINT,
+    NF_COMMAND,
+    NF_OBSERVATION,
+    NF_PROJECT,
+    NF_SESSION,
+    SYS_INTERRUPTED,
+    SYS_IO_ERROR,
+    SYS_PYTHON_ERROR,
+    SYS_SQLITE_ERROR,
+    VAL_EMPTY_VALUE,
+    VAL_INVALID_FORMAT,
+    format_error_response,
+)
+from .exit_codes import get_exit_code_for_error
 from .share import run_import, run_share
 from .utils import (
     DEFAULT_LLM_HOOK,
@@ -118,16 +142,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--profile",
         choices=PROFILE_CHOICES,
-        default=DEFAULT_PROFILE,
+        default=argparse.SUPPRESS,
         help="Memory profile to select default DB path",
     )
-    parser.add_argument("--db", default=None, help="Path to SQLite database (overrides --profile)")
+    parser.add_argument("--db", default=argparse.SUPPRESS, help="Path to SQLite database (overrides --profile)")
     parser.add_argument("--human", action="store_true", help="Output in human-readable format")
-    parser.add_argument("--output", "-o", choices=["json", "yaml", "table"], default="json",
-                        help="Output format (default: json)")
-    parser.add_argument("--color", choices=["auto", "always", "never"], default="auto",
+    parser.add_argument("--output-format", "--output", "-o", dest="output_format", choices=["json", "yaml", "table"],
+                        default=argparse.SUPPRESS, help="Output format (default: json)")
+    parser.add_argument("--color", choices=["auto", "always", "never"], default=argparse.SUPPRESS,
                         help="Color output mode")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--verbose", "-v", action="store_true", default=argparse.SUPPRESS, help="Verbose output")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -431,7 +455,33 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Main entry point."""
     args = parse_args()
-    db_path = resolve_db_path(args.profile, args.db)
+    if not hasattr(args, "human"):
+        args.human = False
+
+    try:
+        cli_config_overrides = {}
+        if hasattr(args, "profile"):
+            cli_config_overrides["profile"] = args.profile
+        if hasattr(args, "db"):
+            cli_config_overrides["db_path"] = args.db
+        if hasattr(args, "output_format"):
+            cli_config_overrides["output"] = args.output_format
+        if hasattr(args, "color"):
+            cli_config_overrides["color"] = args.color
+        if hasattr(args, "verbose"):
+            cli_config_overrides["verbose"] = args.verbose
+
+        config = get_config(cli_args=cli_config_overrides, force_reload=True)
+        args.profile = config.profile
+        args.db = config.db_path
+        args.output_format = config.output
+        args.color = config.color
+        args.verbose = config.verbose
+        db_path = resolve_db_path(args.profile, args.db)
+    except ValueError as exc:
+        error_response, exit_code = _build_cli_error(exc)
+        _print_output(args, error_response, "error")
+        return exit_code
 
     # Handle init command (no DB connection needed)
     if args.command == "init":
@@ -461,34 +511,44 @@ def main() -> int:
             conn.close()
 
         # Determine if we should use human-readable output
-        use_human = args.human or args.output == "table"
+        use_human = args.human or args.output_format == "table"
         if use_human:
             # Use doctor-specific human-readable format
             print(format_human_output(response.data))
         else:
-            response.print(format=args.output, human=False)
+            response.print(format=args.output_format, human=False)
         return 0 if response.ok else 1
 
-    # Regular command path - connect_db is imported at module level
-    conn = connect_db(db_path)
-    ensure_schema(conn)
-    ensure_fts(conn)
-
+    # Regular command path - connect and initialize schema within the unified
+    # error-handling block so DB/open failures get standardized error codes.
+    conn = None
     try:
+        conn = connect_db(db_path)
+        ensure_schema(conn)
+        ensure_fts(conn)
         result = _dispatch_command(conn, args)
         if result is not None:
             _print_output(args, result, args.command)
         return 0
     except ValueError as exc:
-        error_response = {"ok": False, "error": str(exc)}
+        error_response, exit_code = _build_cli_error(exc)
         _print_output(args, error_response, "error")
-        return 1
+        return exit_code
+    except KeyboardInterrupt:
+        error_response, exit_code = _build_structured_error(SYS_INTERRUPTED)
+        _print_output(args, error_response, "error")
+        return exit_code
+    except OSError as exc:
+        error_response, exit_code = _build_structured_error(SYS_IO_ERROR, details=str(exc))
+        _print_output(args, error_response, "error")
+        return exit_code
     except Exception as exc:
-        error_response = {"ok": False, "error": f"Unexpected error: {exc}"}
+        error_response, exit_code = _build_runtime_error(exc, db_path)
         _print_output(args, error_response, "error")
-        return 1
+        return exit_code
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _dispatch_command(conn, args) -> dict | None:
@@ -658,10 +718,134 @@ def _get_new_command_name(old_cmd: str) -> str:
     return mapping.get(old_cmd, old_cmd)
 
 
+def _build_structured_error(error_code, **kwargs) -> tuple[dict, int]:
+    """Build a flat, backward-compatible error payload with standardized fields."""
+    payload = format_error_response(error_code, **kwargs)
+    result = {
+        "ok": False,
+        "error": payload["error"]["message"],
+        "error_code": payload["error"]["code"],
+        "suggestion": payload["error"]["suggestion"],
+    }
+    if "help_command" in payload["error"]:
+        result["help_command"] = payload["error"]["help_command"]
+    return result, get_exit_code_for_error(error_code)
+
+
+def _build_cli_error(exc: ValueError) -> tuple[dict, int]:
+    """Map common CLI ValueErrors to standardized error codes."""
+    message = str(exc)
+
+    observation_match = re.match(r"Observation (\d+) not found$", message)
+    if observation_match:
+        return _build_structured_error(NF_OBSERVATION, id=observation_match.group(1))
+
+    session_match = re.match(r"Session (\d+) not found$", message)
+    if session_match:
+        return _build_structured_error(NF_SESSION, id=session_match.group(1))
+
+    if message == "No active session":
+        return _build_structured_error(NF_ACTIVE_SESSION)
+
+    checkpoint_match = re.match(r"Checkpoint (\d+) not found$", message)
+    if checkpoint_match:
+        return _build_structured_error(NF_CHECKPOINT, id=checkpoint_match.group(1))
+
+    project_match = re.match(r"Project '(.+)' not found$", message)
+    if project_match:
+        return _build_structured_error(NF_PROJECT, project=project_match.group(1))
+
+    command_match = re.match(r"Unknown command: (.+)$", message)
+    if command_match:
+        return _build_structured_error(NF_COMMAND, command=command_match.group(1))
+
+    profile_match = re.match(r"Unknown profile '(.+)'\. Expected one of: .+$", message)
+    if profile_match:
+        return _build_structured_error(CFG_INVALID_PROFILE, profile=profile_match.group(1))
+
+    invalid_json_match = re.match(r"Invalid JSON for (.+?): (.+)$", message)
+    if invalid_json_match:
+        return _build_structured_error(
+            VAL_INVALID_FORMAT,
+            param=invalid_json_match.group(1),
+            value=invalid_json_match.group(2),
+        )
+
+    invalid_ids_match = re.match(r"Invalid IDs for (.+?): (.+)$", message)
+    if invalid_ids_match:
+        return _build_structured_error(
+            VAL_INVALID_FORMAT,
+            param=invalid_ids_match.group(1),
+            value=invalid_ids_match.group(2),
+        )
+
+    empty_ids_match = re.match(r"No IDs provided for (.+)$", message)
+    if empty_ids_match:
+        return _build_structured_error(
+            VAL_EMPTY_VALUE,
+            param=empty_ids_match.group(1),
+        )
+
+    if message == "No changes requested. Provide at least one editable field.":
+        return _build_structured_error(
+            VAL_EMPTY_VALUE,
+            param="editable fields",
+        )
+
+    if message == "Use either --before or --older-than-days, not both":
+        return _build_structured_error(
+            VAL_INVALID_FORMAT,
+            param="cleanup filters",
+            value="--before and --older-than-days",
+        )
+
+    if message == "Refusing to clean without filters. Use --all to delete everything.":
+        return _build_structured_error(
+            VAL_EMPTY_VALUE,
+            param="cleanup filters",
+        )
+
+    if message == "review_feedback_file_must_contain_array_or_object":
+        return _build_structured_error(
+            VAL_INVALID_FORMAT,
+            param="--file",
+            value="expected top-level JSON array or object",
+        )
+
+    if message == "review_feedback_items_must_be_array":
+        return _build_structured_error(
+            VAL_INVALID_FORMAT,
+            param="items",
+            value="expected array",
+        )
+
+    return {"ok": False, "error": message}, 1
+
+
+def _build_runtime_error(exc: Exception, db_path: str | None = None) -> tuple[dict, int]:
+    """Map runtime exceptions to structured CLI/database errors."""
+    if isinstance(exc, sqlite3.OperationalError):
+        details = str(exc).lower()
+        if "unable to open database file" in details:
+            return _build_structured_error(DB_NOT_FOUND, path=db_path or "<unknown>")
+        if "readonly" in details:
+            return _build_structured_error(DB_READONLY, path=db_path or "<unknown>")
+        if "locked" in details:
+            return _build_structured_error(DB_LOCKED)
+        if "malformed" in details or "not a database" in details:
+            return _build_structured_error(DB_CORRUPTED)
+        return _build_structured_error(SYS_SQLITE_ERROR, details=str(exc))
+
+    if isinstance(exc, sqlite3.Error):
+        return _build_structured_error(SYS_SQLITE_ERROR, details=str(exc))
+
+    return _build_structured_error(SYS_PYTHON_ERROR, details=str(exc))
+
+
 def _print_output(args, data: dict, command_type: str) -> None:
     """Print output in appropriate format."""
     # Determine output format
-    fmt = args.output
+    fmt = getattr(args, "output_format", "json")
     human = args.human
 
     # Auto-enable human format for TTY if output is auto
@@ -766,7 +950,7 @@ def _handle_memory_timeline(conn, args):
 
 
 def _handle_memory_get(conn, args):
-    ids = parse_ids(args.ids)
+    ids = _parse_ids_argument(args.ids, "ids")
     results = run_get(conn, ids)
     return {"ok": True, "results": [asdict(r) for r in results]}
 
@@ -779,7 +963,7 @@ def _handle_obs_edit(conn, args):
 
 
 def _handle_obs_delete(conn, args):
-    result = run_delete(conn, parse_ids(args.ids), args.dry_run)
+    result = run_delete(conn, _parse_ids_argument(args.ids, "ids"), args.dry_run)
     result["db"] = args.db
     result["profile"] = args.profile
     return result
@@ -802,6 +986,7 @@ def _handle_memory_export(conn, args):
             json.dump([asdict(r) for r in results], output, indent=2)
             if output is sys.stdout:
                 output.write("\n")
+                return None
             else:
                 return {"ok": True, "output": args.output, "count": len(results)}
         else:
@@ -814,12 +999,13 @@ def _handle_memory_export(conn, args):
                 row = asdict(item)
                 row["tags"] = tags_to_json(item.tags)
                 writer.writerow(row)
-            if output is not sys.stdout:
-                return {"ok": True, "output": args.output, "count": len(results)}
+            if output is sys.stdout:
+                return None
+            return {"ok": True, "output": args.output, "count": len(results)}
     finally:
         if output is not sys.stdout:
             output.close()
-    return {"ok": True, "count": len(results)}
+    return None
 
 
 def _handle_memory_clean(conn, args):
@@ -954,7 +1140,7 @@ def _handle_admin_extensions(conn, args):
             "all_extensions": list_extensions(),
         }
 
-    return {"ok": False, "error": f"Unknown action: {action}"}
+    raise ValueError(f"Unknown command: admin extensions {action}")
 
 
 def _handle_obs_capture(conn, args):
@@ -1007,7 +1193,10 @@ def _handle_obs_feedback(conn, args):
 
 
 def _handle_review_apply(conn, args):
-    payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON for {args.file}: {exc.msg}") from exc
     if isinstance(payload, dict):
         items = payload.get("items")
         if items is None:
@@ -1027,10 +1216,8 @@ def _handle_review_apply(conn, args):
 
 
 def _handle_tool_log(conn, args):
-    import json
-
-    tool_input = json.loads(args.input)
-    tool_output = json.loads(args.output)
+    tool_input = _load_json_argument("--input", args.input)
+    tool_output = _load_json_argument("--output", args.output)
     project = args.project or get_active_project(args.profile) or "general"
     active_session = get_active_session(args.profile)
     session_id = active_session["session_id"] if active_session else None
@@ -1043,10 +1230,8 @@ def _handle_tool_log(conn, args):
 
 
 def _handle_tool_transition(conn, args):
-    import json
-
-    transition_input = json.loads(args.input)
-    transition_output = json.loads(args.output)
+    transition_input = _load_json_argument("--input", args.input)
+    transition_output = _load_json_argument("--output", args.output)
     project = args.project or get_active_project(args.profile) or "general"
     active_session = get_active_session(args.profile)
     session_id = active_session["session_id"] if active_session else None
@@ -1150,6 +1335,25 @@ def _handle_obs_unlink_legacy(conn, args):
 def _handle_admin_import_legacy(conn, args):
     """Legacy wrapper for import command."""
     return _handle_admin_import(conn, args)
+
+
+def _load_json_argument(arg_name: str, raw_value: str):
+    """Parse a JSON CLI argument and raise a validation-friendly error."""
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON for {arg_name}: {exc.msg}") from exc
+
+
+def _parse_ids_argument(raw_value: str, param_name: str):
+    """Parse comma-separated IDs and raise validation-friendly errors."""
+    try:
+        ids = parse_ids(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid IDs for {param_name}: {raw_value}") from exc
+    if not ids:
+        raise ValueError(f"No IDs provided for {param_name}")
+    return ids
 
 
 if __name__ == "__main__":

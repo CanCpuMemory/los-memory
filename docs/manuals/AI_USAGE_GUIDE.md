@@ -570,6 +570,6 @@ python3 memory_tool/memory_tool.py --profile claude memory export --format json 
 
 ## See Also
 
-- `GENERAL_MEMORY.md` - General usage guide
-- `CODEX_CLAUDE_INSTALL.md` - Installation and setup
+- `docs/manuals/GENERAL_MEMORY.md` - General usage guide
+- `docs/manuals/CODEX_CLAUDE_INSTALL.md` - Installation and setup
 - `../tests/BDD_TESTING_GUIDE.md` - Testing guide (if contributing)

@@ -76,7 +76,7 @@ los-memory observation edit --id 1 --summary "Hello updated"
 los-memory observation delete 1 --dry-run
 
 # 会话和检查点
-los-memory session start --description "Sprint planning"
+los-memory session start --summary "Sprint planning"
 los-memory checkpoint create --name "before-refactor"
 
 # 管理
@@ -108,13 +108,17 @@ python3 memory_tool/memory_tool.py --profile claude memory export --format csv -
 ```
 
 ## General memory usage guide
-See `docs/GENERAL_MEMORY.md` for practical workflows, cleanup strategy, and management commands.
+See `docs/manuals/GENERAL_MEMORY.md` for practical workflows, cleanup strategy, and management commands.
+
+## Current implemented state
+See `docs/current/CURRENT_STATE.md` for the current implemented command surface, testing notes, and architecture status.
+Historical `memory_tool.core.*` imports are compatibility shims; new development should use the top-level `memory_tool.*` modules.
 
 ## Codex / Claude install and usage
-See `docs/CODEX_CLAUDE_INSTALL.md` for setup and daily usage from each assistant.
+See `docs/manuals/CODEX_CLAUDE_INSTALL.md` for setup and daily usage from each assistant.
 
 ## AI Agent usage guide
-See `docs/AI_USAGE_GUIDE.md` for comprehensive guidance on how AI agents should use this tool effectively, including best practices, workflows, and examples.
+See `docs/manuals/AI_USAGE_GUIDE.md` for comprehensive guidance on how AI agents should use this tool effectively, including best practices, workflows, and examples.
 
 ## Makefile shortcuts
 ```bash

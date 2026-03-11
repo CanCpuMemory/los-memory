@@ -4,11 +4,10 @@
 
 ### Phase 1: Complete Current Test Coverage (Priority: High)
 
-1. **Fix remaining test failures** (9 tests)
-   - Checkpoint step definitions
-   - Project statistics assertions
-   - Auto-tag generation algorithm
-   - Import bundle context initialization
+1. **Keep the suite green**
+   - Fix newly introduced failures immediately
+   - Prefer updating this file only after validating against current `pytest` results
+   - Remove stale roadmap items once they are implemented
 
 2. **Add edge case tests**
    - Empty database operations

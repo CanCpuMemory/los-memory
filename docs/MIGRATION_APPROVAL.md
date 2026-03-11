@@ -1,5 +1,10 @@
 # Approval System Migration Guide
 
+> Status note: this document is a migration policy and timeline for moving
+> approval out of `los-memory`, not the current implementation truth source.
+> For the current implemented state and supported entrypoints, prefer
+> `README.md` and `docs/current/CURRENT_STATE.md`.
+
 **Status**: In Progress
 **Target Completion**: 12 months (2027-03-07)
 **Destination**: VPS Agent Web

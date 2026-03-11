@@ -1,5 +1,8 @@
 # lsclaw × VPS Agent Web × los-memory 对接与持续集成方案
 
+> 状态说明：本文档是 2026-03-08 的对接与 CI 方案，不是当前实现状态真相源。
+> 当前已落地能力与主实现路径请以 `README.md` 和 `docs/current/CURRENT_STATE.md` 为准。
+
 **版本**: 1.0  
 **状态**: 可执行方案  
 **更新时间**: 2026-03-08

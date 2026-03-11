@@ -421,7 +421,14 @@ class TestAdapterConfiguration:
 
     def test_get_effective_mode(self, local_conn):
         """Test effective mode description."""
-        config = MigrationConfig(phase=MigrationPhase.DUAL_WRITE)
+        config = MigrationConfig(
+            phase=MigrationPhase.DUAL_WRITE,
+            vps_agent_web=VPSAgentWebConfig(url="https://test.example.com"),
+            hmac=HMACConfig(
+                legacy_active_secret="legacy-secret",
+                vps_active_secret="vps-secret",
+            ),
+        )
         adapter = ApprovalMigrationAdapter(config, local_conn)
 
         mode = adapter.config.get_effective_mode()

@@ -101,6 +101,36 @@ def test_doctor_returns_degraded_when_fts_missing(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
+def test_session_show_returns_standardized_not_found_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_result = _run_cli("--db", str(db_path), "init")
+    assert init_result.returncode == 0
+
+    missing_result = _run_cli("--db", str(db_path), "session", "show", "999")
+    assert missing_result.returncode == 5
+
+    payload = json.loads(missing_result.stdout)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "NF_SESSION"
+    assert payload["help_command"] == "los-memory session list --help"
+
+
+@pytest.mark.contract
+def test_session_stop_without_active_session_returns_standardized_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_result = _run_cli("--db", str(db_path), "init")
+    assert init_result.returncode == 0
+
+    stop_result = _run_cli("--db", str(db_path), "session", "stop")
+    assert stop_result.returncode == 5
+
+    payload = json.loads(stop_result.stdout)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "NF_ACTIVE_SESSION"
+    assert payload["help_command"] == "los-memory session start --help"
+
+
+@pytest.mark.contract
 def test_transition_and_review_apply_contract_fields(tmp_path: Path) -> None:
     db_path = tmp_path / "memory.db"
     review_path = tmp_path / "review.json"
@@ -166,3 +196,27 @@ def test_transition_and_review_apply_contract_fields(tmp_path: Path) -> None:
     review_payload = json.loads(review_result.stdout)
     assert review_payload["ok"] is True
     assert set(["total", "applied", "failed", "errors", "dry_run"]).issubset(review_payload.keys())
+
+
+@pytest.mark.contract
+def test_review_apply_invalid_shape_returns_validation_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    review_path = tmp_path / "review.json"
+    init_result = _run_cli("--db", str(db_path), "init")
+    assert init_result.returncode == 0
+
+    review_path.write_text('"invalid"', encoding="utf-8")
+
+    review_result = _run_cli(
+        "--db",
+        str(db_path),
+        "review",
+        "apply",
+        "--file",
+        str(review_path),
+    )
+    assert review_result.returncode == 4
+
+    payload = json.loads(review_result.stdout)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "VAL_INVALID_FORMAT"

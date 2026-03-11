@@ -121,6 +121,15 @@ NF_SESSION = ErrorCode(
     exit_code=5,
 )
 
+NF_ACTIVE_SESSION = ErrorCode(
+    code="NF_ACTIVE_SESSION",
+    message="No active session",
+    suggestion="Use 'los-memory session start' to create a session first",
+    help_command="los-memory session start --help",
+    http_status=404,
+    exit_code=5,
+)
+
 NF_CHECKPOINT = ErrorCode(
     code="NF_CHECKPOINT",
     message="Checkpoint {id} not found",
@@ -154,8 +163,8 @@ NF_COMMAND = ErrorCode(
 DB_NOT_FOUND = ErrorCode(
     code="DB_NOT_FOUND",
     message="Database file not found: {path}",
-    suggestion="Run 'los-memory admin init' to create a new database",
-    help_command="los-memory admin init --help",
+    suggestion="Run 'los-memory init' to create a new database",
+    help_command="los-memory init --help",
     http_status=500,
     exit_code=3,
 )
@@ -298,6 +307,7 @@ _ERROR_REGISTRY: dict[str, ErrorCode] = {
     # Not Found
     "NF_OBSERVATION": NF_OBSERVATION,
     "NF_SESSION": NF_SESSION,
+    "NF_ACTIVE_SESSION": NF_ACTIVE_SESSION,
     "NF_CHECKPOINT": NF_CHECKPOINT,
     "NF_PROJECT": NF_PROJECT,
     "NF_COMMAND": NF_COMMAND,
@@ -397,9 +407,10 @@ def format_error_response(
     }
 
     if error_code.help_command:
-        response["error"]["help_command"] = error_code.format_suggestion(
-            **kwargs
-        )
+        try:
+            response["error"]["help_command"] = error_code.help_command.format(**kwargs)
+        except KeyError:
+            response["error"]["help_command"] = error_code.help_command
 
     return response
 
@@ -417,6 +428,7 @@ __all__ = [
     # Not found errors
     "NF_OBSERVATION",
     "NF_SESSION",
+    "NF_ACTIVE_SESSION",
     "NF_CHECKPOINT",
     "NF_PROJECT",
     "NF_COMMAND",

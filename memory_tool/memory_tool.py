@@ -36,7 +36,7 @@ from the old procedural API to the new MemoryClient-based API.
 Breaking Changes in v2.0.0:
 ---------------------------
 - This file no longer re-exports Python functions (connect_db, add_observation, etc.)
-- All procedural functions moved to memory_tool.core.operations
+- Active procedural modules live under the top-level memory_tool package
 - Public API is now available through memory_tool package root only
 """
 from __future__ import annotations

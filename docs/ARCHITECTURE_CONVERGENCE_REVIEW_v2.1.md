@@ -1,5 +1,8 @@
 # los-memory 架构偏差评审与收敛建议 v2.1
 
+> 状态说明：本文档是 2026-03-07 的架构治理评审报告，用于记录当时的收敛建议，不是当前实现状态真相源。
+> 当前已落地能力与主实现路径请以 `README.md` 和 `docs/current/CURRENT_STATE.md` 为准。
+
 **文档类型**: 架构治理评审报告
 **评审日期**: 2026-03-07
 **评审范围**: los-memory 项目实现与 ARCHITECTURE_BOUNDARY_SPEC.md / IMPLEMENTATION_PLAN.md 一致性检查

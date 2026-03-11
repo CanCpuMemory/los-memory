@@ -2,6 +2,10 @@
 
 ## Current Python API Analysis
 
+> Status note: this design document contains forward-looking ideas. The active
+> procedural implementation currently lives in the top-level `memory_tool.*`
+> modules, while `memory_tool.core.*` is retained only as a compatibility shim.
+
 ### Issues with Current API
 
 1. **Inconsistent Return Types**

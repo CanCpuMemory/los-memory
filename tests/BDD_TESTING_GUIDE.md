@@ -30,39 +30,33 @@ tests/
 
 ### Run All BDD Tests
 ```bash
-python3.10 -m pytest tests/test_*_bdd.py -v
+python3 -m pytest tests/test_*_bdd.py -v
 ```
 
 ### Run Specific Feature Tests
 ```bash
-python3.10 -m pytest tests/test_observations_bdd.py -v
-python3.10 -m pytest tests/test_sessions_bdd.py -v
-python3.10 -m pytest tests/test_projects_bdd.py -v
-python3.10 -m pytest tests/test_checkpoints_bdd.py -v
-python3.10 -m pytest tests/test_sharing_bdd.py -v
+python3 -m pytest tests/test_observations_bdd.py -v
+python3 -m pytest tests/test_sessions_bdd.py -v
+python3 -m pytest tests/test_projects_bdd.py -v
+python3 -m pytest tests/test_checkpoints_bdd.py -v
+python3 -m pytest tests/test_sharing_bdd.py -v
 ```
 
 ### Run Single Test
 ```bash
-python3.10 -m pytest tests/test_observations_bdd.py::test_add_a_simple_observation -v
+python3 -m pytest tests/test_observations_bdd.py::test_add_a_simple_observation -v
 ```
 
 ### Run with Coverage
 ```bash
-python3.10 -m pytest tests/test_*_bdd.py --cov=memory_tool --cov-report=html
+python3 -m pytest tests/test_*_bdd.py --cov=memory_tool --cov-report=html
 ```
 
 ## Current Test Status
 
-| Feature | Tests | Status |
-|---------|-------|--------|
-| Observations | 5 | 4 passing, 1 pending |
-| Sessions | 5 | All passing |
-| Projects | 5 | 2 passing, 3 pending |
-| Checkpoints | 4 | Pending fixes |
-| Sharing | 5 | 4 passing, 1 pending |
+BDD coverage and pass counts change over time. Treat CI and local `pytest` results as the source of truth instead of this document.
 
-**Total: 24 tests, 15 passing, 9 pending fixes**
+As of the current test layout, BDD scenarios live under `tests/features/`, step definitions live under `tests/steps/`, and the runnable entrypoints are the `tests/test_*_bdd.py` files.
 
 ## Writing New BDD Tests
 

@@ -546,9 +546,9 @@ config.phase = MigrationPhase.REMOTE_ONLY
 
 完整方案见：
 
-- `docs/LSCLAW_VPS_CI_INTEGRATION_PLAN.md`
-- `docs/LSCLAW_MEMORY_UPGRADE_GUIDE.md`
-- `docs/LSCLAW_PATCH_CHECKLIST.md`
+- `docs/design/LSCLAW_VPS_CI_INTEGRATION_PLAN.md`
+- `docs/manuals/LSCLAW_MEMORY_UPGRADE_GUIDE.md`
+- `docs/manuals/LSCLAW_PATCH_CHECKLIST.md`
 
 ---
 
