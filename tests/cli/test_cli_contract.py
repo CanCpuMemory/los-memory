@@ -31,6 +31,16 @@ def test_doctor_returns_nonzero_when_db_unavailable(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
+def test_doctor_does_not_create_database_side_effect(tmp_path: Path) -> None:
+    db_path = tmp_path / "doctor-probe.db"
+    assert not db_path.exists()
+
+    result = _run_cli("--db", str(db_path), "admin", "doctor")
+    assert result.returncode == 1
+    assert not db_path.exists()
+
+
+@pytest.mark.contract
 def test_search_and_list_contract_fields(tmp_path: Path) -> None:
     db_path = tmp_path / "memory.db"
     init_result = _run_cli("--db", str(db_path), "init")

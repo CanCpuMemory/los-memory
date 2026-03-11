@@ -5,7 +5,6 @@ import json
 import os
 from typing import TYPE_CHECKING, Optional
 
-from .database import ensure_schema
 from .utils import utc_now
 
 if TYPE_CHECKING:

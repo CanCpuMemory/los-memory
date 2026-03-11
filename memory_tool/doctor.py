@@ -13,9 +13,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .output import JSONResponse, ResponseMeta
 from .database import SCHEMA_VERSION
-from .errors import DB_NOT_FOUND, DB_SCHEMA_MISMATCH, CFG_INVALID_PROFILE, format_error_response
+from .output import JSONResponse, ResponseMeta
+
+
+def open_doctor_connection(db_path: str) -> Optional[sqlite3.Connection]:
+    """Open a read-only database connection for diagnostics.
+
+    Doctor checks should not create or mutate database files as a side effect of
+    probing health. When the target file does not exist, return ``None`` and let
+    the regular checks report the missing database state.
+    """
+    if not Path(db_path).exists():
+        return None
+
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 @dataclass
@@ -197,6 +211,9 @@ def check_db_exists(db_path: str) -> Tuple[bool, str, Optional[str]]:
 )
 def check_db_readable(db_path: str) -> Tuple[bool, str, Optional[str]]:
     """Check database is readable."""
+    path = Path(db_path)
+    if not path.exists():
+        return False, f"Database file not found: {db_path}", "Run 'los-memory init' to create database"
     try:
         conn = sqlite3.connect(db_path, timeout=5)
         conn.execute("SELECT 1")
@@ -214,6 +231,9 @@ def check_db_readable(db_path: str) -> Tuple[bool, str, Optional[str]]:
 )
 def check_db_writable(db_path: str) -> Tuple[bool, str, Optional[str]]:
     """Check database is writable."""
+    path = Path(db_path)
+    if not path.exists():
+        return False, f"Database file not found: {db_path}", "Run 'los-memory init' to create database"
     try:
         conn = sqlite3.connect(db_path, timeout=5)
         conn.execute("BEGIN IMMEDIATE")
@@ -569,7 +589,18 @@ def doctor_command(
     Returns:
         JSONResponse with doctor report
     """
-    report = run_all_checks(db_path, profile, conn, fix)
+    opened_conn: Optional[sqlite3.Connection] = None
+    if conn is None:
+        try:
+            opened_conn = open_doctor_connection(db_path)
+        except sqlite3.Error:
+            opened_conn = None
+
+    active_conn = conn or opened_conn
+    report = run_all_checks(db_path, profile, active_conn, fix)
+
+    if opened_conn is not None:
+        opened_conn.close()
 
     return JSONResponse(
         ok=report["ok"],
@@ -584,6 +615,7 @@ __all__ = [
     "register_check",
     "get_all_checks",
     "run_all_checks",
+    "open_doctor_connection",
     "doctor_command",
     "format_human_output",
 ]

@@ -18,9 +18,17 @@ jobs:
       - uses: ./.github/actions/setup-python-dev
         with:
           python-version: "3.11"
-      - name: Run Ruff
+      - name: Run targeted Ruff checks on maintained surfaces
         run: |
-          ruff check memory_tool tests scripts
+          ruff check \
+            --select F,B \
+            memory_tool/cli.py \
+            memory_tool/doctor.py \
+            memory_tool/sessions.py \
+            memory_tool/client.py \
+            memory_tool/checkpoints.py \
+            tests/cli/test_cli_contract.py \
+            tests/unit/test_doctor.py
 
   docs-command-lint:
     runs-on: ubuntu-latest

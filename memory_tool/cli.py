@@ -26,13 +26,11 @@ import re
 import sqlite3
 import sys
 import warnings
-from pathlib import Path
 from dataclasses import asdict
-from typing import Optional
+from pathlib import Path
 
 # Core imports - top-level modules are the active implementation path
 from .database import connect_db, ensure_fts, ensure_schema, init_db
-from .models import Observation
 from .analytics import get_tool_stats, log_agent_transition, log_tool_call, suggest_tools_for_task
 from .feedback import apply_feedback, get_feedback_history
 from .review_feedback import apply_review_feedback
@@ -115,8 +113,6 @@ from .utils import (
 from .extensions import (
     dispatch_extension_command,
     get_disabled_extensions,
-    get_extension_help_text,
-    is_extension_enabled,
     list_extensions,
     register_extensions,
 )
@@ -158,7 +154,7 @@ def parse_args() -> argparse.Namespace:
     # ========================================================================
     # init
     # ========================================================================
-    init_parser = subparsers.add_parser("init", help="Initialize the database")
+    subparsers.add_parser("init", help="Initialize the database")
 
     # ========================================================================
     # memory - Data access commands
@@ -491,13 +487,11 @@ def main() -> int:
 
     # Handle doctor command with special output formatting
     if args.command == "admin" and getattr(args, "admin_action", None) == "doctor":
-        from .doctor import doctor_command, format_human_output
-        import sqlite3
+        from .doctor import doctor_command, format_human_output, open_doctor_connection
 
-        # Check if we can connect to database
         conn = None
         try:
-            conn = connect_db(db_path)
+            conn = open_doctor_connection(db_path)
         except sqlite3.Error:
             pass  # Will be reported in doctor report
 

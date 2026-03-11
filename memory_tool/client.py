@@ -37,11 +37,10 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
-from .database import connect_db, ensure_fts, ensure_schema, init_db
-from .models import Observation, Session, Checkpoint
+from .database import connect_db, ensure_fts, ensure_schema
+from .models import Observation, Session
 from .operations import (
     add_observation,
     run_search,
@@ -55,7 +54,6 @@ from .operations import (
 from .sessions import (
     start_session,
     end_session,
-    get_active_session,
     get_bound_active_session,
     set_active_session,
     clear_active_session,
@@ -66,6 +64,7 @@ from .sessions import (
 )
 from .checkpoints import (
     create_checkpoint,
+    get_checkpoint_observations,
     list_checkpoints,
     get_checkpoint,
     resume_from_checkpoint,
@@ -86,7 +85,6 @@ from .feedback import apply_feedback, get_feedback_history
 from .links import create_link, delete_link, get_related_observations, find_similar_observations
 from .utils import (
     resolve_db_path,
-    normalize_tags_list,
     tags_to_json,
     tags_to_text,
     utc_now,
@@ -274,7 +272,7 @@ class MemoryClient:
             ensure_fts(self._conn)
             return self
         except sqlite3.Error as e:
-            raise ConnectionError(f"Failed to connect to database: {e}")
+            raise ConnectionError(f"Failed to connect to database: {e}") from e
 
     def close(self) -> None:
         """Close the database connection."""

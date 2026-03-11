@@ -9,19 +9,13 @@ Based on IMPLEMENTATION_PLAN.md Section 5.3 - Doctor Command Tests.
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Generator
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 # Import doctor module components
 from memory_tool.doctor import (
     Check,
-    CheckResult,
     doctor_command,
     format_human_output,
     get_all_checks,
@@ -477,6 +471,20 @@ class TestDoctorCommand:
         assert "data" in result
         assert "meta" in result
         assert "timestamp" in result["meta"]
+
+    def test_doctor_command_does_not_create_missing_database(self, tmp_path: Path) -> None:
+        """Verify doctor_command itself does not create a missing database file."""
+        db_path = tmp_path / "missing.db"
+
+        response = doctor_command(
+            db_path=str(db_path),
+            profile="claude",
+            conn=None,
+            fix=False,
+        )
+
+        assert response.ok is False
+        assert not db_path.exists()
 
 
 class TestDoctorExitCodes:
