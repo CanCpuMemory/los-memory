@@ -1152,6 +1152,11 @@ def _ensure_approval_request_status_guards(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_approval_audit_status_guards(conn: sqlite3.Connection) -> None:
+    _ensure_approval_audit_previous_status_guards(conn)
+    _ensure_approval_audit_new_status_guards(conn)
+
+
+def _ensure_approval_audit_previous_status_guards(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TRIGGER IF NOT EXISTS trg_approval_audit_prev_status_insert_guard
@@ -1178,6 +1183,9 @@ def _ensure_approval_audit_status_guards(conn: sqlite3.Connection) -> None:
         END
         """
     )
+
+
+def _ensure_approval_audit_new_status_guards(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TRIGGER IF NOT EXISTS trg_approval_audit_new_status_insert_guard
@@ -1219,6 +1227,11 @@ def _ensure_non_status_enum_guard_triggers(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_incident_non_status_guards(conn: sqlite3.Connection) -> None:
+    _ensure_incident_type_guards(conn)
+    _ensure_incident_severity_guards(conn)
+
+
+def _ensure_incident_type_guards(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TRIGGER IF NOT EXISTS trg_incidents_type_insert_guard
@@ -1245,6 +1258,9 @@ def _ensure_incident_non_status_guards(conn: sqlite3.Connection) -> None:
         END
         """
     )
+
+
+def _ensure_incident_severity_guards(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TRIGGER IF NOT EXISTS trg_incidents_severity_insert_guard
