@@ -93,6 +93,14 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Ensure database schema is up to date."""
+    _ensure_observations_table(conn)
+    _ensure_sessions_table(conn)
+    _ensure_checkpoints_table(conn)
+    migrate_schema(conn)
+    conn.commit()
+
+
+def _ensure_observations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS observations (
@@ -110,6 +118,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _ensure_sessions_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (
@@ -124,6 +135,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _ensure_checkpoints_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS checkpoints (
@@ -138,8 +152,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    migrate_schema(conn)
-    conn.commit()
 
 
 def migrate_schema(conn: sqlite3.Connection) -> None:
