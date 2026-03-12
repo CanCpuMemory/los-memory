@@ -98,6 +98,92 @@ class ApprovalMigrationAdapter:
                 "Use VPS Agent Web directly: https://vps-agent-web.example.com"
             )
 
+    def _require_local_api(self) -> ApprovalAPI:
+        if not self._local_api:
+            raise RuntimeError("Local API not configured")
+        return self._local_api
+
+    def _require_remote_client(self) -> VPSAgentWebClient:
+        if not self._remote_client:
+            raise RuntimeError("Remote client not configured")
+        return self._remote_client
+
+    def _require_dual_write_manager(self) -> DualWriteManager:
+        if not self._dual_write:
+            raise RuntimeError("Dual-write manager not initialized")
+        return self._dual_write
+
+    def _prepare_remote_hmac_headers(
+        self,
+        hmac_headers: Optional[Dict[str, str]],
+        payload: Dict[str, Any],
+    ) -> Optional[Dict[str, str]]:
+        remote_headers = hmac_headers
+        if (
+            hmac_headers
+            and self._hmac_bridge
+            and self.config.phase == MigrationPhase.DUAL_WRITE
+        ):
+            # In dual-write mode we verify local signature and re-sign outbound.
+            remote_headers = self._hmac_bridge.verify_and_resign(
+                hmac_headers, payload=payload
+            )
+        return remote_headers
+
+    def _handle_decision_request(
+        self,
+        action: str,
+        job_id: str,
+        actor_id: str,
+        version: int,
+        hmac_headers: Optional[Dict[str, str]],
+        reason: Optional[str],
+    ) -> Dict[str, Any]:
+        method_name = f"{action}_request"
+        remote_headers = self._prepare_remote_hmac_headers(
+            hmac_headers=hmac_headers,
+            payload={
+                "job_id": job_id,
+                "action": action,
+                "actor_id": actor_id,
+                "version": version,
+                "reason": reason or "",
+            },
+        )
+
+        if self.config.phase == MigrationPhase.LOCAL_ONLY:
+            local_api = self._require_local_api()
+            local_method = getattr(local_api, method_name)
+            return local_method(
+                job_id=job_id,
+                actor_id=actor_id,
+                version=version,
+                reason=reason,
+                hmac_headers=hmac_headers,
+            )
+
+        if self.config.phase == MigrationPhase.DUAL_WRITE:
+            dual_write = self._require_dual_write_manager()
+            dual_method = getattr(dual_write, method_name)
+            result = dual_method(
+                job_id=job_id,
+                actor_id=actor_id,
+                version=version,
+                hmac_headers=remote_headers,
+                reason=reason,
+            )
+            return self._format_dual_write_result(result)
+
+        remote_client = self._require_remote_client()
+        remote_method = getattr(remote_client, method_name)
+        return remote_method(
+            job_id=job_id,
+            actor_id=actor_id,
+            version=version,
+            hmac_headers=remote_headers,
+            reason=reason,
+        )
+
     def create_request(
         self,
         job_id: str,
@@ -124,9 +210,8 @@ class ApprovalMigrationAdapter:
         self._emit_deprecation_warning()
 
         if self.config.phase == MigrationPhase.LOCAL_ONLY:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.create_request(
+            local_api = self._require_local_api()
+            return local_api.create_request(
                 job_id=job_id,
                 command=command,
                 risk_level=risk_level,
@@ -135,9 +220,8 @@ class ApprovalMigrationAdapter:
             )
 
         elif self.config.phase == MigrationPhase.DUAL_WRITE:
-            if not self._dual_write:
-                raise RuntimeError("Dual-write manager not initialized")
-            result = self._dual_write.create_request(
+            dual_write = self._require_dual_write_manager()
+            result = dual_write.create_request(
                 job_id=job_id,
                 command=command,
                 risk_level=risk_level,
@@ -147,9 +231,8 @@ class ApprovalMigrationAdapter:
             return self._format_dual_write_result(result)
 
         else:  # REMOTE_ONLY
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
-            return self._remote_client.create_request(
+            remote_client = self._require_remote_client()
+            return remote_client.create_request(
                 job_id=job_id,
                 command=command,
                 risk_level=risk_level,
@@ -179,56 +262,14 @@ class ApprovalMigrationAdapter:
         """
         self._ensure_not_removed()
         self._emit_deprecation_warning()
-
-        # Process HMAC headers if present
-        remote_headers = hmac_headers
-        if hmac_headers and self._hmac_bridge:
-            if self.config.phase == MigrationPhase.DUAL_WRITE:
-                # Verify local, re-sign for remote
-                remote_headers = self._hmac_bridge.verify_and_resign(
-                    hmac_headers,
-                    payload={
-                        "job_id": job_id,
-                        "action": "approve",
-                        "actor_id": actor_id,
-                        "version": version,
-                        "reason": reason or "",
-                    },
-                )
-
-        if self.config.phase == MigrationPhase.LOCAL_ONLY:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.approve_request(
-                job_id=job_id,
-                actor_id=actor_id,
-                version=version,
-                reason=reason,
-                hmac_headers=hmac_headers,
-            )
-
-        elif self.config.phase == MigrationPhase.DUAL_WRITE:
-            if not self._dual_write:
-                raise RuntimeError("Dual-write manager not initialized")
-            result = self._dual_write.approve_request(
-                job_id=job_id,
-                actor_id=actor_id,
-                version=version,
-                hmac_headers=remote_headers,
-                reason=reason,
-            )
-            return self._format_dual_write_result(result)
-
-        else:  # REMOTE_ONLY
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
-            return self._remote_client.approve_request(
-                job_id=job_id,
-                actor_id=actor_id,
-                version=version,
-                hmac_headers=remote_headers,
-                reason=reason,
-            )
+        return self._handle_decision_request(
+            action="approve",
+            job_id=job_id,
+            actor_id=actor_id,
+            version=version,
+            hmac_headers=hmac_headers,
+            reason=reason,
+        )
 
     def reject_request(
         self,
@@ -252,55 +293,14 @@ class ApprovalMigrationAdapter:
         """
         self._ensure_not_removed()
         self._emit_deprecation_warning()
-
-        # Process HMAC headers if present
-        remote_headers = hmac_headers
-        if hmac_headers and self._hmac_bridge:
-            if self.config.phase == MigrationPhase.DUAL_WRITE:
-                remote_headers = self._hmac_bridge.verify_and_resign(
-                    hmac_headers,
-                    payload={
-                        "job_id": job_id,
-                        "action": "reject",
-                        "actor_id": actor_id,
-                        "version": version,
-                        "reason": reason or "",
-                    },
-                )
-
-        if self.config.phase == MigrationPhase.LOCAL_ONLY:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.reject_request(
-                job_id=job_id,
-                actor_id=actor_id,
-                version=version,
-                reason=reason,
-                hmac_headers=hmac_headers,
-            )
-
-        elif self.config.phase == MigrationPhase.DUAL_WRITE:
-            if not self._dual_write:
-                raise RuntimeError("Dual-write manager not initialized")
-            result = self._dual_write.reject_request(
-                job_id=job_id,
-                actor_id=actor_id,
-                version=version,
-                hmac_headers=remote_headers,
-                reason=reason,
-            )
-            return self._format_dual_write_result(result)
-
-        else:  # REMOTE_ONLY
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
-            return self._remote_client.reject_request(
-                job_id=job_id,
-                actor_id=actor_id,
-                version=version,
-                hmac_headers=remote_headers,
-                reason=reason,
-            )
+        return self._handle_decision_request(
+            action="reject",
+            job_id=job_id,
+            actor_id=actor_id,
+            version=version,
+            hmac_headers=hmac_headers,
+            reason=reason,
+        )
 
     def get_request_status(self, job_id: str) -> Dict[str, Any]:
         """Get request status.
@@ -314,14 +314,12 @@ class ApprovalMigrationAdapter:
         self._ensure_not_removed()
 
         if self.config.phase == MigrationPhase.REMOTE_ONLY:
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
-            return self._remote_client.get_request_status(job_id)
+            remote_client = self._require_remote_client()
+            return remote_client.get_request_status(job_id)
         else:
             # For LOCAL_ONLY and DUAL_WRITE, prefer local
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.get_request_status(job_id)
+            local_api = self._require_local_api()
+            return local_api.get_request_status(job_id)
 
     def list_pending_requests(self, limit: int = 100) -> Dict[str, Any]:
         """List pending approval requests.
@@ -335,13 +333,11 @@ class ApprovalMigrationAdapter:
         self._ensure_not_removed()
 
         if self.config.phase == MigrationPhase.REMOTE_ONLY:
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
-            return self._remote_client.list_pending(limit=limit)
+            remote_client = self._require_remote_client()
+            return remote_client.list_pending(limit=limit)
         else:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.list_pending_requests(limit=limit)
+            local_api = self._require_local_api()
+            return local_api.list_pending_requests(limit=limit)
 
     def list_requests(
         self,
@@ -376,13 +372,11 @@ class ApprovalMigrationAdapter:
         self._ensure_not_removed()
 
         if self.config.phase == MigrationPhase.REMOTE_ONLY:
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
-            return self._remote_client.list_requests(status=status, limit=limit)
+            remote_client = self._require_remote_client()
+            return remote_client.list_requests(status=status, limit=limit)
         else:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.list_all_requests(status=status, limit=limit)
+            local_api = self._require_local_api()
+            return local_api.list_all_requests(status=status, limit=limit)
 
     def get_audit_log(self, job_id: str) -> Dict[str, Any]:
         """Get audit log for a job.
@@ -396,13 +390,11 @@ class ApprovalMigrationAdapter:
         self._ensure_not_removed()
 
         if self.config.phase == MigrationPhase.REMOTE_ONLY:
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
-            return self._remote_client.get_audit_log(job_id)
+            remote_client = self._require_remote_client()
+            return remote_client.get_audit_log(job_id)
         else:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.get_audit_log(job_id)
+            local_api = self._require_local_api()
+            return local_api.get_audit_log(job_id)
 
     def run_auto_reject(self) -> Dict[str, Any]:
         """Run auto-reject scheduler.
@@ -416,9 +408,8 @@ class ApprovalMigrationAdapter:
             # Auto-reject runs on VPS Agent Web side
             return {"success": True, "note": "Auto-reject runs on VPS Agent Web"}
         else:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.run_auto_reject()
+            local_api = self._require_local_api()
+            return local_api.run_auto_reject()
 
     def get_event_stream(
         self,
@@ -443,8 +434,7 @@ class ApprovalMigrationAdapter:
 
         if self.config.phase == MigrationPhase.REMOTE_ONLY:
             # Use SSE proxy for full event streaming
-            if not self._remote_client:
-                raise RuntimeError("Remote client not configured")
+            remote_client = self._require_remote_client()
 
             # Initialize SSE proxy if needed
             if not hasattr(self, "_sse_proxy") or self._sse_proxy is None:
@@ -452,7 +442,7 @@ class ApprovalMigrationAdapter:
 
                 self._sse_proxy = SSEProxy(
                     config=self.config.sse,
-                    vps_client=self._remote_client,
+                    vps_client=remote_client,
                 )
                 self._sse_proxy.start()
 
@@ -469,9 +459,8 @@ class ApprovalMigrationAdapter:
 
         else:
             # Use local event stream
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            yield from self._local_api.get_event_stream(last_event_id)
+            local_api = self._require_local_api()
+            yield from local_api.get_event_stream(last_event_id)
 
     def get_event_history(
         self,
@@ -497,9 +486,8 @@ class ApprovalMigrationAdapter:
                 "events": [],
             }
         else:
-            if not self._local_api:
-                raise RuntimeError("Local API not configured")
-            return self._local_api.get_event_history(job_id=job_id, limit=limit)
+            local_api = self._require_local_api()
+            return local_api.get_event_history(job_id=job_id, limit=limit)
 
     def health_check(self) -> Dict[str, Any]:
         """Check health of all configured backends.

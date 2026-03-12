@@ -23,6 +23,10 @@ This document records the current, implemented state of `los-memory`.
 - New development should target the top-level `memory_tool.*` modules rather than `memory_tool.core.*`
 - Active session state is now bound to the current database path, so profile-level session files do not leak session state across different SQLite databases
 - `admin doctor` performs read-only diagnostics and does not create a missing database file as a side effect of health checks
+- `Observation` records now persist structured `metadata`, and `observation add/edit`, `memory get`, and `memory export` preserve that metadata round-trip
+- `Feedback` records now also persist structured `metadata`, and both `observation feedback` and `review apply` propagate it into feedback history
+- `--profile` is a storage-partition selector only; tenant/user/request/trace identity belongs in structured metadata rather than profile naming
+- The current stable smoke contract for upstream runtime verification is `review apply --file ... --dry-run` plus `admin manage stats`
 
 ## Current Testing Notes
 
@@ -33,4 +37,6 @@ This document records the current, implemented state of `los-memory`.
 ## Current Documentation Rule
 
 - Use this file and `README.md` for current behavior
+- Use `docs/manuals/VPSAGENTWEB_WRITEBACK_CONTRACT.md` for the current controlled writeback contract
+- Use `TODO.md` for the live follow-up list and deferred scope
 - Treat implementation plans, architecture reviews, child-session notes, and reports as historical or planning material unless they explicitly say they are current

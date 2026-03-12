@@ -19,6 +19,15 @@ def _run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.Comple
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
+def _run_cli_with_input(
+    *args: str,
+    stdin: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    cmd = [sys.executable, str(CLI_PATH), "--output", "json", *args]
+    return subprocess.run(cmd, input=stdin, capture_output=True, text=True, env=env)
+
+
 @pytest.mark.contract
 def test_doctor_returns_nonzero_when_db_unavailable(tmp_path: Path) -> None:
     db_path = tmp_path / "missing" / "memory.db"
@@ -90,6 +99,300 @@ def test_search_and_list_contract_fields(tmp_path: Path) -> None:
     list_payload = json.loads(list_result.stdout)
     assert list_payload["ok"] is True
     assert isinstance(list_payload["results"], list)
+
+
+@pytest.mark.contract
+def test_legacy_flat_commands_preserve_tag_scoped_contract(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_result = _run_cli("--db", str(db_path), "init")
+    assert init_result.returncode == 0
+
+    add_result = _run_cli(
+        "--db",
+        str(db_path),
+        "add",
+        "--project",
+        "lsclaw",
+        "--kind",
+        "decision",
+        "--title",
+        "Scoped contract baseline",
+        "--summary",
+        "legacy adapter path",
+        "--tags",
+        "tenant:t1,user:u1",
+    )
+    assert add_result.returncode == 0
+    add_payload = json.loads(add_result.stdout)
+    assert add_payload["ok"] is True
+
+    other_add_result = _run_cli(
+        "--db",
+        str(db_path),
+        "add",
+        "--project",
+        "lsclaw",
+        "--kind",
+        "decision",
+        "--title",
+        "Other tenant baseline",
+        "--summary",
+        "legacy adapter path",
+        "--tags",
+        "tenant:t2,user:u2",
+    )
+    assert other_add_result.returncode == 0
+
+    search_result = _run_cli(
+        "--db",
+        str(db_path),
+        "search",
+        "legacy",
+        "--require-tags",
+        "tenant:t1,user:u1",
+    )
+    assert search_result.returncode == 0
+    search_payload = json.loads(search_result.stdout)
+    assert search_payload["ok"] is True
+    assert len(search_payload["results"]) == 1
+    assert search_payload["results"][0]["title"] == "Scoped contract baseline"
+
+    list_result = _run_cli(
+        "--db",
+        str(db_path),
+        "list",
+        "--require-tags",
+        "tenant:t1,user:u1",
+    )
+    assert list_result.returncode == 0
+    list_payload = json.loads(list_result.stdout)
+    assert list_payload["ok"] is True
+    assert len(list_payload["results"]) == 1
+    assert list_payload["results"][0]["title"] == "Scoped contract baseline"
+
+
+@pytest.mark.contract
+def test_observation_metadata_round_trip_and_edit_contract(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    assert _run_cli("--db", str(db_path), "init").returncode == 0
+
+    metadata = {
+        "tenant_id": "tenant-a",
+        "project_id": "proj-42",
+        "actor_id": "agent-7",
+        "user_id": "user-9",
+        "role": "reviewer",
+        "trace_id": "trace-123",
+        "request_id": "req-456",
+        "session_id": "external-session-1",
+        "idempotency_key": "idem-1",
+        "job_id": "job-88",
+        "approval_id": "approval-3",
+        "event_type": "memory.write",
+        "source": "vps-agent-web",
+    }
+    add_result = _run_cli(
+        "--db",
+        str(db_path),
+        "--profile",
+        "shared",
+        "observation",
+        "add",
+        "--project",
+        "lsclaw",
+        "--kind",
+        "decision",
+        "--title",
+        "Metadata contract baseline",
+        "--summary",
+        "round trip metadata",
+        "--metadata",
+        json.dumps(metadata, ensure_ascii=False),
+    )
+    assert add_result.returncode == 0
+    add_payload = json.loads(add_result.stdout)
+    assert add_payload["ok"] is True
+    assert add_payload["profile"] == "shared"
+    assert add_payload["metadata"] == metadata
+    obs_id = add_payload["id"]
+
+    get_result = _run_cli("--db", str(db_path), "memory", "get", str(obs_id))
+    assert get_result.returncode == 0
+    get_payload = json.loads(get_result.stdout)
+    assert get_payload["results"][0]["metadata"] == metadata
+
+    edited_metadata = {
+        **metadata,
+        "event_type": "memory.corrected",
+        "trace_id": "trace-999",
+    }
+    edit_result = _run_cli(
+        "--db",
+        str(db_path),
+        "observation",
+        "edit",
+        "--id",
+        str(obs_id),
+        "--metadata",
+        json.dumps(edited_metadata, ensure_ascii=False),
+    )
+    assert edit_result.returncode == 0
+    edit_payload = json.loads(edit_result.stdout)
+    assert edit_payload["updated"]["metadata"] == edited_metadata
+
+    get_after_edit = _run_cli("--db", str(db_path), "memory", "get", str(obs_id))
+    assert get_after_edit.returncode == 0
+    get_after_edit_payload = json.loads(get_after_edit.stdout)
+    assert get_after_edit_payload["results"][0]["metadata"] == edited_metadata
+
+
+@pytest.mark.contract
+def test_observation_add_accepts_metadata_from_stdin(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    assert _run_cli("--db", str(db_path), "init").returncode == 0
+
+    stdin_metadata = {
+        "tenant_id": "tenant-stdin",
+        "trace_id": "trace-stdin",
+        "source": "vps-agent-web",
+    }
+    add_result = _run_cli_with_input(
+        "--db",
+        str(db_path),
+        "observation",
+        "add",
+        "--title",
+        "Metadata from stdin",
+        "--summary",
+        "stdin path",
+        "--metadata",
+        "@-",
+        stdin=json.dumps(stdin_metadata, ensure_ascii=False),
+    )
+    assert add_result.returncode == 0
+    obs_id = json.loads(add_result.stdout)["id"]
+
+    get_result = _run_cli("--db", str(db_path), "memory", "get", str(obs_id))
+    assert get_result.returncode == 0
+    get_payload = json.loads(get_result.stdout)
+    assert get_payload["results"][0]["metadata"] == stdin_metadata
+
+
+@pytest.mark.contract
+def test_observation_feedback_metadata_round_trip(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    assert _run_cli("--db", str(db_path), "init").returncode == 0
+
+    add_result = _run_cli(
+        "--db",
+        str(db_path),
+        "observation",
+        "add",
+        "--title",
+        "Feedback target",
+        "--summary",
+        "Original value",
+    )
+    obs_id = json.loads(add_result.stdout)["id"]
+
+    feedback_metadata = {
+        "trace_id": "trace-feedback-1",
+        "request_id": "req-feedback-1",
+        "approval_id": "approval-1",
+        "source": "vps-agent-web",
+    }
+    feedback_result = _run_cli(
+        "--db",
+        str(db_path),
+        "observation",
+        "feedback",
+        "--id",
+        str(obs_id),
+        "--metadata",
+        json.dumps(feedback_metadata, ensure_ascii=False),
+        "修正: Updated value",
+    )
+    assert feedback_result.returncode == 0
+    feedback_payload = json.loads(feedback_result.stdout)
+    assert feedback_payload["metadata"] == feedback_metadata
+
+    history_result = _run_cli(
+        "--db",
+        str(db_path),
+        "observation",
+        "feedback",
+        "--id",
+        str(obs_id),
+        "--history",
+        "history",
+    )
+    assert history_result.returncode == 0
+    history_payload = json.loads(history_result.stdout)
+    assert history_payload["history"][0]["metadata"] == feedback_metadata
+
+
+@pytest.mark.contract
+def test_review_apply_propagates_feedback_metadata(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    review_path = tmp_path / "review.json"
+    assert _run_cli("--db", str(db_path), "init").returncode == 0
+
+    add_result = _run_cli(
+        "--db",
+        str(db_path),
+        "observation",
+        "add",
+        "--title",
+        "Review feedback target",
+        "--summary",
+        "Pending review",
+    )
+    obs_id = json.loads(add_result.stdout)["id"]
+
+    review_metadata = {
+        "trace_id": "trace-review-1",
+        "job_id": "job-review-1",
+        "source": "vps-agent-web",
+    }
+    review_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "observation_id": obs_id,
+                        "feedback": "补充: Reviewed note",
+                        "metadata": review_metadata,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    review_result = _run_cli(
+        "--db",
+        str(db_path),
+        "review",
+        "apply",
+        "--file",
+        str(review_path),
+    )
+    assert review_result.returncode == 0
+    review_payload = json.loads(review_result.stdout)
+    assert review_payload["results"][0]["metadata"] == review_metadata
+
+    history_result = _run_cli(
+        "--db",
+        str(db_path),
+        "observation",
+        "feedback",
+        "--id",
+        str(obs_id),
+        "--history",
+        "history",
+    )
+    assert history_result.returncode == 0
+    history_payload = json.loads(history_result.stdout)
+    assert history_payload["history"][0]["metadata"] == review_metadata
 
 
 @pytest.mark.contract
@@ -253,3 +556,46 @@ def test_review_apply_invalid_shape_returns_validation_error(tmp_path: Path) -> 
     payload = json.loads(review_result.stdout)
     assert payload["ok"] is False
     assert payload["error_code"] == "VAL_INVALID_FORMAT"
+
+
+@pytest.mark.contract
+def test_admin_manage_stats_exposes_stable_smoke_fields(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_result = _run_cli("--db", str(db_path), "init")
+    assert init_result.returncode == 0
+
+    add_result = _run_cli(
+        "--db",
+        str(db_path),
+        "observation",
+        "add",
+        "--project",
+        "ops",
+        "--kind",
+        "decision",
+        "--title",
+        "Stats target",
+        "--summary",
+        "smoke baseline",
+        "--tags",
+        "tenant:t1,user:u1",
+    )
+    assert add_result.returncode == 0
+
+    stats_result = _run_cli(
+        "--db",
+        str(db_path),
+        "admin",
+        "manage",
+        "stats",
+    )
+    assert stats_result.returncode == 0
+
+    payload = json.loads(stats_result.stdout)
+    assert payload["ok"] is True
+    assert payload["action"] == "stats"
+    assert payload["total"] == 1
+    assert isinstance(payload["earliest"], str)
+    assert isinstance(payload["latest"], str)
+    assert payload["projects"] == [{"project": "ops", "count": 1}]
+    assert payload["kinds"] == [{"kind": "decision", "count": 1}]

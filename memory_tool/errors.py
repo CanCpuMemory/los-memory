@@ -197,8 +197,8 @@ DB_CORRUPTED = ErrorCode(
 DB_SCHEMA_MISMATCH = ErrorCode(
     code="DB_SCHEMA_MISMATCH",
     message="Database schema version {current} is incompatible (expected {expected})",
-    suggestion="Run 'los-memory admin migrate' to upgrade the database schema",
-    help_command="los-memory admin migrate --help",
+    suggestion="Schema migrations are automatic on startup. Run 'los-memory init' with the target profile/db to apply current schema.",
+    help_command="los-memory init --help",
     http_status=500,
     exit_code=3,
 )

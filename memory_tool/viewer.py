@@ -683,6 +683,79 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return False
 
+    def _api_limit(self, query, default: str) -> int:
+        return int(query.get("limit", [default])[0])
+
+    def _api_offset(self, query) -> int:
+        return int(query.get("offset", ["0"])[0])
+
+    def _handle_api_search(self, conn, query) -> None:
+        search_query = query.get("query", [""])[0]
+        limit = self._api_limit(query, "10")
+        offset = self._api_offset(query)
+        mode = query.get("mode", ["auto"])[0]
+        quote = query.get("quote", ["0"])[0] in {"1", "true", "yes"}
+        results = mem.run_search(
+            conn,
+            search_query,
+            limit,
+            offset=offset,
+            mode=mode,
+            quote=quote,
+        )
+        self._json({"ok": True, "results": results})
+
+    def _handle_api_timeline(self, conn, query) -> None:
+        around_id = query.get("around_id", [None])[0]
+        window_minutes = int(query.get("window_minutes", ["120"])[0])
+        limit = self._api_limit(query, "20")
+        offset = self._api_offset(query)
+        start = query.get("start", [None])[0]
+        end = query.get("end", [None])[0]
+        around_val = int(around_id) if around_id else None
+        results = mem.run_timeline(
+            conn,
+            start,
+            end,
+            around_val,
+            window_minutes,
+            limit,
+            offset=offset,
+        )
+        self._json({"ok": True, "results": [mem.asdict(r) for r in results]})
+
+    def _handle_api_get(self, conn, query) -> None:
+        ids_raw = query.get("ids", [""])[0]
+        ids = [int(part.strip()) for part in ids_raw.split(",") if part.strip()]
+        results = mem.run_get(conn, ids)
+        self._json({"ok": True, "results": [mem.asdict(r) for r in results]})
+
+    def _handle_api_list(self, conn, query) -> None:
+        limit = self._api_limit(query, "20")
+        offset = self._api_offset(query)
+        results = mem.run_list(conn, limit, offset=offset)
+        self._json({"ok": True, "results": [mem.asdict(r) for r in results]})
+
+    def _handle_api_sessions(self, conn, query) -> None:
+        limit = self._api_limit(query, "20")
+        offset = self._api_offset(query)
+        sessions = mem.list_sessions(conn, limit=limit, offset=offset)
+        self._json({"ok": True, "sessions": [mem.asdict(s) for s in sessions]})
+
+    def _dispatch_api_get(self, parsed_path: str, conn, query) -> bool:
+        handlers = {
+            "/api/search": self._handle_api_search,
+            "/api/timeline": self._handle_api_timeline,
+            "/api/get": self._handle_api_get,
+            "/api/list": self._handle_api_list,
+            "/api/sessions": self._handle_api_sessions,
+        }
+        handler = handlers.get(parsed_path)
+        if handler is None:
+            return False
+        handler(conn, query)
+        return True
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if not self._authorized(parsed):
@@ -699,63 +772,7 @@ class Handler(BaseHTTPRequestHandler):
                 conn = mem.connect_db(self.db_path)
                 mem.ensure_schema(conn)
                 mem.ensure_fts(conn)
-
-                if parsed.path == "/api/search":
-                    search_query = query.get("query", [""])[0]
-                    limit = int(query.get("limit", ["10"])[0])
-                    offset = int(query.get("offset", ["0"])[0])
-                    mode = query.get("mode", ["auto"])[0]
-                    quote = query.get("quote", ["0"])[0] in {"1", "true", "yes"}
-                    results = mem.run_search(
-                        conn,
-                        search_query,
-                        limit,
-                        offset=offset,
-                        mode=mode,
-                        quote=quote,
-                    )
-                    self._json({"ok": True, "results": results})
-                    return
-
-                if parsed.path == "/api/timeline":
-                    around_id = query.get("around_id", [None])[0]
-                    window_minutes = int(query.get("window_minutes", ["120"])[0])
-                    limit = int(query.get("limit", ["20"])[0])
-                    offset = int(query.get("offset", ["0"])[0])
-                    start = query.get("start", [None])[0]
-                    end = query.get("end", [None])[0]
-                    around_val = int(around_id) if around_id else None
-                    results = mem.run_timeline(
-                        conn,
-                        start,
-                        end,
-                        around_val,
-                        window_minutes,
-                        limit,
-                        offset=offset,
-                    )
-                    self._json({"ok": True, "results": [mem.asdict(r) for r in results]})
-                    return
-
-                if parsed.path == "/api/get":
-                    ids_raw = query.get("ids", [""])[0]
-                    ids = [int(part.strip()) for part in ids_raw.split(",") if part.strip()]
-                    results = mem.run_get(conn, ids)
-                    self._json({"ok": True, "results": [mem.asdict(r) for r in results]})
-                    return
-
-                if parsed.path == "/api/list":
-                    limit = int(query.get("limit", ["20"])[0])
-                    offset = int(query.get("offset", ["0"])[0])
-                    results = mem.run_list(conn, limit, offset=offset)
-                    self._json({"ok": True, "results": [mem.asdict(r) for r in results]})
-                    return
-
-                if parsed.path == "/api/sessions":
-                    limit = int(query.get("limit", ["20"])[0])
-                    offset = int(query.get("offset", ["0"])[0])
-                    sessions = mem.list_sessions(conn, limit=limit, offset=offset)
-                    self._json({"ok": True, "sessions": [mem.asdict(s) for s in sessions]})
+                if self._dispatch_api_get(parsed.path, conn, query):
                     return
 
             except Exception as exc:  # noqa: BLE001

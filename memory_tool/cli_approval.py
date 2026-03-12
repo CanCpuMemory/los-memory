@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
-import sys
 import time
 from typing import Any, Dict, Optional
 
 from .approval_api import ApprovalAPI, ApprovalAPIError
 from .approval_security import HMACConfig
-from .approval_events import create_sse_response_headers
 
 
 def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
@@ -23,9 +22,19 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         dest="approval_action",
         help="Approval actions"
     )
+    _add_approval_request_parser(approval_subparsers)
+    _add_approval_approve_parser(approval_subparsers)
+    _add_approval_reject_parser(approval_subparsers)
+    _add_approval_list_parser(approval_subparsers)
+    _add_approval_status_parser(approval_subparsers)
+    _add_approval_watch_parser(approval_subparsers)
+    _add_approval_audit_parser(approval_subparsers)
+    _add_approval_auto_reject_parser(approval_subparsers)
+    _add_approval_events_parser(approval_subparsers)
 
-    # Create approval request
-    request_parser = approval_subparsers.add_parser(
+
+def _add_approval_request_parser(subparsers: argparse._SubParsersAction) -> None:
+    request_parser = subparsers.add_parser(
         "request",
         help="Create a new approval request"
     )
@@ -54,8 +63,9 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Additional context as JSON"
     )
 
-    # Approve request
-    approve_parser = approval_subparsers.add_parser(
+
+def _add_approval_approve_parser(subparsers: argparse._SubParsersAction) -> None:
+    approve_parser = subparsers.add_parser(
         "approve",
         help="Approve a request"
     )
@@ -83,8 +93,9 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="HMAC secret for signing (env: APPROVAL_HMAC_SECRET)"
     )
 
-    # Reject request
-    reject_parser = approval_subparsers.add_parser(
+
+def _add_approval_reject_parser(subparsers: argparse._SubParsersAction) -> None:
+    reject_parser = subparsers.add_parser(
         "reject",
         help="Reject a request"
     )
@@ -112,8 +123,9 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="HMAC secret for signing (env: APPROVAL_HMAC_SECRET)"
     )
 
-    # List requests
-    list_parser = approval_subparsers.add_parser(
+
+def _add_approval_list_parser(subparsers: argparse._SubParsersAction) -> None:
+    list_parser = subparsers.add_parser(
         "list",
         help="List approval requests"
     )
@@ -134,8 +146,9 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Show only pending requests"
     )
 
-    # Get request status
-    status_parser = approval_subparsers.add_parser(
+
+def _add_approval_status_parser(subparsers: argparse._SubParsersAction) -> None:
+    status_parser = subparsers.add_parser(
         "status",
         help="Get request status"
     )
@@ -144,8 +157,9 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Job ID to query"
     )
 
-    # Watch events (SSE)
-    watch_parser = approval_subparsers.add_parser(
+
+def _add_approval_watch_parser(subparsers: argparse._SubParsersAction) -> None:
+    watch_parser = subparsers.add_parser(
         "watch",
         help="Watch approval events (SSE stream)"
     )
@@ -160,8 +174,9 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Watch timeout in seconds"
     )
 
-    # Get audit log
-    audit_parser = approval_subparsers.add_parser(
+
+def _add_approval_audit_parser(subparsers: argparse._SubParsersAction) -> None:
+    audit_parser = subparsers.add_parser(
         "audit",
         help="Get audit log for a request"
     )
@@ -170,14 +185,16 @@ def add_approval_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Job ID to query"
     )
 
-    # Run auto-reject scheduler
-    auto_reject_parser = approval_subparsers.add_parser(
+
+def _add_approval_auto_reject_parser(subparsers: argparse._SubParsersAction) -> None:
+    subparsers.add_parser(
         "auto-reject",
         help="Run auto-reject scheduler for expired requests"
     )
 
-    # Event history
-    events_parser = approval_subparsers.add_parser(
+
+def _add_approval_events_parser(subparsers: argparse._SubParsersAction) -> None:
+    events_parser = subparsers.add_parser(
         "events",
         help="Get event history"
     )
@@ -213,26 +230,21 @@ def handle_approval_command(
         }
 
     try:
-        if args.approval_action == "request":
-            return _handle_request(conn, args)
-        elif args.approval_action == "approve":
-            return _handle_approve(conn, args)
-        elif args.approval_action == "reject":
-            return _handle_reject(conn, args)
-        elif args.approval_action == "list":
-            return _handle_list(conn, args)
-        elif args.approval_action == "status":
-            return _handle_status(conn, args)
-        elif args.approval_action == "watch":
-            return _handle_watch(conn, args)
-        elif args.approval_action == "audit":
-            return _handle_audit(conn, args)
-        elif args.approval_action == "auto-reject":
-            return _handle_auto_reject(conn, args)
-        elif args.approval_action == "events":
-            return _handle_events(conn, args)
-        else:
+        handlers = {
+            "request": _handle_request,
+            "approve": _handle_approve,
+            "reject": _handle_reject,
+            "list": _handle_list,
+            "status": _handle_status,
+            "watch": _handle_watch,
+            "audit": _handle_audit,
+            "auto-reject": _handle_auto_reject,
+            "events": _handle_events,
+        }
+        handler = handlers.get(args.approval_action)
+        if not handler:
             return {"success": False, "error": f"Unknown action: {args.approval_action}"}
+        return handler(conn, args)
 
     except ApprovalAPIError as e:
         return e.to_dict()
@@ -267,7 +279,7 @@ def _handle_request(conn: sqlite3.Connection, args: argparse.Namespace) -> Dict[
 def _handle_approve(conn: sqlite3.Connection, args: argparse.Namespace) -> Dict[str, Any]:
     """Handle approval."""
     # Get HMAC secret from args or environment
-    hmac_secret = args.hmac_secret or __import__('os').environ.get('APPROVAL_HMAC_SECRET')
+    hmac_secret = args.hmac_secret or os.environ.get('APPROVAL_HMAC_SECRET')
 
     api = _get_api(conn, hmac_secret)
 
@@ -294,7 +306,7 @@ def _handle_approve(conn: sqlite3.Connection, args: argparse.Namespace) -> Dict[
 
 def _handle_reject(conn: sqlite3.Connection, args: argparse.Namespace) -> Dict[str, Any]:
     """Handle rejection."""
-    hmac_secret = args.hmac_secret or __import__('os').environ.get('APPROVAL_HMAC_SECRET')
+    hmac_secret = args.hmac_secret or os.environ.get('APPROVAL_HMAC_SECRET')
     api = _get_api(conn, hmac_secret)
 
     hmac_headers = None

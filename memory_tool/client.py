@@ -84,6 +84,7 @@ from .analytics import (
 from .feedback import apply_feedback, get_feedback_history
 from .links import create_link, delete_link, get_related_observations, find_similar_observations
 from .utils import (
+    metadata_to_json,
     resolve_db_path,
     tags_to_json,
     tags_to_text,
@@ -119,6 +120,7 @@ class ObservationData:
         tags: List of tags
         raw: Raw original data
         session_id: Optional session ID
+        metadata: Structured metadata dictionary
     """
 
     def __init__(self, obs: Observation | Dict[str, Any]):
@@ -132,6 +134,7 @@ class ObservationData:
             self.tags = obs.tags if isinstance(obs.tags, list) else json.loads(obs.tags or "[]")
             self.raw = obs.raw
             self.session_id = obs.session_id
+            self.metadata = obs.metadata
         else:
             self.id = obs.get("id")
             self.timestamp = obs.get("timestamp")
@@ -143,6 +146,8 @@ class ObservationData:
             self.tags = tags if isinstance(tags, list) else json.loads(tags)
             self.raw = obs.get("raw")
             self.session_id = obs.get("session_id")
+            metadata = obs.get("metadata", {})
+            self.metadata = metadata if isinstance(metadata, dict) else {}
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -156,6 +161,7 @@ class ObservationData:
             "tags": self.tags,
             "raw": self.raw,
             "session_id": self.session_id,
+            "metadata": self.metadata,
         }
 
     def __repr__(self) -> str:
@@ -324,6 +330,7 @@ class MemoryClient:
         tags: Optional[List[str]] = None,
         raw: Optional[str] = None,
         auto_tags: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> ObservationData:
         """Add a new observation.
 
@@ -335,30 +342,20 @@ class MemoryClient:
             tags: List of tags
             raw: Raw original data
             auto_tags: Auto-generate tags from content
+            metadata: Structured observation metadata
 
         Returns:
             Created observation data
         """
         conn = self._ensure_connected()
-
-        # Use active project if not specified
-        if project is None:
-            project = get_active_project(self.profile) or "general"
-
-        # Process tags
-        tags_list = tags or []
-        if auto_tags and not tags_list:
-            from .utils import auto_tags_from_text
-            tags_list = auto_tags_from_text(title, summary)
-
-        # Get active session
-        active_session = get_bound_active_session(conn, self.profile, self._resolve_db_path())
-        session_id = active_session["session_id"] if active_session else None
+        resolved_project = self._resolve_add_project(project)
+        tags_list = self._resolve_add_tags(title, summary, tags, auto_tags)
+        session_id = self._resolve_active_session_id(conn)
 
         obs_id = add_observation(
             conn,
             utc_now(),
-            project,
+            resolved_project,
             kind,
             title,
             summary,
@@ -366,13 +363,41 @@ class MemoryClient:
             tags_to_text(tags_list),
             raw or "",
             session_id,
+            metadata_to_json(metadata or {}),
         )
+        return self._fetch_observation_or_raise(conn, obs_id)
 
-        # Fetch the created observation
+    def _resolve_add_project(self, project: Optional[str]) -> str:
+        if project is not None:
+            return project
+        return get_active_project(self.profile) or "general"
+
+    def _resolve_add_tags(
+        self,
+        title: str,
+        summary: str,
+        tags: Optional[List[str]],
+        auto_tags: bool,
+    ) -> List[str]:
+        tags_list = tags or []
+        if auto_tags and not tags_list:
+            from .utils import auto_tags_from_text
+
+            tags_list = auto_tags_from_text(title, summary)
+        return tags_list
+
+    def _resolve_active_session_id(self, conn: sqlite3.Connection) -> Optional[int]:
+        active_session = get_bound_active_session(
+            conn, self.profile, self._resolve_db_path()
+        )
+        return active_session["session_id"] if active_session else None
+
+    def _fetch_observation_or_raise(
+        self, conn: sqlite3.Connection, obs_id: int
+    ) -> ObservationData:
         results = run_get(conn, [obs_id])
         if not results:
             raise MemoryError(f"Failed to fetch created observation {obs_id}")
-
         return ObservationData(results[0])
 
     def get(self, obs_id: int) -> ObservationData:
@@ -491,6 +516,7 @@ class MemoryClient:
         kind: Optional[str] = None,
         tags: Optional[List[str]] = None,
         raw: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> ObservationData:
         """Edit an observation.
 
@@ -502,6 +528,7 @@ class MemoryClient:
             kind: New kind (optional)
             tags: New tags (optional)
             raw: New raw data (optional)
+            metadata: Replacement metadata dictionary (optional)
 
         Returns:
             Updated observation data
@@ -526,6 +553,7 @@ class MemoryClient:
             raw,
             timestamp=None,
             auto_tags=False,
+            metadata=metadata_to_json(metadata) if metadata is not None else None,
         )
 
         if not result.get("ok"):
@@ -611,8 +639,21 @@ class MemoryClient:
         Returns:
             Created observation data
         """
-        # Extract title from text
-        sentences = text.replace("! ", "!|").replace("? ", "?|").replace(". ", ".|").split("|")
+        title, summary = self._extract_capture_title_and_summary(text)
+        return self.add(
+            title=title,
+            summary=summary,
+            project=project,
+            kind=kind,
+            tags=tags,
+            raw=text,
+            auto_tags=auto_tags,
+        )
+
+    def _extract_capture_title_and_summary(self, text: str) -> tuple[str, str]:
+        sentences = (
+            text.replace("! ", "!|").replace("? ", "?|").replace(". ", ".|").split("|")
+        )
         if len(sentences) > 1 and len(sentences[0]) < 100:
             title = sentences[0].strip()
             summary = " ".join(s.strip() for s in sentences[1:]).strip()
@@ -628,16 +669,7 @@ class MemoryClient:
                     break_point = 80
                 title = text[:break_point].strip()
                 summary = text.strip()
-
-        return self.add(
-            title=title,
-            summary=summary,
-            project=project,
-            kind=kind,
-            tags=tags,
-            raw=text,
-            auto_tags=auto_tags,
-        )
+        return title, summary
 
     # ========================================================================
     # Session Operations
@@ -894,6 +926,7 @@ class MemoryClient:
         obs_id: int,
         feedback_text: str,
         dry_run: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add feedback to an observation.
 
@@ -901,12 +934,19 @@ class MemoryClient:
             obs_id: Target observation ID
             feedback_text: Feedback text
             dry_run: Preview without applying
+            metadata: Structured feedback metadata
 
         Returns:
             Feedback result with changes
         """
         conn = self._ensure_connected()
-        result = apply_feedback(conn, obs_id, feedback_text, auto_apply=not dry_run)
+        result = apply_feedback(
+            conn,
+            obs_id,
+            feedback_text,
+            auto_apply=not dry_run,
+            metadata=metadata,
+        )
         result["dry_run"] = dry_run
         return result
 

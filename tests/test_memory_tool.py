@@ -67,6 +67,75 @@ def test_add_search_timeline_get(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_observation_metadata_round_trip_unit(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    conn = mem.connect_db(str(db_path))
+    mem.ensure_schema(conn)
+    mem.ensure_fts(conn)
+
+    metadata = {
+        "tenant_id": "tenant-a",
+        "trace_id": "trace-123",
+        "source": "vps-agent-web",
+        "idempotency_key": "idem-1",
+    }
+    obs_id = mem.add_observation(
+        conn,
+        "2024-01-01T00:00:00Z",
+        "proj",
+        "note",
+        "Metadata title",
+        "Metadata summary",
+        mem.tags_to_json(["alpha"]),
+        mem.tags_to_text(["alpha"]),
+        "raw",
+        metadata=mem.metadata_to_json(metadata),
+    )
+
+    fetched = mem.run_get(conn, [obs_id])
+    assert len(fetched) == 1
+    assert fetched[0].metadata == metadata
+    conn.close()
+
+
+def test_feedback_metadata_round_trip_unit(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    conn = mem.connect_db(str(db_path))
+    mem.ensure_schema(conn)
+    mem.ensure_fts(conn)
+
+    obs_id = mem.add_observation(
+        conn,
+        "2024-01-01T00:00:00Z",
+        "proj",
+        "note",
+        "Feedback metadata title",
+        "Original summary",
+        mem.tags_to_json(["alpha"]),
+        mem.tags_to_text(["alpha"]),
+        "raw",
+    )
+
+    from memory_tool.feedback import apply_feedback, get_feedback_history
+
+    metadata = {
+        "trace_id": "trace-feedback-1",
+        "request_id": "req-feedback-1",
+        "source": "vps-agent-web",
+    }
+    result = apply_feedback(
+        conn,
+        obs_id,
+        "补充: Added context",
+        metadata=metadata,
+    )
+    assert result["metadata"] == metadata
+
+    history = get_feedback_history(conn, obs_id)
+    assert history[0]["metadata"] == metadata
+    conn.close()
+
+
 def test_ingest_helper(tmp_path: Path) -> None:
     db_path = tmp_path / "memory.db"
     raw_path = tmp_path / "raw.txt"
@@ -151,11 +220,13 @@ def test_export_json_csv_unit(tmp_path: Path) -> None:
     assert "observations" in exported
     assert len(exported["observations"]) == 1
     assert exported["observations"][0]["title"] == "Title"
+    assert exported["observations"][0]["metadata"] == {}
 
     # Verify CSV output format
     csv_text = csv_out.read_text(encoding="utf-8")
     csv_header = csv_text.splitlines()[0]
     assert "session_id" in csv_header
+    assert "metadata" in csv_header
     assert "Title" in csv_text
 
 
@@ -224,10 +295,12 @@ def test_export_json_csv_cli(tmp_path: Path) -> None:
     assert isinstance(exported, list)
     assert len(exported) == 1
     assert exported[0]["title"] == "Title"
+    assert exported[0]["metadata"] == {}
 
     csv_text = csv_out.read_text(encoding="utf-8")
     csv_header = csv_text.splitlines()[0]
     assert "session_id" in csv_header
+    assert "metadata" in csv_header
     assert "Title" in csv_text
 
 

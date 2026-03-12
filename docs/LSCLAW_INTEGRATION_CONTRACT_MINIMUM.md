@@ -15,6 +15,7 @@
 1. 初始化与健康：
    - `init`
    - `admin doctor`
+   - `admin manage stats`
 2. 检索与读取：
    - `memory search`
    - `memory list`
@@ -83,6 +84,10 @@
 5. `admin doctor`
    - `status`（`healthy`/`degraded`/`unhealthy`）
    - `capabilities`（`can_read/can_write/can_search/can_migrate`）
+6. `admin manage stats`
+   - `action`
+   - `total` / `earliest` / `latest`
+   - `projects` / `kinds`
 
 ---
 
@@ -120,7 +125,7 @@
 2. `cli-contract-test`
    - 校验最小命令面的输出与退出码。
 3. `lsclaw-integration-smoke`
-   - 校验 `require-tags`、`tool transition`、`review apply --dry-run`。
+   - 校验 `require-tags`、`tool transition`、`review apply --dry-run`、`admin manage stats`。
 
 ---
 

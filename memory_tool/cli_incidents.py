@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from typing import TYPE_CHECKING
 
-from .incidents import Incident, IncidentManager
 from .cli_attribution import add_incident_attribution_subcommands, handle_attribution_command
+from .incidents import Incident, IncidentManager
 
 if TYPE_CHECKING:
     import sqlite3
@@ -23,9 +22,19 @@ def add_incident_subcommands(subparsers: argparse._SubParsersAction) -> None:
         dest="incident_action",
         help="Incident actions"
     )
+    _add_incident_create_parser(incident_subparsers)
+    _add_incident_list_parser(incident_subparsers)
+    _add_incident_get_parser(incident_subparsers)
+    _add_incident_status_parser(incident_subparsers)
 
-    # Create incident
-    create_parser = incident_subparsers.add_parser(
+    # Attribution analysis commands (Phase 3)
+    add_incident_attribution_subcommands(incident_subparsers)
+    _add_incident_link_parser(incident_subparsers)
+    _add_incident_links_parser(incident_subparsers)
+
+
+def _add_incident_create_parser(subparsers: argparse._SubParsersAction) -> None:
+    create_parser = subparsers.add_parser(
         "create",
         help="Create a new incident"
     )
@@ -66,8 +75,9 @@ def add_incident_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Context snapshot as JSON string"
     )
 
-    # List incidents
-    list_parser = incident_subparsers.add_parser(
+
+def _add_incident_list_parser(subparsers: argparse._SubParsersAction) -> None:
+    list_parser = subparsers.add_parser(
         "list",
         help="List incidents"
     )
@@ -98,8 +108,9 @@ def add_incident_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Maximum number of incidents (default: 20)"
     )
 
-    # Get incident
-    get_parser = incident_subparsers.add_parser(
+
+def _add_incident_get_parser(subparsers: argparse._SubParsersAction) -> None:
+    get_parser = subparsers.add_parser(
         "get",
         help="Get incident details"
     )
@@ -109,8 +120,9 @@ def add_incident_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Incident ID"
     )
 
-    # Update incident status
-    status_parser = incident_subparsers.add_parser(
+
+def _add_incident_status_parser(subparsers: argparse._SubParsersAction) -> None:
+    status_parser = subparsers.add_parser(
         "status",
         help="Update incident status"
     )
@@ -130,11 +142,9 @@ def add_incident_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Resolution notes"
     )
 
-    # Attribution analysis commands (Phase 3)
-    add_incident_attribution_subcommands(incident_subparsers)
 
-    # Link observation to incident
-    link_parser = incident_subparsers.add_parser(
+def _add_incident_link_parser(subparsers: argparse._SubParsersAction) -> None:
+    link_parser = subparsers.add_parser(
         "link",
         help="Link observation to incident"
     )
@@ -154,8 +164,9 @@ def add_incident_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Link type (default: related)"
     )
 
-    # Get linked observations
-    links_parser = incident_subparsers.add_parser(
+
+def _add_incident_links_parser(subparsers: argparse._SubParsersAction) -> None:
+    links_parser = subparsers.add_parser(
         "links",
         help="Get observations linked to incident"
     )
@@ -172,146 +183,147 @@ def handle_incident_command(
 ) -> dict:
     """Handle incident subcommands."""
     manager = IncidentManager(conn)
+    action = args.incident_action
 
-    if args.incident_action == "create":
-        context = {}
-        if args.context:
-            try:
-                context = json.loads(args.context)
-            except json.JSONDecodeError as e:
-                return {
-                    "success": False,
-                    "error": f"Invalid JSON context: {e}"
-                }
+    if action == "create":
+        return _handle_incident_create(manager, args)
+    if action == "list":
+        return _handle_incident_list(manager, args)
+    if action == "get":
+        return _handle_incident_get(manager, args)
+    if action == "status":
+        return _handle_incident_status(manager, args)
+    if action == "link":
+        return _handle_incident_link(manager, args)
+    if action == "links":
+        return _handle_incident_links(manager, args)
+    if action in ("analyze", "report", "reports", "attribution-stats"):
+        return handle_attribution_command(conn, args, action)
+    return {
+        "success": False,
+        "error": "No incident action specified. Use: create, list, get, status, link, links, analyze, report"
+    }
 
-        incident = manager.create(
-            incident_type=args.type,
-            severity=args.severity,
-            title=args.title,
-            description=args.description,
-            project=args.project,
-            source_observation_id=args.observation_id,
-            context_snapshot=context
-        )
-        return {
-            "success": True,
-            "message": f"Created incident #{incident.id}",
-            "incident": {
+
+def _handle_incident_create(manager: IncidentManager, args: argparse.Namespace) -> dict:
+    parse_result = _parse_incident_context(args.context)
+    if parse_result.get("error"):
+        return parse_result
+    incident = manager.create(
+        incident_type=args.type,
+        severity=args.severity,
+        title=args.title,
+        description=args.description,
+        project=args.project,
+        source_observation_id=args.observation_id,
+        context_snapshot=parse_result["context"],
+    )
+    return {
+        "success": True,
+        "message": f"Created incident #{incident.id}",
+        "incident": {
+            "id": incident.id,
+            "type": incident.incident_type,
+            "severity": incident.severity,
+            "status": incident.status,
+            "title": incident.title,
+            "detected_at": incident.detected_at,
+            "project": incident.project,
+        },
+    }
+
+
+def _parse_incident_context(raw_context: str | None) -> dict:
+    if not raw_context:
+        return {"context": {}}
+    try:
+        return {"context": json.loads(raw_context)}
+    except json.JSONDecodeError as error:
+        return {"success": False, "error": f"Invalid JSON context: {error}"}
+
+
+def _handle_incident_list(manager: IncidentManager, args: argparse.Namespace) -> dict:
+    incidents = manager.list(
+        status=args.status,
+        incident_type=args.type,
+        severity=args.severity,
+        project=args.project,
+        limit=args.limit,
+    )
+    return {
+        "success": True,
+        "count": len(incidents),
+        "incidents": [
+            {
                 "id": incident.id,
                 "type": incident.incident_type,
                 "severity": incident.severity,
                 "status": incident.status,
                 "title": incident.title,
-                "detected_at": incident.detected_at,
-                "project": incident.project
-            }
-        }
-
-    elif args.incident_action == "list":
-        incidents = manager.list(
-            status=args.status,
-            incident_type=args.type,
-            severity=args.severity,
-            project=args.project,
-            limit=args.limit
-        )
-        return {
-            "success": True,
-            "count": len(incidents),
-            "incidents": [
-                {
-                    "id": i.id,
-                    "type": i.incident_type,
-                    "severity": i.severity,
-                    "status": i.status,
-                    "title": i.title,
-                    "detected_at": i.detected_at,
-                    "resolved_at": i.resolved_at,
-                    "project": i.project
-                }
-                for i in incidents
-            ]
-        }
-
-    elif args.incident_action == "get":
-        incident = manager.get(args.id)
-        if not incident:
-            return {
-                "success": False,
-                "error": f"Incident #{args.id} not found"
-            }
-        return {
-            "success": True,
-            "incident": {
-                "id": incident.id,
-                "type": incident.incident_type,
-                "severity": incident.severity,
-                "status": incident.status,
-                "title": incident.title,
-                "description": incident.description,
-                "source_observation_id": incident.source_observation_id,
-                "context_snapshot": incident.context_snapshot,
                 "detected_at": incident.detected_at,
                 "resolved_at": incident.resolved_at,
-                "project": incident.project
+                "project": incident.project,
             }
-        }
+            for incident in incidents
+        ],
+    }
 
-    elif args.incident_action == "status":
-        try:
-            incident = manager.update_status(args.id, args.new_status, args.notes)
-            if not incident:
-                return {
-                    "success": False,
-                    "error": f"Incident #{args.id} not found"
-                }
-            return {
-                "success": True,
-                "message": f"Updated incident #{incident.id} status to {incident.status}",
-                "incident": {
-                    "id": incident.id,
-                    "status": incident.status,
-                    "resolved_at": incident.resolved_at
-                }
-            }
-        except ValueError as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
 
-    elif args.incident_action == "link":
-        success = manager.link_observation(
-            args.incident_id,
-            args.observation_id,
-            args.type
-        )
-        if success:
-            return {
-                "success": True,
-                "message": f"Linked observation #{args.observation_id} to incident #{args.incident_id}"
-            }
-        else:
-            return {
-                "success": False,
-                "error": "Link already exists or invalid IDs"
-            }
+def _handle_incident_get(manager: IncidentManager, args: argparse.Namespace) -> dict:
+    incident = manager.get(args.id)
+    if not incident:
+        return {"success": False, "error": f"Incident #{args.id} not found"}
+    return {
+        "success": True,
+        "incident": {
+            "id": incident.id,
+            "type": incident.incident_type,
+            "severity": incident.severity,
+            "status": incident.status,
+            "title": incident.title,
+            "description": incident.description,
+            "source_observation_id": incident.source_observation_id,
+            "context_snapshot": incident.context_snapshot,
+            "detected_at": incident.detected_at,
+            "resolved_at": incident.resolved_at,
+            "project": incident.project,
+        },
+    }
 
-    elif args.incident_action == "links":
-        observations = manager.get_linked_observations(args.id)
+
+def _handle_incident_status(manager: IncidentManager, args: argparse.Namespace) -> dict:
+    try:
+        incident = manager.update_status(args.id, args.new_status, args.notes)
+    except ValueError as error:
+        return {"success": False, "error": str(error)}
+    if not incident:
+        return {"success": False, "error": f"Incident #{args.id} not found"}
+    return {
+        "success": True,
+        "message": f"Updated incident #{incident.id} status to {incident.status}",
+        "incident": {
+            "id": incident.id,
+            "status": incident.status,
+            "resolved_at": incident.resolved_at,
+        },
+    }
+
+
+def _handle_incident_link(manager: IncidentManager, args: argparse.Namespace) -> dict:
+    success = manager.link_observation(args.incident_id, args.observation_id, args.type)
+    if success:
         return {
             "success": True,
-            "incident_id": args.id,
-            "count": len(observations),
-            "observations": observations
+            "message": f"Linked observation #{args.observation_id} to incident #{args.incident_id}",
         }
+    return {"success": False, "error": "Link already exists or invalid IDs"}
 
-    # Attribution analysis commands
-    elif args.incident_action in ("analyze", "report", "reports", "attribution-stats"):
-        return handle_attribution_command(conn, args, args.incident_action)
 
-    else:
-        return {
-            "success": False,
-            "error": "No incident action specified. Use: create, list, get, status, link, links, analyze, report"
-        }
+def _handle_incident_links(manager: IncidentManager, args: argparse.Namespace) -> dict:
+    observations = manager.get_linked_observations(args.id)
+    return {
+        "success": True,
+        "incident_id": args.id,
+        "count": len(observations),
+        "observations": observations,
+    }

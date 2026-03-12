@@ -1,8 +1,8 @@
 """Data models for the memory tool."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Observation:
     tags: List[str]
     raw: str
     session_id: Optional[int] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -51,6 +52,7 @@ class Feedback:
     action_type: str  # "correct", "supplement", "delete"
     feedback_text: str
     timestamp: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

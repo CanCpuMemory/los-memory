@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .database import connect_db, ensure_schema
-from .utils import resolve_db_path
+from .utils import resolve_db_path, tags_to_json, utc_now
 
 
 @dataclass
@@ -203,7 +203,7 @@ class HubLiteSession:
         try:
             tags_text = " ".join(tags)
             raw = f"{title}\n\n{summary}"
-            timestamp = datetime.now(timezone.utc).isoformat()
+            timestamp = utc_now()
             project = f"hub-lite-{self.context.trace_id}"
             
             cursor = conn.execute(
@@ -218,7 +218,7 @@ class HubLiteSession:
                     kind,
                     title,
                     summary,
-                    ",".join(tags),
+                    tags_to_json(tags),
                     tags_text,
                     raw,
                     None,  # session_id

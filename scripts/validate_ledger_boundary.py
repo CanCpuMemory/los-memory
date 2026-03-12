@@ -290,14 +290,16 @@ def validate_ledger_boundary(
     test_results = run_smoke_tests()
     
     # Get schema version for report
+    schema_version_error: str | None = None
     try:
         path = db_path or resolve_db_path("shared", None)
         conn = connect_db(path)
         schema_version = get_schema_version(conn)
         conn.close()
-    except:
+    except Exception as exc:
         schema_version = 0
         path = None
+        schema_version_error = str(exc)
     
     return BoundaryReport(
         repo_name="los-memory",
@@ -314,7 +316,8 @@ def validate_ledger_boundary(
         metadata={
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             "platform": sys.platform,
-            "schema_version_current": SCHEMA_VERSION
+            "schema_version_current": SCHEMA_VERSION,
+            "schema_version_error": schema_version_error,
         }
     )
 

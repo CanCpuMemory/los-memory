@@ -176,22 +176,43 @@ def find_similar_observations(
     Returns:
         List of similar observations with similarity score
     """
-    # Get the source observation
+    source_profile = _load_source_similarity_profile(conn, observation_id)
+    if not source_profile:
+        return []
+    source_title, source_summary, source_tags = source_profile
+    candidates = _load_similarity_candidates(conn, observation_id)
+    scored = []
+    for cand in candidates:
+        score = _score_similarity(source_title, source_summary, source_tags, cand)
+        if score >= 20:  # Minimum threshold
+            scored.append((score, _build_similarity_result(cand, score)))
+
+    scored.sort(key=lambda x: -x[0])
+    return [s[1] for s in scored[:limit]]
+
+
+def _load_source_similarity_profile(
+    conn: sqlite3.Connection,
+    observation_id: int,
+) -> Optional[tuple[str, str, set[str]]]:
     row = conn.execute(
         "SELECT title, summary, tags, tags_text FROM observations WHERE id = ?",
         (observation_id,),
     ).fetchone()
-
     if not row:
-        return []
-
+        return None
     source_title = row["title"].lower()
     source_summary = row["summary"].lower()
     source_tags_text = row["tags_text"].lower() if row["tags_text"] else ""
     source_tags = set(source_tags_text.split()) if source_tags_text else set()
+    return source_title, source_summary, source_tags
 
-    # Find candidates using broader criteria
-    candidates = conn.execute(
+
+def _load_similarity_candidates(
+    conn: sqlite3.Connection,
+    observation_id: int,
+):
+    return conn.execute(
         """
         SELECT id, title, summary, tags, tags_text, timestamp, project, kind
         FROM observations
@@ -201,43 +222,44 @@ def find_similar_observations(
         (observation_id,),
     ).fetchall()
 
-    scored = []
-    for cand in candidates:
-        score = 0.0
 
-        cand_tags_text = (cand["tags_text"] or "").lower()
-        cand_tags = set(cand_tags_text.split())
+def _score_similarity(
+    source_title: str,
+    source_summary: str,
+    source_tags: set[str],
+    candidate,
+) -> float:
+    score = 0.0
+    cand_tags_text = (candidate["tags_text"] or "").lower()
+    cand_tags = set(cand_tags_text.split())
 
-        # Tag similarity (weighted heavily)
-        if source_tags and cand_tags:
-            shared_tags = source_tags & cand_tags
-            score += len(shared_tags) * 25  # 25 points per shared tag
+    if source_tags and cand_tags:
+        shared_tags = source_tags & cand_tags
+        score += len(shared_tags) * 25
 
-        # Title word overlap
-        source_words = set(source_title.split())
-        cand_words = set(cand["title"].lower().split())
-        shared_words = source_words & cand_words
-        if source_words:
-            score += len(shared_words) * 10  # 10 points per shared word
+    source_words = set(source_title.split())
+    cand_words = set(candidate["title"].lower().split())
+    shared_words = source_words & cand_words
+    if source_words:
+        score += len(shared_words) * 10
 
-        # Summary keyword overlap (simpler approach)
-        cand_summary_lower = cand["summary"].lower()
-        for word in source_summary.split():
-            if len(word) > 4 and word in cand_summary_lower:  # Only longer, meaningful words
-                score += 3
+    cand_summary_lower = candidate["summary"].lower()
+    for word in source_summary.split():
+        if len(word) > 4 and word in cand_summary_lower:
+            score += 3
 
-        if score >= 20:  # Minimum threshold
-            scored.append((score, {
-                "id": cand["id"],
-                "title": cand["title"],
-                "summary": cand["summary"],
-                "project": cand["project"],
-                "kind": cand["kind"],
-                "similarity_score": round(score, 1),
-            }))
+    return score
 
-    scored.sort(key=lambda x: -x[0])
-    return [s[1] for s in scored[:limit]]
+
+def _build_similarity_result(candidate, score: float) -> dict:
+    return {
+        "id": candidate["id"],
+        "title": candidate["title"],
+        "summary": candidate["summary"],
+        "project": candidate["project"],
+        "kind": candidate["kind"],
+        "similarity_score": round(score, 1),
+    }
 
 
 def get_links_for_observations(

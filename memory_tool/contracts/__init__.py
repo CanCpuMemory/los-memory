@@ -11,11 +11,13 @@ Contracts:
 """
 from __future__ import annotations
 
+from memory_tool.database import SCHEMA_VERSION as DATABASE_SCHEMA_VERSION
+
 # Version of the core/extension interface contract
 CONTRACT_VERSION = "1.0.0"
 
-# Schema version for database
-SCHEMA_VERSION = 12
+# Schema version for database (single source of truth: memory_tool.database)
+SCHEMA_VERSION = DATABASE_SCHEMA_VERSION
 
 __all__ = [
     "CONTRACT_VERSION",

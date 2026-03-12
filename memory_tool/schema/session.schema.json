@@ -3,7 +3,7 @@
   "$id": "https://los-memory.local/schemas/session.schema.json",
   "title": "Session Schema",
   "description": "Schema for Session data model",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "object",
   "required": ["id", "start_time", "project", "working_dir", "agent_type", "status"],
   "properties": {
@@ -40,7 +40,7 @@
     },
     "status": {
       "type": "string",
-      "enum": ["active", "ended"],
+      "enum": ["active", "completed", "ended"],
       "description": "Current session status"
     }
   }

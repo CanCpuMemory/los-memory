@@ -3,7 +3,7 @@
   "$id": "https://los-memory.local/schemas/base.schema.json",
   "title": "Base Response Schema",
   "description": "Base schema for all los-memory CLI responses",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "object",
   "required": ["ok", "meta"],
   "properties": {
@@ -105,8 +105,23 @@
     },
     "observation_kind": {
       "type": "string",
-      "enum": ["decision", "incident", "note", "meeting", "todo", "snippet", "tool_call"],
-      "description": "Type of observation"
+      "minLength": 1,
+      "description": "Type of observation (runtime allows extensible custom kinds)",
+      "examples": [
+        "decision",
+        "incident",
+        "note",
+        "meeting",
+        "todo",
+        "snippet",
+        "tool_call",
+        "agent_transition",
+        "progress",
+        "checkpoint",
+        "result",
+        "blocker",
+        "fix"
+      ]
     },
     "timestamp": {
       "type": "string",

@@ -7,7 +7,8 @@ import re
 import shlex
 import subprocess
 from datetime import datetime, timezone
-from typing import List
+from pathlib import Path
+from typing import Any, Dict, List
 
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -29,6 +30,22 @@ TAG_BLACKLIST = {
 }
 
 DEFAULT_LLM_HOOK = os.environ.get("MEMORY_LLM_HOOK", "")
+
+OBSERVATION_METADATA_RESERVED_KEYS = (
+    "tenant_id",
+    "project_id",
+    "actor_id",
+    "user_id",
+    "role",
+    "trace_id",
+    "request_id",
+    "session_id",
+    "idempotency_key",
+    "job_id",
+    "approval_id",
+    "event_type",
+    "source",
+)
 
 
 def utc_now() -> str:
@@ -169,6 +186,75 @@ def parse_tags_json(tags_json: str) -> List[str]:
         return []
     except json.JSONDecodeError:
         return []
+
+
+def normalize_metadata_dict(metadata: object) -> Dict[str, Any]:
+    """Normalize observation metadata to a JSON-compatible dictionary."""
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        normalized = dict(metadata)
+    elif isinstance(metadata, str):
+        raw = metadata.strip()
+        if not raw:
+            return {}
+        loaded = json.loads(raw)
+        if not isinstance(loaded, dict):
+            raise ValueError("Observation metadata must be a JSON object")
+        normalized = dict(loaded)
+    else:
+        raise ValueError("Observation metadata must be a JSON object")
+
+    try:
+        json.dumps(normalized, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Observation metadata must be JSON serializable: {exc}") from exc
+    return normalized
+
+
+def metadata_to_json(metadata: object) -> str:
+    """Serialize observation metadata as a JSON object string."""
+    normalized = normalize_metadata_dict(metadata)
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+
+
+def parse_metadata_json(metadata_json: str) -> Dict[str, Any]:
+    """Parse a metadata JSON string into a dictionary."""
+    if not metadata_json:
+        return {}
+    try:
+        loaded = json.loads(metadata_json)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return loaded
+
+
+def load_json_object_input(raw_value: str, param_name: str) -> Dict[str, Any]:
+    """Load a JSON object from inline text, @file, or @- stdin syntax."""
+    source_value = raw_value.strip()
+    if not source_value:
+        return {}
+
+    payload = source_value
+    if source_value.startswith("@"):
+        source = source_value[1:]
+        if source == "-":
+            import sys
+
+            payload = sys.stdin.read()
+        else:
+            payload = Path(source).read_text(encoding="utf-8")
+
+    try:
+        loaded = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON for {param_name}: {exc.msg}") from exc
+
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Invalid JSON for {param_name}: expected object")
+    return loaded
 
 
 def auto_tags_from_text(title: str, summary: str, limit: int = 6) -> List[str]:

@@ -26,6 +26,7 @@ import re
 import sqlite3
 import sys
 import warnings
+from typing import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
@@ -98,8 +99,11 @@ from .share import run_import, run_share
 from .utils import (
     DEFAULT_LLM_HOOK,
     DEFAULT_PROFILE,
+    OBSERVATION_METADATA_RESERVED_KEYS,
     PROFILE_CHOICES,
     auto_tags_from_text,
+    load_json_object_input,
+    metadata_to_json,
     normalize_tags_list,
     normalize_text,
     parse_ids,
@@ -120,6 +124,46 @@ from .extensions import (
 # Migration imports (lazy-loaded to avoid import-time deprecation warnings)
 _approval_available = True
 
+LEGACY_COMMAND_ALIASES = {
+    "add": ("observation", "add"),
+    "search": ("memory", "search"),
+    "timeline": ("memory", "timeline"),
+    "get": ("memory", "get"),
+    "edit": ("observation", "edit"),
+    "delete": ("observation", "delete"),
+    "list": ("memory", "list"),
+    "export": ("memory", "export"),
+    "clean": ("memory", "clean"),
+    "manage": ("admin", "manage"),
+    "capture": ("observation", "capture"),
+    "feedback": ("observation", "feedback"),
+    "review-feedback": ("review", "apply"),
+    "tool-log": ("tool", "log"),
+    "transition-log": ("tool", "transition"),
+    "tool-stats": ("tool", "stats"),
+    "tool-suggest": ("tool", "suggest"),
+    "link": ("observation", "link"),
+    "unlink": ("observation", "unlink"),
+    "related": ("observation", "related"),
+    "share": ("admin", "share"),
+    "import": ("admin", "import"),
+}
+
+GLOBAL_OPTIONS_WITH_VALUES = {
+    "--profile",
+    "--db",
+    "--output-format",
+    "--output",
+    "-o",
+    "--color",
+}
+
+GLOBAL_FLAG_OPTIONS = {
+    "--human",
+    "--verbose",
+    "-v",
+}
+
 def _load_approval():
     """Lazy load approval module to avoid import-time warnings."""
     from .migrate_out.approval import (
@@ -129,12 +173,8 @@ def _load_approval():
     return add_approval_subcommands, handle_approval_command
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="los-memory: Memory ledger for AI agent observations",
-        prog="los-memory",
-    )
+def _add_global_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register global CLI arguments shared by bootstrap and full parsers."""
     parser.add_argument(
         "--profile",
         choices=PROFILE_CHOICES,
@@ -149,16 +189,55 @@ def parse_args() -> argparse.Namespace:
                         help="Color output mode")
     parser.add_argument("--verbose", "-v", action="store_true", default=argparse.SUPPRESS, help="Verbose output")
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # ========================================================================
-    # init
-    # ========================================================================
+def _rewrite_legacy_command_argv(argv: Sequence[str]) -> tuple[list[str], str | None]:
+    """Rewrite legacy flat commands to their nested equivalents before parsing."""
+    command_index: int | None = None
+    raw_argv = list(argv)
+    idx = 0
+    while idx < len(raw_argv):
+        token = raw_argv[idx]
+        if token == "--":
+            if idx + 1 < len(raw_argv):
+                command_index = idx + 1
+            break
+        if token in GLOBAL_FLAG_OPTIONS:
+            idx += 1
+            continue
+        if token in GLOBAL_OPTIONS_WITH_VALUES:
+            idx += 2
+            continue
+        if token.startswith("-o") and token != "-o":
+            idx += 1
+            continue
+        if any(token.startswith(f"{option}=") for option in GLOBAL_OPTIONS_WITH_VALUES if option.startswith("--")):
+            idx += 1
+            continue
+        if token.startswith("-"):
+            return raw_argv, None
+        command_index = idx
+        break
+
+    if command_index is None or command_index >= len(raw_argv):
+        return list(argv), None
+
+    legacy_command = raw_argv[command_index]
+    target = LEGACY_COMMAND_ALIASES.get(legacy_command)
+    if target is None:
+        return list(argv), None
+
+    rewritten = list(raw_argv)
+    rewritten[command_index:command_index + 1] = list(target)
+    return rewritten, legacy_command
+
+
+def _register_init_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `init` command."""
     subparsers.add_parser("init", help="Initialize the database")
 
-    # ========================================================================
-    # memory - Data access commands
-    # ========================================================================
+
+def _register_memory_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `memory` command group."""
     memory_parser = subparsers.add_parser("memory", help="Memory data access commands")
     memory_subparsers = memory_parser.add_subparsers(dest="memory_action", required=True)
 
@@ -218,13 +297,22 @@ def parse_args() -> argparse.Namespace:
     memory_clean.add_argument("--dry-run", action="store_true")
     memory_clean.add_argument("--vacuum", action="store_true")
 
-    # ========================================================================
-    # observation - Observation CRUD commands
-    # ========================================================================
+
+def _register_observation_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `observation` command group."""
     obs_parser = subparsers.add_parser("observation", help="Observation management commands")
     obs_subparsers = obs_parser.add_subparsers(dest="obs_action", required=True)
+    _add_observation_add_subcommand(obs_subparsers)
+    _add_observation_edit_subcommand(obs_subparsers)
+    _add_observation_delete_subcommand(obs_subparsers)
+    _add_observation_capture_subcommand(obs_subparsers)
+    _add_observation_feedback_subcommand(obs_subparsers)
+    _add_observation_link_subcommand(obs_subparsers)
+    _add_observation_unlink_subcommand(obs_subparsers)
+    _add_observation_related_subcommand(obs_subparsers)
 
-    # observation add
+
+def _add_observation_add_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_add = obs_subparsers.add_parser("add", help="Add an observation")
     obs_add.add_argument("--timestamp", default=utc_now())
     obs_add.add_argument("--project", default="general")
@@ -233,10 +321,16 @@ def parse_args() -> argparse.Namespace:
     obs_add.add_argument("--summary", required=True)
     obs_add.add_argument("--tags", default="")
     obs_add.add_argument("--raw", default="")
+    obs_add.add_argument(
+        "--metadata",
+        default=None,
+        help="Observation metadata JSON object. Use '@/path/file.json' or '@-' to read from stdin.",
+    )
     obs_add.add_argument("--auto-tags", action="store_true")
     obs_add.add_argument("--llm-hook", default=DEFAULT_LLM_HOOK)
 
-    # observation edit
+
+def _add_observation_edit_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_edit = obs_subparsers.add_parser("edit", help="Edit an observation")
     obs_edit.add_argument("--id", type=int, required=True)
     obs_edit.add_argument("--timestamp", default=None)
@@ -246,14 +340,21 @@ def parse_args() -> argparse.Namespace:
     obs_edit.add_argument("--summary", default=None)
     obs_edit.add_argument("--tags", default=None)
     obs_edit.add_argument("--raw", default=None)
+    obs_edit.add_argument(
+        "--metadata",
+        default=None,
+        help="Replace observation metadata with a JSON object. Use '@/path/file.json' or '@-' to read from stdin.",
+    )
     obs_edit.add_argument("--auto-tags", action="store_true")
 
-    # observation delete
+
+def _add_observation_delete_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_delete = obs_subparsers.add_parser("delete", help="Delete observations")
     obs_delete.add_argument("ids")
     obs_delete.add_argument("--dry-run", action="store_true")
 
-    # observation capture
+
+def _add_observation_capture_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_capture = obs_subparsers.add_parser("capture", help="Quick capture")
     obs_capture.add_argument("text", nargs="+")
     obs_capture.add_argument("--project")
@@ -261,35 +362,44 @@ def parse_args() -> argparse.Namespace:
     obs_capture.add_argument("--tags", default="")
     obs_capture.add_argument("--auto-tags", action="store_true")
 
-    # observation feedback
+
+def _add_observation_feedback_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_feedback = obs_subparsers.add_parser("feedback", help="Provide feedback on observations")
     obs_feedback.add_argument("text", nargs="+", help="Feedback text")
     obs_feedback.add_argument("--id", type=int, required=True, dest="observation_id")
+    obs_feedback.add_argument(
+        "--metadata",
+        default=None,
+        help="Structured feedback metadata JSON object. Use '@/path/file.json' or '@-' to read from stdin.",
+    )
     obs_feedback.add_argument("--dry-run", action="store_true")
     obs_feedback.add_argument("--history", action="store_true")
 
-    # observation link
+
+def _add_observation_link_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_link = obs_subparsers.add_parser("link", help="Create link between observations")
     obs_link.add_argument("--from", type=int, required=True, dest="from_id")
     obs_link.add_argument("--to", type=int, required=True, dest="to_id")
     obs_link.add_argument("--type", choices=["related", "child", "parent", "refines"], default="related")
 
-    # observation unlink
+
+def _add_observation_unlink_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_unlink = obs_subparsers.add_parser("unlink", help="Remove link between observations")
     obs_unlink.add_argument("--from", type=int, required=True, dest="from_id")
     obs_unlink.add_argument("--to", type=int, required=True, dest="to_id")
     obs_unlink.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None)
 
-    # observation related
+
+def _add_observation_related_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
     obs_related = obs_subparsers.add_parser("related", help="Find related observations")
     obs_related.add_argument("id", type=int, help="Observation ID")
     obs_related.add_argument("--type", choices=["related", "child", "parent", "refines"], default=None)
     obs_related.add_argument("--limit", type=int, default=20)
     obs_related.add_argument("--suggest", action="store_true")
 
-    # ========================================================================
-    # session - Session management
-    # ========================================================================
+
+def _register_session_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `session` command group."""
     session_parser = subparsers.add_parser("session", help="Session management")
     session_subparsers = session_parser.add_subparsers(dest="session_action", required=True)
 
@@ -303,7 +413,7 @@ def parse_args() -> argparse.Namespace:
     session_stop.add_argument("--summary")
 
     session_list = session_subparsers.add_parser("list", help="List sessions")
-    session_list.add_argument("--status", choices=["active", "completed"])
+    session_list.add_argument("--status", choices=["active", "completed", "ended"])
     session_list.add_argument("--limit", type=int, default=20)
 
     session_show = session_subparsers.add_parser("show", help="Show session details")
@@ -313,9 +423,9 @@ def parse_args() -> argparse.Namespace:
     session_resume = session_subparsers.add_parser("resume", help="Resume a session")
     session_resume.add_argument("session_id", type=int, nargs="?")
 
-    # ========================================================================
-    # checkpoint - Checkpoint management
-    # ========================================================================
+
+def _register_checkpoint_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `checkpoint` command group."""
     checkpoint_parser = subparsers.add_parser("checkpoint", help="Checkpoint management")
     checkpoint_subparsers = checkpoint_parser.add_subparsers(dest="checkpoint_action", required=True)
 
@@ -333,9 +443,9 @@ def parse_args() -> argparse.Namespace:
     checkpoint_show = checkpoint_subparsers.add_parser("show", help="Show checkpoint")
     checkpoint_show.add_argument("checkpoint_id", type=int)
 
-    # ========================================================================
-    # project - Project management
-    # ========================================================================
+
+def _register_project_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `project` command group."""
     project_parser = subparsers.add_parser("project", help="Project management")
     project_subparsers = project_parser.add_subparsers(dest="project_action", required=True)
 
@@ -354,9 +464,9 @@ def parse_args() -> argparse.Namespace:
     project_active = project_subparsers.add_parser("active", help="Show/set active project")
     project_active.add_argument("project_name", nargs="?")
 
-    # ========================================================================
-    # tool - Tool tracking commands
-    # ========================================================================
+
+def _register_tool_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `tool` command group."""
     tool_parser = subparsers.add_parser("tool", help="Tool tracking commands")
     tool_subparsers = tool_parser.add_subparsers(dest="tool_action", required=True)
 
@@ -385,9 +495,9 @@ def parse_args() -> argparse.Namespace:
     tool_transition.add_argument("--reward", type=float, default=None)
     tool_transition.add_argument("--project", default=None)
 
-    # ========================================================================
-    # admin - Administrative commands
-    # ========================================================================
+
+def _register_admin_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `admin` command group."""
     admin_parser = subparsers.add_parser("admin", help="Administrative commands")
     admin_subparsers = admin_parser.add_subparsers(dest="admin_action", required=True)
 
@@ -417,9 +527,9 @@ def parse_args() -> argparse.Namespace:
     admin_extensions = admin_subparsers.add_parser("extensions", help="Manage extensions [EXT]")
     admin_extensions.add_argument("action", choices=["list", "status"], default="list", nargs="?")
 
-    # ========================================================================
-    # review - Review feedback commands
-    # ========================================================================
+
+def _register_review_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register `review` command group."""
     review_parser = subparsers.add_parser("review", help="Review feedback commands")
     review_subparsers = review_parser.add_subparsers(dest="review_action", required=True)
 
@@ -427,9 +537,12 @@ def parse_args() -> argparse.Namespace:
     review_apply.add_argument("--file", required=True)
     review_apply.add_argument("--dry-run", action="store_true")
 
-    # ========================================================================
-    # EXTENSION COMMANDS (experimental, may change or be removed)
-    # ========================================================================
+
+def _register_extension_subcommands(
+    parser: argparse.ArgumentParser,
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    """Register extension and migrating command groups."""
     # Register extensions via static registration system
     registered = register_extensions(subparsers, show_warnings=False)
 
@@ -445,74 +558,110 @@ def parse_args() -> argparse.Namespace:
     # Store registered extensions for help text
     parser.registered_extensions = registered  # type: ignore
 
-    return parser.parse_args()
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser with all command groups."""
+    parser = argparse.ArgumentParser(
+        description="los-memory: Memory ledger for AI agent observations",
+        prog="los-memory",
+    )
+    _add_global_arguments(parser)
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    _register_init_subcommands(subparsers)
+    _register_memory_subcommands(subparsers)
+    _register_observation_subcommands(subparsers)
+    _register_session_subcommands(subparsers)
+    _register_checkpoint_subcommands(subparsers)
+    _register_project_subcommands(subparsers)
+    _register_tool_subcommands(subparsers)
+    _register_admin_subcommands(subparsers)
+    _register_review_subcommands(subparsers)
+    _register_extension_subcommands(parser, subparsers)
+    return parser
 
 
-def main() -> int:
-    """Main entry point."""
-    args = parse_args()
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    rewritten_argv, legacy_command = _rewrite_legacy_command_argv(raw_argv)
+    parser = _build_parser()
+    args = parser.parse_args(rewritten_argv)
+    if legacy_command is not None:
+        args.legacy_command = legacy_command
+    return args
+
+
+def _ensure_human_flag(args: argparse.Namespace) -> None:
     if not hasattr(args, "human"):
         args.human = False
 
+
+def _build_cli_config_overrides(args: argparse.Namespace) -> dict:
+    cli_config_overrides = {}
+    if hasattr(args, "profile"):
+        cli_config_overrides["profile"] = args.profile
+    if hasattr(args, "db"):
+        cli_config_overrides["db_path"] = args.db
+    if hasattr(args, "output_format"):
+        cli_config_overrides["output"] = args.output_format
+    if hasattr(args, "color"):
+        cli_config_overrides["color"] = args.color
+    if hasattr(args, "verbose"):
+        cli_config_overrides["verbose"] = args.verbose
+    return cli_config_overrides
+
+
+def _apply_config_to_args(args: argparse.Namespace) -> str:
+    config = get_config(
+        cli_args=_build_cli_config_overrides(args),
+        force_reload=True,
+    )
+    args.profile = config.profile
+    args.db = config.db_path
+    args.output_format = config.output
+    args.color = config.color
+    args.verbose = config.verbose
+    return resolve_db_path(args.profile, args.db)
+
+
+def _run_init_command(args: argparse.Namespace, db_path: str) -> int:
+    init_db(db_path)
+    _print_output(args, {"ok": True, "db": db_path, "profile": args.profile}, "init")
+    return 0
+
+
+def _is_doctor_command(args: argparse.Namespace) -> bool:
+    return args.command == "admin" and getattr(args, "admin_action", None) == "doctor"
+
+
+def _run_doctor_command(args: argparse.Namespace, db_path: str) -> int:
+    from .doctor import doctor_command, format_human_output, open_doctor_connection
+
+    conn = None
     try:
-        cli_config_overrides = {}
-        if hasattr(args, "profile"):
-            cli_config_overrides["profile"] = args.profile
-        if hasattr(args, "db"):
-            cli_config_overrides["db_path"] = args.db
-        if hasattr(args, "output_format"):
-            cli_config_overrides["output"] = args.output_format
-        if hasattr(args, "color"):
-            cli_config_overrides["color"] = args.color
-        if hasattr(args, "verbose"):
-            cli_config_overrides["verbose"] = args.verbose
+        conn = open_doctor_connection(db_path)
+    except sqlite3.Error:
+        pass  # Will be reported in doctor report
 
-        config = get_config(cli_args=cli_config_overrides, force_reload=True)
-        args.profile = config.profile
-        args.db = config.db_path
-        args.output_format = config.output
-        args.color = config.color
-        args.verbose = config.verbose
-        db_path = resolve_db_path(args.profile, args.db)
-    except ValueError as exc:
-        error_response, exit_code = _build_cli_error(exc)
-        _print_output(args, error_response, "error")
-        return exit_code
+    response = doctor_command(
+        db_path=db_path,
+        profile=args.profile,
+        conn=conn,
+        fix=getattr(args, "fix", False),
+    )
+    if conn:
+        conn.close()
 
-    # Handle init command (no DB connection needed)
-    if args.command == "init":
-        init_db(db_path)
-        _print_output(args, {"ok": True, "db": db_path, "profile": args.profile}, "init")
-        return 0
+    use_human = args.human or args.output_format == "table"
+    if use_human:
+        print(format_human_output(response.data))
+    else:
+        response.print(format=args.output_format, human=False)
+    return 0 if response.ok else 1
 
-    # Handle doctor command with special output formatting
-    if args.command == "admin" and getattr(args, "admin_action", None) == "doctor":
-        from .doctor import doctor_command, format_human_output, open_doctor_connection
 
-        conn = None
-        try:
-            conn = open_doctor_connection(db_path)
-        except sqlite3.Error:
-            pass  # Will be reported in doctor report
-
-        response = doctor_command(
-            db_path=db_path,
-            profile=args.profile,
-            conn=conn,
-            fix=getattr(args, "fix", False),
-        )
-        if conn:
-            conn.close()
-
-        # Determine if we should use human-readable output
-        use_human = args.human or args.output_format == "table"
-        if use_human:
-            # Use doctor-specific human-readable format
-            print(format_human_output(response.data))
-        else:
-            response.print(format=args.output_format, human=False)
-        return 0 if response.ok else 1
-
+def _run_standard_command(args: argparse.Namespace, db_path: str) -> int:
     # Regular command path - connect and initialize schema within the unified
     # error-handling block so DB/open failures get standardized error codes.
     conn = None
@@ -545,83 +694,134 @@ def main() -> int:
             conn.close()
 
 
+def main() -> int:
+    """Main entry point."""
+    args = parse_args()
+    _ensure_human_flag(args)
+
+    try:
+        db_path = _apply_config_to_args(args)
+    except ValueError as exc:
+        error_response, exit_code = _build_cli_error(exc)
+        _print_output(args, error_response, "error")
+        return exit_code
+
+    if args.command == "init":
+        return _run_init_command(args, db_path)
+
+    if _is_doctor_command(args):
+        return _run_doctor_command(args, db_path)
+
+    return _run_standard_command(args, db_path)
+
+
+def _dispatch_memory_command(conn, args) -> dict | None:
+    """Dispatch `memory` subcommands."""
+    action = args.memory_action
+    if action == "search":
+        return _handle_memory_search(conn, args)
+    if action == "list":
+        return _handle_memory_list(conn, args)
+    if action == "get":
+        return _handle_memory_get(conn, args)
+    if action == "timeline":
+        return _handle_memory_timeline(conn, args)
+    if action == "export":
+        return _handle_memory_export(conn, args)
+    if action == "clean":
+        return _handle_memory_clean(conn, args)
+    return None
+
+
+def _dispatch_observation_command(conn, args) -> dict | None:
+    """Dispatch `observation` subcommands."""
+    action = args.obs_action
+    if action == "add":
+        return _handle_obs_add(conn, args)
+    if action == "edit":
+        return _handle_obs_edit(conn, args)
+    if action == "delete":
+        return _handle_obs_delete(conn, args)
+    if action == "capture":
+        return _handle_obs_capture(conn, args)
+    if action == "feedback":
+        return _handle_obs_feedback(conn, args)
+    if action == "link":
+        return _handle_obs_link(conn, args)
+    if action == "unlink":
+        return _handle_obs_unlink(conn, args)
+    if action == "related":
+        return _handle_obs_related(conn, args)
+    return None
+
+
+def _dispatch_tool_command(conn, args) -> dict | None:
+    """Dispatch `tool` subcommands."""
+    action = args.tool_action
+    if action == "log":
+        return _handle_tool_log(conn, args)
+    if action == "stats":
+        return _handle_tool_stats(conn, args)
+    if action == "suggest":
+        return _handle_tool_suggest(conn, args)
+    if action == "transition":
+        return _handle_tool_transition(conn, args)
+    return None
+
+
+def _dispatch_admin_command(conn, args) -> dict | None:
+    """Dispatch `admin` subcommands."""
+    action = args.admin_action
+    if action == "manage":
+        return _handle_admin_manage(conn, args)
+    if action == "share":
+        return _handle_admin_share(conn, args)
+    if action == "import":
+        return _handle_admin_import(conn, args)
+    if action == "extensions":
+        return _handle_admin_extensions(conn, args)
+    return None
+
+
+def _dispatch_review_command(conn, args) -> dict | None:
+    """Dispatch `review` subcommands."""
+    action = args.review_action
+    if action == "apply":
+        return _handle_review_apply(conn, args)
+    return None
+
+
 def _dispatch_command(conn, args) -> dict | None:
     """Dispatch to appropriate handler based on command structure."""
     cmd = args.command
 
     # New nested command structure
     if cmd == "memory":
-        action = args.memory_action
-        if action == "search":
-            return _handle_memory_search(conn, args)
-        elif action == "list":
-            return _handle_memory_list(conn, args)
-        elif action == "get":
-            return _handle_memory_get(conn, args)
-        elif action == "timeline":
-            return _handle_memory_timeline(conn, args)
-        elif action == "export":
-            return _handle_memory_export(conn, args)
-        elif action == "clean":
-            return _handle_memory_clean(conn, args)
-    elif cmd == "observation":
-        action = args.obs_action
-        if action == "add":
-            return _handle_obs_add(conn, args)
-        elif action == "edit":
-            return _handle_obs_edit(conn, args)
-        elif action == "delete":
-            return _handle_obs_delete(conn, args)
-        elif action == "capture":
-            return _handle_obs_capture(conn, args)
-        elif action == "feedback":
-            return _handle_obs_feedback(conn, args)
-        elif action == "link":
-            return _handle_obs_link(conn, args)
-        elif action == "unlink":
-            return _handle_obs_unlink(conn, args)
-        elif action == "related":
-            return _handle_obs_related(conn, args)
-    elif cmd == "session":
+        return _dispatch_memory_command(conn, args)
+    if cmd == "observation":
+        return _dispatch_observation_command(conn, args)
+    if cmd == "session":
         return _handle_session(conn, args)
-    elif cmd == "checkpoint":
+    if cmd == "checkpoint":
         return _handle_checkpoint(conn, args)
-    elif cmd == "project":
+    if cmd == "project":
         return _handle_project(conn, args)
-    elif cmd == "tool":
-        action = args.tool_action
-        if action == "log":
-            return _handle_tool_log(conn, args)
-        elif action == "stats":
-            return _handle_tool_stats(conn, args)
-        elif action == "suggest":
-            return _handle_tool_suggest(conn, args)
-        elif action == "transition":
-            return _handle_tool_transition(conn, args)
-    elif cmd == "admin":
-        action = args.admin_action
-        if action == "manage":
-            return _handle_admin_manage(conn, args)
-        elif action == "share":
-            return _handle_admin_share(conn, args)
-        elif action == "import":
-            return _handle_admin_import(conn, args)
-        elif action == "extensions":
-            return _handle_admin_extensions(conn, args)
-    elif cmd == "review":
-        action = args.review_action
-        if action == "apply":
-            return _handle_review_apply(conn, args)
+    if cmd == "tool":
+        return _dispatch_tool_command(conn, args)
+    if cmd == "admin":
+        return _dispatch_admin_command(conn, args)
+    if cmd == "review":
+        return _dispatch_review_command(conn, args)
     # Extension commands (incident, recovery, knowledge, attribution)
     # Dispatch via extension system for consistent handling
-    elif cmd in ("incident", "recovery", "knowledge", "attribution"):
+    if cmd in ("incident", "recovery", "knowledge", "attribution"):
         result = dispatch_extension_command(cmd, conn, args)
         if result is not None:
             return result
         raise ValueError(f"Extension command '{cmd}' failed to dispatch")
 
     # Approval command (deprecated, migrating to VPS Agent Web)
-    elif cmd == "approval":
+    if cmd == "approval":
         if not _approval_available:
             raise ValueError(
                 "Approval command is deprecated and has been disabled. "
@@ -726,92 +926,96 @@ def _build_structured_error(error_code, **kwargs) -> tuple[dict, int]:
     return result, get_exit_code_for_error(error_code)
 
 
-def _build_cli_error(exc: ValueError) -> tuple[dict, int]:
-    """Map common CLI ValueErrors to standardized error codes."""
-    message = str(exc)
-
+def _match_cli_not_found_error(message: str) -> tuple[str, dict] | None:
     observation_match = re.match(r"Observation (\d+) not found$", message)
     if observation_match:
-        return _build_structured_error(NF_OBSERVATION, id=observation_match.group(1))
+        return NF_OBSERVATION, {"id": observation_match.group(1)}
 
     session_match = re.match(r"Session (\d+) not found$", message)
     if session_match:
-        return _build_structured_error(NF_SESSION, id=session_match.group(1))
+        return NF_SESSION, {"id": session_match.group(1)}
 
     if message == "No active session":
-        return _build_structured_error(NF_ACTIVE_SESSION)
+        return NF_ACTIVE_SESSION, {}
 
     checkpoint_match = re.match(r"Checkpoint (\d+) not found$", message)
     if checkpoint_match:
-        return _build_structured_error(NF_CHECKPOINT, id=checkpoint_match.group(1))
+        return NF_CHECKPOINT, {"id": checkpoint_match.group(1)}
 
     project_match = re.match(r"Project '(.+)' not found$", message)
     if project_match:
-        return _build_structured_error(NF_PROJECT, project=project_match.group(1))
+        return NF_PROJECT, {"project": project_match.group(1)}
 
     command_match = re.match(r"Unknown command: (.+)$", message)
     if command_match:
-        return _build_structured_error(NF_COMMAND, command=command_match.group(1))
+        return NF_COMMAND, {"command": command_match.group(1)}
 
+    return None
+
+
+def _match_cli_validation_error(message: str) -> tuple[str, dict] | None:
     profile_match = re.match(r"Unknown profile '(.+)'\. Expected one of: .+$", message)
     if profile_match:
-        return _build_structured_error(CFG_INVALID_PROFILE, profile=profile_match.group(1))
+        return CFG_INVALID_PROFILE, {"profile": profile_match.group(1)}
 
     invalid_json_match = re.match(r"Invalid JSON for (.+?): (.+)$", message)
     if invalid_json_match:
-        return _build_structured_error(
-            VAL_INVALID_FORMAT,
-            param=invalid_json_match.group(1),
-            value=invalid_json_match.group(2),
-        )
+        return VAL_INVALID_FORMAT, {
+            "param": invalid_json_match.group(1),
+            "value": invalid_json_match.group(2),
+        }
 
     invalid_ids_match = re.match(r"Invalid IDs for (.+?): (.+)$", message)
     if invalid_ids_match:
-        return _build_structured_error(
-            VAL_INVALID_FORMAT,
-            param=invalid_ids_match.group(1),
-            value=invalid_ids_match.group(2),
-        )
+        return VAL_INVALID_FORMAT, {
+            "param": invalid_ids_match.group(1),
+            "value": invalid_ids_match.group(2),
+        }
 
     empty_ids_match = re.match(r"No IDs provided for (.+)$", message)
     if empty_ids_match:
-        return _build_structured_error(
-            VAL_EMPTY_VALUE,
-            param=empty_ids_match.group(1),
-        )
+        return VAL_EMPTY_VALUE, {"param": empty_ids_match.group(1)}
 
     if message == "No changes requested. Provide at least one editable field.":
-        return _build_structured_error(
-            VAL_EMPTY_VALUE,
-            param="editable fields",
-        )
+        return VAL_EMPTY_VALUE, {"param": "editable fields"}
 
     if message == "Use either --before or --older-than-days, not both":
-        return _build_structured_error(
-            VAL_INVALID_FORMAT,
-            param="cleanup filters",
-            value="--before and --older-than-days",
-        )
+        return VAL_INVALID_FORMAT, {
+            "param": "cleanup filters",
+            "value": "--before and --older-than-days",
+        }
 
     if message == "Refusing to clean without filters. Use --all to delete everything.":
-        return _build_structured_error(
-            VAL_EMPTY_VALUE,
-            param="cleanup filters",
-        )
+        return VAL_EMPTY_VALUE, {"param": "cleanup filters"}
 
+    return None
+
+
+def _match_cli_review_error(message: str) -> tuple[str, dict] | None:
     if message == "review_feedback_file_must_contain_array_or_object":
-        return _build_structured_error(
-            VAL_INVALID_FORMAT,
-            param="--file",
-            value="expected top-level JSON array or object",
-        )
+        return VAL_INVALID_FORMAT, {
+            "param": "--file",
+            "value": "expected top-level JSON array or object",
+        }
 
     if message == "review_feedback_items_must_be_array":
-        return _build_structured_error(
-            VAL_INVALID_FORMAT,
-            param="items",
-            value="expected array",
-        )
+        return VAL_INVALID_FORMAT, {"param": "items", "value": "expected array"}
+
+    return None
+
+
+def _build_cli_error(exc: ValueError) -> tuple[dict, int]:
+    """Map common CLI ValueErrors to standardized error codes."""
+    message = str(exc)
+    for matcher in (
+        _match_cli_not_found_error,
+        _match_cli_validation_error,
+        _match_cli_review_error,
+    ):
+        matched = matcher(message)
+        if matched:
+            error_code, kwargs = matched
+            return _build_structured_error(error_code, **kwargs)
 
     return {"ok": False, "error": message}, 1
 
@@ -885,6 +1089,7 @@ def _handle_obs_add(conn, args):
     summary = normalize_text(args.summary)
     tags_list = normalize_tags_list(args.tags)
     raw = args.raw
+    metadata = _load_observation_metadata(args.metadata)
 
     project = args.project
     if project == "general":
@@ -912,8 +1117,9 @@ def _handle_obs_add(conn, args):
     obs_id = add_observation(
         conn, args.timestamp, project, args.kind, title, summary,
         tags_to_json(tags_list), tags_to_text(tags_list), raw, session_id,
+        metadata=metadata_to_json(metadata),
     )
-    result = {"ok": True, "id": obs_id}
+    result = {"ok": True, "id": obs_id, "metadata": metadata, "profile": args.profile}
     if session_id:
         result["session_id"] = session_id
     return result
@@ -950,7 +1156,22 @@ def _handle_memory_get(conn, args):
 
 
 def _handle_obs_edit(conn, args):
-    result = run_edit(conn, args.id, args.project, args.kind, args.title, args.summary, args.tags, args.raw, args.timestamp, args.auto_tags)
+    metadata = None
+    if args.metadata is not None:
+        metadata = metadata_to_json(_load_observation_metadata(args.metadata))
+    result = run_edit(
+        conn,
+        args.id,
+        args.project,
+        args.kind,
+        args.title,
+        args.summary,
+        args.tags,
+        args.raw,
+        args.timestamp,
+        args.auto_tags,
+        metadata=metadata,
+    )
     result["db"] = args.db
     result["profile"] = args.profile
     return result
@@ -986,12 +1207,13 @@ def _handle_memory_export(conn, args):
         else:
             writer = csv.DictWriter(
                 output,
-                fieldnames=["id", "timestamp", "project", "kind", "title", "summary", "tags", "raw", "session_id"],
+                fieldnames=["id", "timestamp", "project", "kind", "title", "summary", "tags", "raw", "session_id", "metadata"],
             )
             writer.writeheader()
             for item in results:
                 row = asdict(item)
                 row["tags"] = tags_to_json(item.tags)
+                row["metadata"] = metadata_to_json(item.metadata)
                 writer.writerow(row)
             if output is sys.stdout:
                 return None
@@ -1075,6 +1297,7 @@ def _handle_project(conn, args):
         new_name = f"archived/{args.project_name}"
         conn.execute("UPDATE observations SET project = ? WHERE project = ?", (new_name, args.project_name))
         conn.execute("UPDATE sessions SET project = ? WHERE project = ?", (new_name, args.project_name))
+        conn.execute("UPDATE checkpoints SET project = ? WHERE project = ?", (new_name, args.project_name))
         conn.commit()
         return {"ok": True, "action": "archive", "old_name": args.project_name, "new_name": new_name}
 
@@ -1174,12 +1397,19 @@ def _handle_obs_capture(conn, args):
 
 def _handle_obs_feedback(conn, args):
     full_text = " ".join(args.text)
+    metadata = _load_observation_metadata(args.metadata)
 
     if args.history:
         history = get_feedback_history(conn, args.observation_id)
         return {"ok": True, "observation_id": args.observation_id, "history": history}
 
-    result = apply_feedback(conn, args.observation_id, full_text, auto_apply=not args.dry_run)
+    result = apply_feedback(
+        conn,
+        args.observation_id,
+        full_text,
+        auto_apply=not args.dry_run,
+        metadata=metadata,
+    )
     result["db"] = args.db
     result["profile"] = args.profile
     result["dry_run"] = args.dry_run
@@ -1337,6 +1567,26 @@ def _load_json_argument(arg_name: str, raw_value: str):
         return json.loads(raw_value)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON for {arg_name}: {exc.msg}") from exc
+
+
+def _load_observation_metadata(raw_value: str | None) -> dict:
+    """Load structured metadata for observation commands."""
+    if raw_value is None:
+        return {}
+    metadata = load_json_object_input(raw_value, "--metadata")
+    normalized = {str(key): value for key, value in metadata.items()}
+    if "profile" in normalized:
+        raise ValueError("Invalid JSON for --metadata: profile must be provided via --profile")
+
+    reserved_keys = set(OBSERVATION_METADATA_RESERVED_KEYS)
+    ordered: dict[str, object] = {}
+    for key in OBSERVATION_METADATA_RESERVED_KEYS:
+        if key in normalized:
+            ordered[key] = normalized[key]
+    for key, value in normalized.items():
+        if key not in reserved_keys:
+            ordered[key] = value
+    return ordered
 
 
 def _parse_ids_argument(raw_value: str, param_name: str):

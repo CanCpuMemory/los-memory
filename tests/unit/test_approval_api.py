@@ -328,3 +328,114 @@ class TestApprovalAPIAutoReject:
 
         assert result["success"] is True
         assert result["rejected_count"] == 0
+
+
+class TestApprovalAPITransactions:
+    """Test transaction boundaries for approval state + audit + events."""
+
+    def test_create_request_rolls_back_when_event_persist_fails(self, db_connection, monkeypatch):
+        """If event persistence fails, request/audit writes should roll back."""
+        api = ApprovalAPI(db_connection)
+
+        def fail_persist(*args, **kwargs):
+            raise RuntimeError("event persist failed")
+
+        monkeypatch.setattr(api.publisher, "_persist_event", fail_persist)
+
+        with pytest.raises(RuntimeError, match="event persist failed"):
+            api.create_request(job_id="job-tx-create", command="cmd")
+
+        request_count = db_connection.execute(
+            "SELECT COUNT(*) AS c FROM approval_requests WHERE job_id = ?",
+            ("job-tx-create",),
+        ).fetchone()["c"]
+        assert request_count == 0
+
+        audit_count = db_connection.execute(
+            "SELECT COUNT(*) AS c FROM approval_audit_log"
+        ).fetchone()["c"]
+        assert audit_count == 0
+
+        event_count = db_connection.execute(
+            "SELECT COUNT(*) AS c FROM approval_events WHERE job_id = ?",
+            ("job-tx-create",),
+        ).fetchone()["c"]
+        assert event_count == 0
+
+    def test_approve_rolls_back_when_event_persist_fails(self, db_connection, monkeypatch):
+        """If approved event persistence fails, status/audit update should roll back."""
+        api = ApprovalAPI(db_connection)
+        created = api.create_request(job_id="job-tx-approve", command="cmd")
+
+        def fail_persist(*args, **kwargs):
+            raise RuntimeError("event persist failed")
+
+        monkeypatch.setattr(api.publisher, "_persist_event", fail_persist)
+
+        with pytest.raises(RuntimeError, match="event persist failed"):
+            api.approve_request(
+                job_id="job-tx-approve",
+                actor_id="user-1",
+                version=created["request"]["version"],
+            )
+
+        row = db_connection.execute(
+            "SELECT status, version FROM approval_requests WHERE job_id = ?",
+            ("job-tx-approve",),
+        ).fetchone()
+        assert row["status"] == "pending"
+        assert row["version"] == 1
+
+        audit_actions = [
+            r["action"]
+            for r in db_connection.execute(
+                """
+                SELECT action FROM approval_audit_log
+                WHERE request_id = (
+                    SELECT id FROM approval_requests WHERE job_id = ?
+                )
+                ORDER BY id ASC
+                """,
+                ("job-tx-approve",),
+            ).fetchall()
+        ]
+        assert audit_actions == ["created"]
+
+    def test_reject_rolls_back_when_event_persist_fails(self, db_connection, monkeypatch):
+        """If rejected event persistence fails, status/audit update should roll back."""
+        api = ApprovalAPI(db_connection)
+        created = api.create_request(job_id="job-tx-reject", command="cmd")
+
+        def fail_persist(*args, **kwargs):
+            raise RuntimeError("event persist failed")
+
+        monkeypatch.setattr(api.publisher, "_persist_event", fail_persist)
+
+        with pytest.raises(RuntimeError, match="event persist failed"):
+            api.reject_request(
+                job_id="job-tx-reject",
+                actor_id="user-1",
+                version=created["request"]["version"],
+            )
+
+        row = db_connection.execute(
+            "SELECT status, version FROM approval_requests WHERE job_id = ?",
+            ("job-tx-reject",),
+        ).fetchone()
+        assert row["status"] == "pending"
+        assert row["version"] == 1
+
+        audit_actions = [
+            r["action"]
+            for r in db_connection.execute(
+                """
+                SELECT action FROM approval_audit_log
+                WHERE request_id = (
+                    SELECT id FROM approval_requests WHERE job_id = ?
+                )
+                ORDER BY id ASC
+                """,
+                ("job-tx-reject",),
+            ).fetchall()
+        ]
+        assert audit_actions == ["created"]

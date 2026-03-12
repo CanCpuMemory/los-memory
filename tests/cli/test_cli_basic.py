@@ -294,6 +294,31 @@ class TestCLISession:
         assert output["error_code"] == "NF_ACTIVE_SESSION"
         assert output["help_command"] == "los-memory session start --help"
 
+    def test_session_list_accepts_ended_status_filter(self, tmp_path):
+        """CLI should accept ended as a valid status filter for legacy rows."""
+        db_path = tmp_path / "test.db"
+
+        subprocess.run(
+            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            capture_output=True,
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "memory_tool.cli",
+                "--db", str(db_path),
+                "session", "list",
+                "--status", "ended",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0
+        output = json.loads(result.stdout)
+        assert output["ok"] is True
+        assert isinstance(output["sessions"], list)
+
     def test_review_apply_invalid_shape_returns_validation_error(self, tmp_path):
         """Test review apply rejects invalid top-level JSON structure."""
         db_path = tmp_path / "test.db"
@@ -497,12 +522,12 @@ class TestCLIIncident:
 class TestCLIBackwardCompat:
     """Test backward compatibility with old command names.
 
-    Note: Legacy commands (add, search, etc.) are mapped to new nested commands.
-    We test the new command structure which provides equivalent functionality.
+    Legacy flat commands must remain executable while external adapters migrate
+    to the nested command structure.
     """
 
-    def test_observation_add_equivalent(self, tmp_path):
-        """Test 'observation add' command (replacement for legacy 'add')."""
+    def test_legacy_add_command(self, tmp_path):
+        """Test legacy 'add' command still maps to observation add."""
         db_path = tmp_path / "test.db"
 
         subprocess.run(
@@ -510,12 +535,11 @@ class TestCLIBackwardCompat:
             capture_output=True
         )
 
-        # Use new nested command structure
         result = subprocess.run(
             [
                 sys.executable, "-m", "memory_tool.cli",
                 "--db", str(db_path),
-                "observation", "add",
+                "add",
                 "--title", "Test Observation",
                 "--summary", "Test"
             ],
@@ -526,8 +550,8 @@ class TestCLIBackwardCompat:
         output = json.loads(result.stdout)
         assert output["ok"] is True
 
-    def test_memory_search_equivalent(self, tmp_path):
-        """Test 'memory search' command (replacement for legacy 'search')."""
+    def test_legacy_search_command(self, tmp_path):
+        """Test legacy 'search' command still maps to memory search."""
         db_path = tmp_path / "test.db"
 
         subprocess.run(
@@ -545,12 +569,11 @@ class TestCLIBackwardCompat:
             capture_output=True
         )
 
-        # Use new nested command structure
         result = subprocess.run(
             [
                 sys.executable, "-m", "memory_tool.cli",
                 "--db", str(db_path),
-                "memory", "search", "Searchable"
+                "search", "Searchable"
             ],
             capture_output=True,
             text=True
@@ -558,6 +581,39 @@ class TestCLIBackwardCompat:
         assert result.returncode == 0
         output = json.loads(result.stdout)
         assert output["ok"] is True
+
+    def test_legacy_list_command(self, tmp_path):
+        """Test legacy 'list' command still maps to memory list."""
+        db_path = tmp_path / "test.db"
+
+        subprocess.run(
+            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            capture_output=True
+        )
+        subprocess.run(
+            [
+                sys.executable, "-m", "memory_tool.cli",
+                "--db", str(db_path),
+                "add",
+                "--title", "Listed Content",
+                "--summary", "Test content"
+            ],
+            capture_output=True
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "memory_tool.cli",
+                "--db", str(db_path),
+                "list"
+            ],
+            capture_output=True,
+            text=True
+        )
+        assert result.returncode == 0
+        output = json.loads(result.stdout)
+        assert output["ok"] is True
+        assert isinstance(output["results"], list)
 
 
 class TestCLIErrorHandling:

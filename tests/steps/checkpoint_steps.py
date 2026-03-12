@@ -118,6 +118,21 @@ def given_checkpoint_with_data(test_context: BDDTestContext, datatable):
     session_id = int(data["session_id"]) if "session_id" in data else None
     project = data.get("project", "general")
 
+    if session_id is not None:
+        from memory_tool.sessions import start_session
+        existing_session = test_context.conn.execute(
+            "SELECT id FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if existing_session is None:
+            session_id = start_session(
+                test_context.conn,
+                project=project,
+                working_dir="/tmp",
+                agent_type="test",
+                summary="checkpoint-fixture",
+            )
+
     # Create some observations for the checkpoint to reference
     if session_id:
         for i in range(3):

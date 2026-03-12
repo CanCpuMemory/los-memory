@@ -313,8 +313,8 @@ class TestKnowledgeBaseExtraction:
         assert entry_id is None
 
 
-class TestSchemaV12:
-    """Test database schema v12."""
+class TestSchemaCurrent:
+    """Test database schema current version."""
 
     def test_knowledge_entries_table_exists(self, db_connection):
         """Test knowledge_entries table exists."""
@@ -348,9 +348,9 @@ class TestSchemaV12:
             ).fetchone()
             assert row is not None, f"Index {idx} not found"
 
-    def test_schema_version_is_12(self, db_connection):
-        """Test schema version is 12."""
-        from memory_tool.database import get_schema_version
+    def test_schema_version_is_current(self, db_connection):
+        """Test schema version matches current constant."""
+        from memory_tool.database import SCHEMA_VERSION, get_schema_version
 
         version = get_schema_version(db_connection)
-        assert version == 12
+        assert version == SCHEMA_VERSION

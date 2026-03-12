@@ -143,9 +143,24 @@ class TestRecoveryActionRegistry:
 class TestRecoveryExecutor:
     """Test RecoveryExecutor."""
 
+    @staticmethod
+    def _create_incident(db_connection) -> int:
+        """Create an incident fixture and return its ID."""
+        from memory_tool.incidents import IncidentManager
+
+        incident = IncidentManager(db_connection).create(
+            incident_type="error",
+            severity="p1",
+            title="test-incident",
+            description="test-incident",
+            project="test",
+        )
+        return incident.id
+
     def test_sequential_execution(self, db_connection):
         """Test sequential action execution."""
         executor = RecoveryExecutor(db_connection)
+        incident_id = self._create_incident(db_connection)
 
         actions = [
             ShellCommandAction("cmd1", {"command": "echo first"}),
@@ -153,7 +168,7 @@ class TestRecoveryExecutor:
         ]
 
         results = executor.execute_actions(
-            incident_id=1,
+            incident_id=incident_id,
             actions=actions,
             context={},
             config=ExecutionConfig(strategy="sequential")
@@ -165,6 +180,7 @@ class TestRecoveryExecutor:
     def test_continue_on_error_false(self, db_connection):
         """Test stopping on error when configured."""
         executor = RecoveryExecutor(db_connection)
+        incident_id = self._create_incident(db_connection)
 
         actions = [
             ShellCommandAction("fail", {"command": "exit 1"}),
@@ -172,7 +188,7 @@ class TestRecoveryExecutor:
         ]
 
         results = executor.execute_actions(
-            incident_id=1,
+            incident_id=incident_id,
             actions=actions,
             context={},
             config=ExecutionConfig(continue_on_error=False)
@@ -184,16 +200,17 @@ class TestRecoveryExecutor:
     def test_execution_history(self, db_connection):
         """Test recording execution history."""
         executor = RecoveryExecutor(db_connection)
+        incident_id = self._create_incident(db_connection)
 
         # Create and execute
         action = ShellCommandAction("test", {"command": "echo test"})
         executor.execute_actions(
-            incident_id=1,
+            incident_id=incident_id,
             actions=[action],
             context={}
         )
 
-        history = executor.get_execution_history(incident_id=1)
+        history = executor.get_execution_history(incident_id=incident_id)
         assert len(history) >= 1
 
 

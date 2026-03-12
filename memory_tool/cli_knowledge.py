@@ -5,7 +5,7 @@ import argparse
 import sqlite3
 from typing import Any, Dict
 
-from .knowledge_base import KnowledgeBase, KnowledgeEntry
+from .knowledge_base import KnowledgeBase
 
 
 def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
@@ -18,9 +18,18 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
         dest="knowledge_action",
         help="Knowledge actions"
     )
+    _add_knowledge_search_parser(knowledge_subparsers)
+    _add_knowledge_add_parser(knowledge_subparsers)
+    _add_knowledge_list_parser(knowledge_subparsers)
+    _add_knowledge_get_parser(knowledge_subparsers)
+    _add_knowledge_record_parser(knowledge_subparsers)
+    _add_knowledge_stats_parser(knowledge_subparsers)
+    _add_knowledge_similar_parser(knowledge_subparsers)
+    _add_knowledge_cleanup_parser(knowledge_subparsers)
 
-    # Search knowledge
-    search_parser = knowledge_subparsers.add_parser(
+
+def _add_knowledge_search_parser(subparsers: argparse._SubParsersAction) -> None:
+    search_parser = subparsers.add_parser(
         "search",
         help="Search knowledge base"
     )
@@ -46,8 +55,9 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Maximum results"
     )
 
-    # Add from incident
-    add_parser = knowledge_subparsers.add_parser(
+
+def _add_knowledge_add_parser(subparsers: argparse._SubParsersAction) -> None:
+    add_parser = subparsers.add_parser(
         "add",
         help="Add knowledge from incident"
     )
@@ -58,8 +68,9 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Incident ID to extract from"
     )
 
-    # List entries
-    list_parser = knowledge_subparsers.add_parser(
+
+def _add_knowledge_list_parser(subparsers: argparse._SubParsersAction) -> None:
+    list_parser = subparsers.add_parser(
         "list",
         help="List knowledge entries"
     )
@@ -78,8 +89,9 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Maximum results"
     )
 
-    # Get entry details
-    get_parser = knowledge_subparsers.add_parser(
+
+def _add_knowledge_get_parser(subparsers: argparse._SubParsersAction) -> None:
+    get_parser = subparsers.add_parser(
         "get",
         help="Get knowledge entry details"
     )
@@ -89,8 +101,9 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Entry ID"
     )
 
-    # Record outcome
-    record_parser = knowledge_subparsers.add_parser(
+
+def _add_knowledge_record_parser(subparsers: argparse._SubParsersAction) -> None:
+    record_parser = subparsers.add_parser(
         "record",
         help="Record solution outcome"
     )
@@ -110,14 +123,13 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Record failure"
     )
 
-    # Statistics
-    stats_parser = knowledge_subparsers.add_parser(
-        "stats",
-        help="Show knowledge base statistics"
-    )
 
-    # Find similar
-    similar_parser = knowledge_subparsers.add_parser(
+def _add_knowledge_stats_parser(subparsers: argparse._SubParsersAction) -> None:
+    subparsers.add_parser("stats", help="Show knowledge base statistics")
+
+
+def _add_knowledge_similar_parser(subparsers: argparse._SubParsersAction) -> None:
+    similar_parser = subparsers.add_parser(
         "similar",
         help="Find similar solutions"
     )
@@ -136,8 +148,9 @@ def add_knowledge_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Maximum results"
     )
 
-    # Cleanup unused
-    cleanup_parser = knowledge_subparsers.add_parser(
+
+def _add_knowledge_cleanup_parser(subparsers: argparse._SubParsersAction) -> None:
+    cleanup_parser = subparsers.add_parser(
         "cleanup",
         help="List unused entries for cleanup"
     )
@@ -155,30 +168,24 @@ def handle_knowledge_command(
 ) -> Dict[str, Any]:
     """Handle knowledge subcommands."""
     kb = KnowledgeBase(conn)
-
     action = getattr(args, "knowledge_action", None)
-
-    if action == "search":
-        return _handle_search(conn, args, kb)
-    elif action == "add":
-        return _handle_add(conn, args, kb)
-    elif action == "list":
-        return _handle_list(conn, args, kb)
-    elif action == "get":
-        return _handle_get(conn, args, kb)
-    elif action == "record":
-        return _handle_record(conn, args, kb)
-    elif action == "stats":
-        return _handle_stats(conn, args, kb)
-    elif action == "similar":
-        return _handle_similar(conn, args, kb)
-    elif action == "cleanup":
-        return _handle_cleanup(conn, args, kb)
-    else:
+    handlers = {
+        "search": _handle_search,
+        "add": _handle_add,
+        "list": _handle_list,
+        "get": _handle_get,
+        "record": _handle_record,
+        "stats": _handle_stats,
+        "similar": _handle_similar,
+        "cleanup": _handle_cleanup,
+    }
+    handler = handlers.get(action)
+    if not handler:
         return {
             "success": False,
             "error": "No knowledge action specified. Use: search, add, list, get, record, stats, similar, cleanup"
         }
+    return handler(conn, args, kb)
 
 
 def _handle_search(

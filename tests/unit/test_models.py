@@ -164,6 +164,7 @@ class TestFeedback:
         assert feedback.target_observation_id == 5
         assert feedback.action_type == "correct"
         assert feedback.feedback_text == "Corrected summary"
+        assert feedback.metadata == {}
 
 
 class TestObservationLink:

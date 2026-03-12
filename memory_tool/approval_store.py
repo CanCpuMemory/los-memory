@@ -163,8 +163,10 @@ class ApprovalStore:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id TEXT NOT NULL UNIQUE,
                 command TEXT NOT NULL,
-                risk_level TEXT NOT NULL DEFAULT 'medium',
-                status TEXT NOT NULL DEFAULT 'pending',
+                risk_level TEXT NOT NULL DEFAULT 'medium'
+                    CHECK (risk_level IN ('low', 'medium', 'high', 'critical')),
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'approved', 'rejected', 'timeout')),
                 version INTEGER NOT NULL DEFAULT 1,
                 requested_by TEXT,
                 approved_by TEXT,
@@ -193,10 +195,13 @@ class ApprovalStore:
             CREATE TABLE IF NOT EXISTS approval_audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 request_id INTEGER NOT NULL,
-                action TEXT NOT NULL,
+                action TEXT NOT NULL
+                    CHECK (action IN ('created', 'approved', 'rejected', 'timeout')),
                 actor_id TEXT,
-                previous_status TEXT,
-                new_status TEXT NOT NULL,
+                previous_status TEXT
+                    CHECK (previous_status IS NULL OR previous_status IN ('pending', 'approved', 'rejected', 'timeout')),
+                new_status TEXT NOT NULL
+                    CHECK (new_status IN ('pending', 'approved', 'rejected', 'timeout')),
                 version INTEGER NOT NULL,
                 reason TEXT,
                 timestamp TEXT NOT NULL,
@@ -222,6 +227,7 @@ class ApprovalStore:
         new_status: str,
         version: int,
         reason: Optional[str] = None,
+        commit: bool = False,
     ) -> None:
         """Create audit log entry."""
         self.conn.execute(
@@ -232,8 +238,10 @@ class ApprovalStore:
             """,
             (request_id, action, actor_id, previous_status, new_status, version, reason, utc_now()),
         )
+        if commit:
+            self.conn.commit()
 
-    def create(self, request: ApprovalRequest) -> ApprovalRequest:
+    def create(self, request: ApprovalRequest, commit: bool = True) -> ApprovalRequest:
         """Create a new approval request.
 
         Args:
@@ -264,7 +272,6 @@ class ApprovalStore:
                 json.dumps(request.context),
             )
         )
-        self.conn.commit()
 
         request.id = cursor.lastrowid
 
@@ -277,7 +284,9 @@ class ApprovalStore:
             new_status=request.status.value,
             version=request.version,
         )
-        self.conn.commit()
+
+        if commit:
+            self.conn.commit()
 
         return request
 
@@ -351,6 +360,7 @@ class ApprovalStore:
         actor_id: str,
         version: int,
         reason: Optional[str] = None,
+        commit: bool = True,
     ) -> bool:
         """Approve a request with optimistic locking.
 
@@ -363,40 +373,15 @@ class ApprovalStore:
         Returns:
             True if successful, False if version conflict
         """
-        now = utc_now()
-
-        # Try to update with expected version
-        cursor = self.conn.execute(
-            """
-            UPDATE approval_requests
-            SET status = 'approved',
-                approved_by = ?,
-                reason = COALESCE(?, reason),
-                version = version + 1,
-                updated_at = ?
-            WHERE id = ? AND version = ? AND status = 'pending'
-            """,
-            (actor_id, reason, now, request_id, version)
-        )
-        self.conn.commit()
-
-        if cursor.rowcount == 0:
-            # No rows updated - version conflict or not pending
-            return False
-
-        # Log approval
-        self._log_audit(
+        return self._transition_request(
             request_id=request_id,
-            action="approved",
             actor_id=actor_id,
-            previous_status="pending",
-            new_status="approved",
-            version=version + 1,
+            version=version,
             reason=reason,
+            new_status=ApprovalStatus.APPROVED,
+            audit_action="approved",
+            commit=commit,
         )
-        self.conn.commit()
-
-        return True
 
     def reject(
         self,
@@ -404,6 +389,7 @@ class ApprovalStore:
         actor_id: str,
         version: int,
         reason: Optional[str] = None,
+        commit: bool = True,
     ) -> bool:
         """Reject a request with optimistic locking.
 
@@ -416,35 +402,57 @@ class ApprovalStore:
         Returns:
             True if successful, False if version conflict
         """
-        now = utc_now()
+        return self._transition_request(
+            request_id=request_id,
+            actor_id=actor_id,
+            version=version,
+            reason=reason,
+            new_status=ApprovalStatus.REJECTED,
+            audit_action="rejected",
+            commit=commit,
+        )
 
+    def _transition_request(
+        self,
+        request_id: int,
+        actor_id: str,
+        version: int,
+        reason: Optional[str],
+        new_status: ApprovalStatus,
+        audit_action: str,
+        commit: bool,
+    ) -> bool:
+        """Apply a pending -> decided transition with optimistic locking."""
+        now = utc_now()
         cursor = self.conn.execute(
             """
             UPDATE approval_requests
-            SET status = 'rejected',
+            SET status = ?,
                 approved_by = ?,
                 reason = COALESCE(?, reason),
                 version = version + 1,
                 updated_at = ?
             WHERE id = ? AND version = ? AND status = 'pending'
             """,
-            (actor_id, reason, now, request_id, version)
+            (new_status.value, actor_id, reason, now, request_id, version),
         )
-        self.conn.commit()
-
         if cursor.rowcount == 0:
+            if commit:
+                self.conn.commit()
             return False
 
         self._log_audit(
             request_id=request_id,
-            action="rejected",
+            action=audit_action,
             actor_id=actor_id,
             previous_status="pending",
-            new_status="rejected",
+            new_status=new_status.value,
             version=version + 1,
             reason=reason,
         )
-        self.conn.commit()
+
+        if commit:
+            self.conn.commit()
 
         return True
 
@@ -461,7 +469,7 @@ class ApprovalStore:
 
         return [self._row_to_request(row) for row in rows]
 
-    def auto_reject_expired(self) -> List[int]:
+    def auto_reject_expired(self, commit: bool = True) -> List[int]:
         """Auto-reject all expired pending requests.
 
         Returns:
@@ -496,7 +504,8 @@ class ApprovalStore:
                     reason="Auto-rejected after 48 hours",
                 )
 
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return rejected_ids
 
     def get_audit_log(

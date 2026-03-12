@@ -165,57 +165,23 @@ class DualWriteManager:
         Returns:
             DualWriteResult with combined status
         """
-        local_result: Optional[Dict] = None
-        remote_result: Optional[Dict] = None
-        local_success = False
-        remote_success = False
-
-        # Execute based on mode
         if self.config.mode == DualWriteMode.READ_ONLY:
-            return DualWriteResult(
-                success=False,
-                local_success=False,
-                remote_success=False,
-                error_message="Read-only mode - writes not allowed",
-            )
+            return self._build_read_only_result()
 
-        # Try local first
-        try:
-            local_result = local_fn()
-            local_success = local_result.get("success", True) if isinstance(local_result, dict) else True
-        except Exception as e:
-            logger.error(f"Local {operation} failed: {e}")
-            local_result = {"success": False, "error": str(e)}
-            local_success = False
-
-        # Try remote
-        try:
-            remote_result = remote_fn()
-            remote_success = remote_result.get("success", True) if isinstance(remote_result, dict) else True
-        except Exception as e:
-            logger.error(f"Remote {operation} failed: {e}")
-            remote_result = {"success": False, "error": str(e)}
-            remote_success = False
-
-        # Determine overall success based on mode
-        if self.config.mode == DualWriteMode.STRICT:
-            success = local_success and remote_success
-        elif self.config.mode == DualWriteMode.LOCAL_PREFERRED:
-            success = local_success
-        elif self.config.mode == DualWriteMode.REMOTE_PREFERRED:
-            success = remote_success
-        else:
-            success = False
-
-        # Build error message if needed
-        error_message = None
-        if not success:
-            errors = []
-            if not local_success and self.config.mode in (DualWriteMode.STRICT, DualWriteMode.LOCAL_PREFERRED):
-                errors.append(f"Local: {local_result.get('error', 'failed')}")
-            if not remote_success and self.config.mode in (DualWriteMode.STRICT, DualWriteMode.REMOTE_PREFERRED):
-                errors.append(f"Remote: {remote_result.get('error', 'failed')}")
-            error_message = "; ".join(errors) if errors else "Operation failed"
+        local_success, local_result = self._execute_side_operation(
+            side="Local", operation=operation, fn=local_fn
+        )
+        remote_success, remote_result = self._execute_side_operation(
+            side="Remote", operation=operation, fn=remote_fn
+        )
+        success = self._resolve_success(local_success, remote_success)
+        error_message = self._build_error_message(
+            success=success,
+            local_success=local_success,
+            remote_success=remote_success,
+            local_result=local_result,
+            remote_result=remote_result,
+        )
 
         return DualWriteResult(
             success=success,
@@ -225,6 +191,65 @@ class DualWriteManager:
             remote_result=remote_result,
             error_message=error_message,
         )
+
+    def _build_read_only_result(self) -> DualWriteResult:
+        return DualWriteResult(
+            success=False,
+            local_success=False,
+            remote_success=False,
+            error_message="Read-only mode - writes not allowed",
+        )
+
+    def _execute_side_operation(
+        self,
+        side: str,
+        operation: str,
+        fn: Callable[[], T],
+    ) -> tuple[bool, Optional[Dict[str, Any]]]:
+        try:
+            result = fn()
+            success = result.get("success", True) if isinstance(result, dict) else True
+            if isinstance(result, dict):
+                return success, result
+            return success, None
+        except Exception as error:
+            logger.error(f"{side} {operation} failed: {error}")
+            return False, {"success": False, "error": str(error)}
+
+    def _resolve_success(self, local_success: bool, remote_success: bool) -> bool:
+        if self.config.mode == DualWriteMode.STRICT:
+            return local_success and remote_success
+        if self.config.mode == DualWriteMode.LOCAL_PREFERRED:
+            return local_success
+        if self.config.mode == DualWriteMode.REMOTE_PREFERRED:
+            return remote_success
+        return False
+
+    def _build_error_message(
+        self,
+        success: bool,
+        local_success: bool,
+        remote_success: bool,
+        local_result: Optional[Dict[str, Any]],
+        remote_result: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        if success:
+            return None
+
+        errors: List[str] = []
+        if (
+            not local_success
+            and self.config.mode in (DualWriteMode.STRICT, DualWriteMode.LOCAL_PREFERRED)
+        ):
+            message = local_result.get("error", "failed") if local_result else "failed"
+            errors.append(f"Local: {message}")
+        if (
+            not remote_success
+            and self.config.mode in (DualWriteMode.STRICT, DualWriteMode.REMOTE_PREFERRED)
+        ):
+            message = remote_result.get("error", "failed") if remote_result else "failed"
+            errors.append(f"Remote: {message}")
+        return "; ".join(errors) if errors else "Operation failed"
 
     def create_request(
         self,

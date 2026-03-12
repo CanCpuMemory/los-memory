@@ -180,7 +180,7 @@ def get_session_observations(
 ) -> list["Observation"]:
     """Get all observations for a session."""
     from .models import Observation
-    from .utils import parse_tags_json
+    from .utils import parse_metadata_json, parse_tags_json
     rows = conn.execute(
         """
         SELECT * FROM observations
@@ -201,6 +201,7 @@ def get_session_observations(
             tags=parse_tags_json(row["tags"]),
             raw=row["raw"],
             session_id=row["session_id"] if "session_id" in row.keys() else None,
+            metadata=parse_metadata_json(row["metadata"]) if "metadata" in row.keys() else {},
         )
         for row in rows
     ]

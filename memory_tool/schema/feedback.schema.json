@@ -3,9 +3,9 @@
   "$id": "https://los-memory.local/schemas/feedback.schema.json",
   "title": "Feedback Schema",
   "description": "Schema for Feedback data model",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "object",
-  "required": ["id", "target_observation_id", "action_type", "feedback_text", "timestamp"],
+  "required": ["id", "target_observation_id", "action_type", "feedback_text", "timestamp", "metadata"],
   "properties": {
     "id": {
       "type": "integer",
@@ -30,6 +30,27 @@
       "type": "string",
       "format": "date-time",
       "description": "When the feedback was created"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Structured feedback metadata for correction provenance",
+      "default": {},
+      "properties": {
+        "tenant_id": { "type": ["string", "number", "null"] },
+        "project_id": { "type": ["string", "number", "null"] },
+        "actor_id": { "type": ["string", "number", "null"] },
+        "user_id": { "type": ["string", "number", "null"] },
+        "role": { "type": ["string", "null"] },
+        "trace_id": { "type": ["string", "null"] },
+        "request_id": { "type": ["string", "null"] },
+        "session_id": { "type": ["string", "number", "null"] },
+        "idempotency_key": { "type": ["string", "null"] },
+        "job_id": { "type": ["string", "number", "null"] },
+        "approval_id": { "type": ["string", "number", "null"] },
+        "event_type": { "type": ["string", "null"] },
+        "source": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
     }
   }
 }

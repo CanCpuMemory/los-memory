@@ -5,7 +5,8 @@ integrating HMAC security, SSE events, and storage.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+import sqlite3
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .approval_events import EventPublisher
 from .approval_security import HMACConfig, HMACValidator, generate_hmac_headers
@@ -99,26 +100,50 @@ class ApprovalAPI:
         Raises:
             ApprovalAPIError: If validation fails or job exists
         """
-        # Check if job already has a request
+        self._raise_if_request_exists(job_id)
+        self._validate_create_risk_level(risk_level)
+        request = self._build_create_request(
+            job_id=job_id,
+            command=command,
+            risk_level=risk_level,
+            requested_by=requested_by,
+            context=context,
+        )
+        created, event = self._persist_create_request_and_event(request)
+
+        # Publish to in-memory subscribers only after DB transaction commits.
+        self.publisher.broadcast(event)
+        return self._build_create_request_response(created, event.event_id)
+
+    def _raise_if_request_exists(self, job_id: str) -> None:
         existing = self.store.get_by_job_id(job_id)
-        if existing:
-            raise ApprovalAPIError(
-                "409_ALREADY_DECIDED",
-                f"Approval request already exists for job {job_id}",
-                {"existing_status": existing.status.value}
-            )
+        if not existing:
+            return
+        raise ApprovalAPIError(
+            "409_ALREADY_DECIDED",
+            f"Approval request already exists for job {job_id}",
+            {"existing_status": existing.status.value},
+        )
 
-        # Validate risk level
+    def _validate_create_risk_level(self, risk_level: str) -> None:
         valid_risks = ["low", "medium", "high", "critical"]
-        if risk_level not in valid_risks:
-            raise ApprovalAPIError(
-                "400_BAD_REQUEST",
-                f"Invalid risk_level: {risk_level}",
-                {"valid_values": valid_risks}
-            )
+        if risk_level in valid_risks:
+            return
+        raise ApprovalAPIError(
+            "400_BAD_REQUEST",
+            f"Invalid risk_level: {risk_level}",
+            {"valid_values": valid_risks},
+        )
 
-        # Create request
-        request = ApprovalRequest(
+    def _build_create_request(
+        self,
+        job_id: str,
+        command: str,
+        risk_level: str,
+        requested_by: Optional[str],
+        context: Optional[Dict[str, Any]],
+    ) -> ApprovalRequest:
+        return ApprovalRequest(
             job_id=job_id,
             command=command,
             risk_level=risk_level,
@@ -126,20 +151,37 @@ class ApprovalAPI:
             context=context or {},
         )
 
-        created = self.store.create(request)
+    def _persist_create_request_and_event(
+        self,
+        request: ApprovalRequest,
+    ) -> Tuple[ApprovalRequest, Any]:
+        try:
+            with self.conn:
+                created = self.store.create(request, commit=False)
+                event = self.publisher.publish_pending(
+                    job_id=request.job_id,
+                    command=request.command,
+                    risk_level=request.risk_level,
+                    actor_id=request.requested_by,
+                    commit=False,
+                    broadcast=False,
+                )
+                return created, event
+        except sqlite3.IntegrityError:
+            raise ApprovalAPIError(
+                "409_ALREADY_DECIDED",
+                f"Approval request already exists for job {request.job_id}",
+            )
 
-        # Publish event
-        event = self.publisher.publish_pending(
-            job_id=job_id,
-            command=command,
-            risk_level=risk_level,
-            actor_id=requested_by,
-        )
-
+    def _build_create_request_response(
+        self,
+        created: ApprovalRequest,
+        event_id: str,
+    ) -> Dict[str, Any]:
         return {
             "success": True,
             "request": created.to_dict(),
-            "event_id": event.event_id,
+            "event_id": event_id,
         }
 
     def approve_request(
@@ -165,62 +207,18 @@ class ApprovalAPI:
         Raises:
             ApprovalAPIError: If HMAC invalid, version conflict, etc.
         """
-        # Verify HMAC if configured
-        if self.validator and hmac_headers:
-            self._verify_hmac(job_id, "approve", actor_id, version, reason, hmac_headers)
-
-        # Get request
-        request = self.store.get_by_job_id(job_id)
-        if not request:
-            raise ApprovalAPIError(
-                "404_JOB_NOT_FOUND",
-                f"Approval request not found for job {job_id}"
-            )
-
-        # Check if already decided
-        if request.status != ApprovalStatus.PENDING:
-            raise ApprovalAPIError(
-                "409_ALREADY_DECIDED",
-                f"Request already {request.status.value}",
-                {"current_status": request.status.value}
-            )
-
-        # Attempt approval with optimistic lock
-        success = self.store.approve(
-            request_id=request.id,
+        return self._decide_request(
+            job_id=job_id,
             actor_id=actor_id,
             version=version,
             reason=reason,
+            hmac_headers=hmac_headers,
+            action="approve",
+            status="approved",
+            store_action=self.store.approve,
+            event_publisher=self.publisher.publish_approved,
+            include_current_status_on_conflict=True,
         )
-
-        if not success:
-            # Version conflict - get current state
-            current = self.store.get_by_id(request.id)
-            raise ApprovalAPIError(
-                "409_APPROVAL_VERSION_CONFLICT",
-                "Request was modified concurrently",
-                {
-                    "current_version": current.version if current else None,
-                    "expected_version": version,
-                    "current_status": current.status.value if current else None,
-                }
-            )
-
-        # Publish event
-        event = self.publisher.publish_approved(
-            job_id=job_id,
-            actor_id=actor_id,
-            version=version + 1,
-            reason=reason,
-        )
-
-        return {
-            "success": True,
-            "job_id": job_id,
-            "status": "approved",
-            "version": version + 1,
-            "event_id": event.event_id,
-        }
 
     def reject_request(
         self,
@@ -245,60 +243,18 @@ class ApprovalAPI:
         Raises:
             ApprovalAPIError: If HMAC invalid, version conflict, etc.
         """
-        # Verify HMAC if configured
-        if self.validator and hmac_headers:
-            self._verify_hmac(job_id, "reject", actor_id, version, reason, hmac_headers)
-
-        # Get request
-        request = self.store.get_by_job_id(job_id)
-        if not request:
-            raise ApprovalAPIError(
-                "404_JOB_NOT_FOUND",
-                f"Approval request not found for job {job_id}"
-            )
-
-        # Check if already decided
-        if request.status != ApprovalStatus.PENDING:
-            raise ApprovalAPIError(
-                "409_ALREADY_DECIDED",
-                f"Request already {request.status.value}",
-                {"current_status": request.status.value}
-            )
-
-        # Attempt rejection with optimistic lock
-        success = self.store.reject(
-            request_id=request.id,
+        return self._decide_request(
+            job_id=job_id,
             actor_id=actor_id,
             version=version,
             reason=reason,
+            hmac_headers=hmac_headers,
+            action="reject",
+            status="rejected",
+            store_action=self.store.reject,
+            event_publisher=self.publisher.publish_rejected,
+            include_current_status_on_conflict=False,
         )
-
-        if not success:
-            current = self.store.get_by_id(request.id)
-            raise ApprovalAPIError(
-                "409_APPROVAL_VERSION_CONFLICT",
-                "Request was modified concurrently",
-                {
-                    "current_version": current.version if current else None,
-                    "expected_version": version,
-                }
-            )
-
-        # Publish event
-        event = self.publisher.publish_rejected(
-            job_id=job_id,
-            actor_id=actor_id,
-            version=version + 1,
-            reason=reason,
-        )
-
-        return {
-            "success": True,
-            "job_id": job_id,
-            "status": "rejected",
-            "version": version + 1,
-            "event_id": event.event_id,
-        }
 
     def get_request_status(self, job_id: str) -> Dict[str, Any]:
         """Get approval request status.
@@ -432,25 +388,33 @@ class ApprovalAPI:
         Returns:
             Dict with rejected job IDs
         """
-        rejected_ids = self.store.auto_reject_expired()
+        events = []
+        rejected_job_ids: List[str] = []
+        with self.conn:
+            rejected_ids = self.store.auto_reject_expired(commit=False)
 
-        # Publish events for auto-rejected
-        for req_id in rejected_ids:
-            request = self.store.get_by_id(req_id)
-            if request:
-                self.publisher.publish_timeout(
+            # Persist events for auto-rejected in same transaction.
+            for req_id in rejected_ids:
+                request = self.store.get_by_id(req_id)
+                if not request:
+                    continue
+                rejected_job_ids.append(request.job_id)
+                event = self.publisher.publish_timeout(
                     job_id=request.job_id,
                     timeout_hours=48,
+                    commit=False,
+                    broadcast=False,
                 )
+                events.append(event)
+
+        # Publish to in-memory subscribers only after DB transaction commits.
+        for event in events:
+            self.publisher.broadcast(event)
 
         return {
             "success": True,
             "rejected_count": len(rejected_ids),
-            "rejected_job_ids": [
-                self.store.get_by_id(rid).job_id
-                for rid in rejected_ids
-                if self.store.get_by_id(rid)
-            ],
+            "rejected_job_ids": rejected_job_ids,
         }
 
     def _verify_hmac(
@@ -499,6 +463,93 @@ class ApprovalAPI:
                 f"HMAC verification failed: {result.get('error', 'unknown')}",
                 {"details": result.get("message", "")}
             )
+
+    def _get_pending_request(self, job_id: str) -> ApprovalRequest:
+        """Load request by job id and ensure it is still pending."""
+        request = self.store.get_by_job_id(job_id)
+        if not request:
+            raise ApprovalAPIError(
+                "404_JOB_NOT_FOUND",
+                f"Approval request not found for job {job_id}"
+            )
+        if request.status != ApprovalStatus.PENDING:
+            raise ApprovalAPIError(
+                "409_ALREADY_DECIDED",
+                f"Request already {request.status.value}",
+                {"current_status": request.status.value}
+            )
+        return request
+
+    def _build_version_conflict_details(
+        self,
+        current: Optional[ApprovalRequest],
+        expected_version: int,
+        include_current_status: bool,
+    ) -> Dict[str, Any]:
+        details: Dict[str, Any] = {
+            "current_version": current.version if current else None,
+            "expected_version": expected_version,
+        }
+        if include_current_status:
+            details["current_status"] = current.status.value if current else None
+        return details
+
+    def _decide_request(
+        self,
+        job_id: str,
+        actor_id: str,
+        version: int,
+        reason: Optional[str],
+        hmac_headers: Optional[Dict[str, str]],
+        action: str,
+        status: str,
+        store_action: Callable[..., bool],
+        event_publisher: Callable[..., Any],
+        include_current_status_on_conflict: bool,
+    ) -> Dict[str, Any]:
+        """Apply approve/reject decision with optimistic locking and event write."""
+        if self.validator and hmac_headers:
+            self._verify_hmac(job_id, action, actor_id, version, reason, hmac_headers)
+
+        request = self._get_pending_request(job_id)
+
+        with self.conn:
+            success = store_action(
+                request_id=request.id,
+                actor_id=actor_id,
+                version=version,
+                reason=reason,
+                commit=False,
+            )
+            if not success:
+                current = self.store.get_by_id(request.id)
+                raise ApprovalAPIError(
+                    "409_APPROVAL_VERSION_CONFLICT",
+                    "Request was modified concurrently",
+                    self._build_version_conflict_details(
+                        current=current,
+                        expected_version=version,
+                        include_current_status=include_current_status_on_conflict,
+                    ),
+                )
+
+            event = event_publisher(
+                job_id=job_id,
+                actor_id=actor_id,
+                version=version + 1,
+                reason=reason,
+                commit=False,
+                broadcast=False,
+            )
+
+        self.publisher.broadcast(event)
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": status,
+            "version": version + 1,
+            "event_id": event.event_id,
+        }
 
     def generate_hmac_headers_for_request(
         self,

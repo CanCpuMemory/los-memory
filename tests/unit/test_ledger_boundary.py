@@ -18,6 +18,7 @@ from validate_ledger_boundary import (
     run_smoke_tests,
     validate_ledger_boundary,
 )
+from memory_tool.database import SCHEMA_VERSION as DB_SCHEMA_VERSION
 
 
 class TestBoundaryCheck:
@@ -441,10 +442,10 @@ class TestHubLiteIntegration:
             child_task_id="child-test"
         )
 
-        # Schema should be at version 12 for current hub-lite integration
-        assert report.schema_version == 12
+        # Schema should match current repo schema
+        assert report.schema_version == DB_SCHEMA_VERSION
 
         # Verify schema check passed
         schema_check = next(c for c in report.checks if c.name == "schema_integrity")
         assert schema_check.status == "pass"
-        assert "v12" in schema_check.message
+        assert f"v{DB_SCHEMA_VERSION}" in schema_check.message

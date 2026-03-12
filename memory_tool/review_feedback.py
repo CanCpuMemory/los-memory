@@ -19,16 +19,21 @@ def _to_int(value: Any) -> int:
     raise ValueError("invalid_observation_id")
 
 
-def _extract_item(raw: Any) -> tuple[int, str]:
+def _extract_item(raw: Any) -> tuple[int, str, dict[str, Any]]:
     if not isinstance(raw, dict):
         raise ValueError("item_must_be_object")
     observation_id = raw.get("observation_id", raw.get("id"))
     feedback_text = raw.get("feedback", raw.get("text", raw.get("comment", "")))
+    metadata = raw.get("metadata", {})
     obs_id = _to_int(observation_id)
     text = str(feedback_text or "").strip()
     if not text:
         raise ValueError("feedback_required")
-    return obs_id, text
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata_must_be_object")
+    return obs_id, text, dict(metadata)
 
 
 def apply_review_feedback(
@@ -42,12 +47,13 @@ def apply_review_feedback(
 
     for index, raw in enumerate(items):
         try:
-            observation_id, feedback_text = _extract_item(raw)
+            observation_id, feedback_text, metadata = _extract_item(raw)
             result = apply_feedback(
                 conn,
                 observation_id=observation_id,
                 feedback_text=feedback_text,
                 auto_apply=auto_apply,
+                metadata=metadata,
             )
             result["index"] = index
             results.append(result)

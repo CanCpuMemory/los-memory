@@ -100,7 +100,7 @@ def get_checkpoint_observations(
 ) -> list["Observation"]:
     """Get observations relevant to a checkpoint."""
     from .models import Observation
-    from .utils import parse_tags_json
+    from .utils import parse_metadata_json, parse_tags_json
     checkpoint = get_checkpoint(conn, checkpoint_id)
     if not checkpoint:
         return []
@@ -119,7 +119,7 @@ def get_checkpoint_observations(
         rows = conn.execute(
             """
             SELECT * FROM observations
-            WHERE project = ? AND timestamp >= ?
+            WHERE project = ? AND timestamp <= ?
             ORDER BY timestamp DESC
             LIMIT ?
             """,
@@ -137,6 +137,7 @@ def get_checkpoint_observations(
             tags=parse_tags_json(row["tags"]),
             raw=row["raw"],
             session_id=row["session_id"] if "session_id" in row.keys() else None,
+            metadata=parse_metadata_json(row["metadata"]) if "metadata" in row.keys() else {},
         )
         for row in rows
     ]

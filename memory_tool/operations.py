@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 def normalize_rows(rows: Iterable[sqlite3.Row]) -> List["Observation"]:
     """Convert database rows to Observation objects."""
     from .models import Observation
-    from .utils import parse_tags_json
+    from .utils import parse_metadata_json, parse_tags_json
     results: List[Observation] = []
     for row in rows:
         results.append(
@@ -27,6 +27,7 @@ def normalize_rows(rows: Iterable[sqlite3.Row]) -> List["Observation"]:
                 tags=parse_tags_json(row["tags"]),
                 raw=row["raw"],
                 session_id=row["session_id"] if "session_id" in row.keys() else None,
+                metadata=parse_metadata_json(row["metadata"]) if "metadata" in row.keys() else {},
             )
         )
     return results
@@ -43,14 +44,43 @@ def add_observation(
     tags_text: str,
     raw: str,
     session_id: Optional[int] = None,
+    metadata: str = "{}",
 ) -> int:
     """Add a new observation and return its ID."""
+    normalized_session_id: Optional[int]
+    if session_id is None:
+        normalized_session_id = None
+    else:
+        try:
+            candidate_session_id = int(session_id)
+        except (TypeError, ValueError):
+            candidate_session_id = 0
+        if candidate_session_id <= 0:
+            normalized_session_id = None
+        else:
+            exists = conn.execute(
+                "SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
+                (candidate_session_id,),
+            ).fetchone()
+            normalized_session_id = candidate_session_id if exists else None
+
     cursor = conn.execute(
         """
-        INSERT INTO observations (timestamp, project, kind, title, summary, tags, tags_text, raw, session_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO observations (timestamp, project, kind, title, summary, tags, tags_text, raw, session_id, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (timestamp, project, kind, title, summary, tags, tags_text, raw, session_id),
+        (
+            timestamp,
+            project,
+            kind,
+            title,
+            summary,
+            tags,
+            tags_text,
+            raw,
+            normalized_session_id,
+            metadata,
+        ),
     )
     conn.commit()
     return int(cursor.lastrowid)
@@ -80,7 +110,7 @@ def run_search(
     required_tags: Optional[List[str]] = None,
 ) -> List[dict]:
     """Search observations using FTS or LIKE."""
-    from .utils import parse_tags_json, quote_fts_query
+    from .utils import parse_metadata_json, parse_tags_json, quote_fts_query
     query = query.strip()
     if not query:
         return []
@@ -88,44 +118,74 @@ def run_search(
     fts_query = quote_fts_query(query) if quote else query
     if mode != "like":
         try:
-            rows = conn.execute(
-                """
-                SELECT observations.id, observations.timestamp, observations.project,
-                       observations.kind, observations.title, observations.summary,
-                       observations.tags, observations.raw, observations.session_id,
-                       bm25(observations_fts) AS score
-                FROM observations_fts
-                JOIN observations ON observations_fts.rowid = observations.id
-                WHERE observations_fts MATCH ?
-                ORDER BY score
-                LIMIT ? OFFSET ?
-                """,
-                (fts_query, limit, offset),
-            ).fetchall()
-            fts_results = [
-                {
-                    "id": row["id"],
-                    "timestamp": row["timestamp"],
-                    "project": row["project"],
-                    "kind": row["kind"],
-                    "title": row["title"],
-                    "summary": row["summary"],
-                    "tags": parse_tags_json(row["tags"]),
-                    "score": row["score"],
-                    "session_id": row["session_id"] if "session_id" in row.keys() else None,
-                }
-                for row in rows
-            ]
-            if not required:
-                return fts_results
-            return [item for item in fts_results if _matches_required_tags(item.get("tags", []), required)]
+            fts_results = _run_search_fts(
+                conn=conn,
+                fts_query=fts_query,
+                limit=limit,
+                offset=offset,
+                parse_tags_json=parse_tags_json,
+                parse_metadata_json=parse_metadata_json,
+            )
+            return _filter_search_results_by_tags(fts_results, required)
         except sqlite3.OperationalError:
             if mode == "fts":
                 raise
 
+    like_results = _run_search_like(
+        conn=conn,
+        query=query,
+        limit=limit,
+        offset=offset,
+        parse_tags_json=parse_tags_json,
+        parse_metadata_json=parse_metadata_json,
+    )
+    return _filter_search_results_by_tags(like_results, required)
+
+
+def _run_search_fts(
+    conn: sqlite3.Connection,
+    fts_query: str,
+    limit: int,
+    offset: int,
+    parse_tags_json,
+    parse_metadata_json,
+) -> List[dict]:
     rows = conn.execute(
         """
-        SELECT id, timestamp, project, kind, title, summary, tags, raw, session_id
+        SELECT observations.id, observations.timestamp, observations.project,
+               observations.kind, observations.title, observations.summary,
+               observations.tags, observations.raw, observations.session_id, observations.metadata,
+               bm25(observations_fts) AS score
+        FROM observations_fts
+        JOIN observations ON observations_fts.rowid = observations.id
+        WHERE observations_fts MATCH ?
+        ORDER BY score
+        LIMIT ? OFFSET ?
+        """,
+        (fts_query, limit, offset),
+    ).fetchall()
+    return [
+        _row_to_search_result(
+            row=row,
+            score=row["score"],
+            parse_tags_json=parse_tags_json,
+            parse_metadata_json=parse_metadata_json,
+        )
+        for row in rows
+    ]
+
+
+def _run_search_like(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int,
+    offset: int,
+    parse_tags_json,
+    parse_metadata_json,
+) -> List[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, timestamp, project, kind, title, summary, tags, raw, session_id, metadata
         FROM observations
         WHERE title LIKE ? OR summary LIKE ? OR tags_text LIKE ? OR raw LIKE ?
         ORDER BY id DESC
@@ -133,23 +193,45 @@ def run_search(
         """,
         tuple([f"%{query}%"] * 4 + [limit, offset]),
     ).fetchall()
-    like_results = [
-        {
-            "id": row["id"],
-            "timestamp": row["timestamp"],
-            "project": row["project"],
-            "kind": row["kind"],
-            "title": row["title"],
-            "summary": row["summary"],
-            "tags": parse_tags_json(row["tags"]),
-            "score": None,
-            "session_id": row["session_id"] if "session_id" in row.keys() else None,
-        }
+    return [
+        _row_to_search_result(
+            row=row,
+            score=None,
+            parse_tags_json=parse_tags_json,
+            parse_metadata_json=parse_metadata_json,
+        )
         for row in rows
     ]
-    if not required:
-        return like_results
-    return [item for item in like_results if _matches_required_tags(item.get("tags", []), required)]
+
+
+def _row_to_search_result(
+    row: sqlite3.Row,
+    score: float | None,
+    parse_tags_json,
+    parse_metadata_json,
+) -> dict:
+    return {
+        "id": row["id"],
+        "timestamp": row["timestamp"],
+        "project": row["project"],
+        "kind": row["kind"],
+        "title": row["title"],
+        "summary": row["summary"],
+        "tags": parse_tags_json(row["tags"]),
+        "score": score,
+        "session_id": row["session_id"] if "session_id" in row.keys() else None,
+        "metadata": parse_metadata_json(row["metadata"]) if "metadata" in row.keys() else {},
+    }
+
+
+def _filter_search_results_by_tags(results: List[dict], required_tags: List[str]) -> List[dict]:
+    if not required_tags:
+        return results
+    return [
+        item
+        for item in results
+        if _matches_required_tags(item.get("tags", []), required_tags)
+    ]
 
 
 def run_timeline(
@@ -301,6 +383,7 @@ def run_edit(
     raw: Optional[str],
     timestamp: Optional[str],
     auto_tags: bool,
+    metadata: Optional[str] = None,
 ) -> dict:
     """Edit an observation."""
     from .utils import auto_tags_from_text, normalize_tags_list, normalize_text, tags_to_json, tags_to_text
@@ -327,6 +410,8 @@ def run_edit(
         updates["raw"] = raw
     if timestamp is not None:
         updates["timestamp"] = timestamp
+    if metadata is not None:
+        updates["metadata"] = metadata
 
     if tags is not None:
         current_tags = normalize_tags_list(tags)
@@ -388,16 +473,65 @@ def run_clean(
     vacuum: bool,
 ) -> dict:
     """Delete old or filtered observations."""
-    from .utils import normalize_tags_list
+    _validate_clean_cutoff_inputs(before, older_than_days)
+    cutoff = _resolve_clean_cutoff(before, older_than_days)
+    where_clause, params = _build_clean_where_clause(cutoff, project, kind, tag, delete_all)
+    matched = _count_clean_matches(conn, where_clause, params)
+    deleted = _execute_clean_delete(conn, where_clause, params, dry_run, matched)
+    vacuumed = _maybe_vacuum_after_clean(conn, vacuum, dry_run)
+
+    return {
+        "ok": True,
+        "matched": matched,
+        "deleted": deleted,
+        "dry_run": dry_run,
+        "before": cutoff,
+        "vacuum": vacuumed,
+    }
+
+
+def run_manage(conn: sqlite3.Connection, action: str, limit: int) -> dict:
+    """Manage and inspect database."""
+    from .utils import parse_tags_json
+    handlers = {
+        "stats": lambda: _run_manage_stats(conn, action, limit),
+        "projects": lambda: _run_manage_projects(conn, action, limit),
+        "tags": lambda: _run_manage_tags(conn, action, limit, parse_tags_json),
+        "vacuum": lambda: _run_manage_vacuum(conn, action),
+    }
+    handler = handlers.get(action)
+    if handler is None:
+        raise ValueError(f"Unsupported manage action: {action}")
+    return handler()
+
+
+def _validate_clean_cutoff_inputs(
+    before: Optional[str],
+    older_than_days: Optional[int],
+) -> None:
     if before and older_than_days is not None:
         raise ValueError("Use either --before or --older-than-days, not both")
+
+
+def _resolve_clean_cutoff(
+    before: Optional[str],
+    older_than_days: Optional[int],
+) -> Optional[str]:
+    if older_than_days is None:
+        return before
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    return cutoff_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _build_clean_where_clause(
+    cutoff: Optional[str],
+    project: Optional[str],
+    kind: Optional[str],
+    tag: Optional[str],
+    delete_all: bool,
+) -> tuple[str, List[object]]:
     filters: List[str] = []
     params: List[object] = []
-
-    cutoff = before
-    if older_than_days is not None:
-        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-        cutoff = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     if cutoff:
         filters.append("timestamp < ?")
         params.append(cutoff)
@@ -408,123 +542,148 @@ def run_clean(
         filters.append("kind = ?")
         params.append(kind)
 
-    tag_values = normalize_tags_list(tag) if tag else []
-    if tag_values:
-        tag_filters: List[str] = []
-        for item in tag_values:
-            tag_filters.append("tags_text LIKE ?")
-            params.append(f"%{item}%")
-        filters.append(f"({' OR '.join(tag_filters)})")
+    _append_clean_tag_filters(filters, params, tag)
 
     if not filters and not delete_all:
         raise ValueError("Refusing to clean without filters. Use --all to delete everything.")
 
-    where_clause = " AND ".join(filters) if filters else "1=1"
-    matched = int(
+    return (" AND ".join(filters) if filters else "1=1"), params
+
+
+def _append_clean_tag_filters(
+    filters: List[str],
+    params: List[object],
+    tag: Optional[str],
+) -> None:
+    from .utils import normalize_tags_list
+
+    tag_values = normalize_tags_list(tag) if tag else []
+    if not tag_values:
+        return
+
+    tag_filters: List[str] = []
+    for item in tag_values:
+        tag_filters.append("tags_text LIKE ?")
+        params.append(f"%{item}%")
+    filters.append(f"({' OR '.join(tag_filters)})")
+
+
+def _count_clean_matches(
+    conn: sqlite3.Connection,
+    where_clause: str,
+    params: List[object],
+) -> int:
+    return int(
         conn.execute(
             f"SELECT COUNT(*) AS c FROM observations WHERE {where_clause}",
             params,
         ).fetchone()["c"]
     )
 
-    deleted = 0
-    if not dry_run and matched:
-        cursor = conn.execute(f"DELETE FROM observations WHERE {where_clause}", params)
-        deleted = int(cursor.rowcount)
-        conn.commit()
-    elif dry_run:
+
+def _execute_clean_delete(
+    conn: sqlite3.Connection,
+    where_clause: str,
+    params: List[object],
+    dry_run: bool,
+    matched: int,
+) -> int:
+    if dry_run:
         conn.rollback()
+        return 0
+    if not matched:
+        return 0
+    cursor = conn.execute(f"DELETE FROM observations WHERE {where_clause}", params)
+    deleted = int(cursor.rowcount)
+    conn.commit()
+    return deleted
 
-    if vacuum and not dry_run:
-        conn.execute("VACUUM")
 
+def _maybe_vacuum_after_clean(
+    conn: sqlite3.Connection,
+    vacuum: bool,
+    dry_run: bool,
+) -> bool:
+    if not vacuum or dry_run:
+        return False
+    conn.execute("VACUUM")
+    return True
+
+
+def _run_manage_stats(conn: sqlite3.Connection, action: str, limit: int) -> dict:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS total, MIN(timestamp) AS earliest, MAX(timestamp) AS latest
+        FROM observations
+        """
+    ).fetchone()
+    projects = _query_project_counts(conn, limit)
+    kinds = _query_kind_counts(conn, limit)
     return {
         "ok": True,
-        "matched": matched,
-        "deleted": deleted,
-        "dry_run": dry_run,
-        "before": cutoff,
-        "vacuum": bool(vacuum and not dry_run),
+        "action": action,
+        "total": int(row["total"]),
+        "earliest": row["earliest"],
+        "latest": row["latest"],
+        "projects": projects,
+        "kinds": kinds,
     }
 
 
-def run_manage(conn: sqlite3.Connection, action: str, limit: int) -> dict:
-    """Manage and inspect database."""
-    from .utils import parse_tags_json
-    if action == "stats":
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS total, MIN(timestamp) AS earliest, MAX(timestamp) AS latest
-            FROM observations
-            """
-        ).fetchone()
-        projects = [
-            {"project": item["project"], "count": item["count"]}
-            for item in conn.execute(
-                """
-                SELECT project, COUNT(*) AS count
-                FROM observations
-                GROUP BY project
-                ORDER BY count DESC, project ASC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        ]
-        kinds = [
-            {"kind": item["kind"], "count": item["count"]}
-            for item in conn.execute(
-                """
-                SELECT kind, COUNT(*) AS count
-                FROM observations
-                GROUP BY kind
-                ORDER BY count DESC, kind ASC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        ]
-        return {
-            "ok": True,
-            "action": action,
-            "total": int(row["total"]),
-            "earliest": row["earliest"],
-            "latest": row["latest"],
-            "projects": projects,
-            "kinds": kinds,
-        }
+def _run_manage_projects(conn: sqlite3.Connection, action: str, limit: int) -> dict:
+    return {
+        "ok": True,
+        "action": action,
+        "projects": _query_project_counts(conn, limit),
+    }
 
-    if action == "projects":
-        rows = conn.execute(
-            """
-            SELECT project, COUNT(*) AS count
-            FROM observations
-            GROUP BY project
-            ORDER BY count DESC, project ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        return {
-            "ok": True,
-            "action": action,
-            "projects": [{"project": row["project"], "count": row["count"]} for row in rows],
-        }
 
-    if action == "tags":
-        counts: dict[str, int] = {}
-        for row in conn.execute("SELECT tags FROM observations").fetchall():
-            for tag in parse_tags_json(row["tags"]):
-                counts[tag] = counts.get(tag, 0) + 1
-        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
-        return {
-            "ok": True,
-            "action": action,
-            "tags": [{"tag": tag, "count": count} for tag, count in ranked],
-        }
+def _query_project_counts(conn: sqlite3.Connection, limit: int) -> List[dict]:
+    rows = conn.execute(
+        """
+        SELECT project, COUNT(*) AS count
+        FROM observations
+        GROUP BY project
+        ORDER BY count DESC, project ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [{"project": row["project"], "count": row["count"]} for row in rows]
 
-    if action == "vacuum":
-        conn.execute("VACUUM")
-        return {"ok": True, "action": action, "vacuumed": True}
 
-    raise ValueError(f"Unsupported manage action: {action}")
+def _query_kind_counts(conn: sqlite3.Connection, limit: int) -> List[dict]:
+    rows = conn.execute(
+        """
+        SELECT kind, COUNT(*) AS count
+        FROM observations
+        GROUP BY kind
+        ORDER BY count DESC, kind ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [{"kind": row["kind"], "count": row["count"]} for row in rows]
+
+
+def _run_manage_tags(
+    conn: sqlite3.Connection,
+    action: str,
+    limit: int,
+    parse_tags_json,
+) -> dict:
+    counts: dict[str, int] = {}
+    for row in conn.execute("SELECT tags FROM observations").fetchall():
+        for tag in parse_tags_json(row["tags"]):
+            counts[tag] = counts.get(tag, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    return {
+        "ok": True,
+        "action": action,
+        "tags": [{"tag": tag, "count": count} for tag, count in ranked],
+    }
+
+
+def _run_manage_vacuum(conn: sqlite3.Connection, action: str) -> dict:
+    conn.execute("VACUUM")
+    return {"ok": True, "action": action, "vacuumed": True}

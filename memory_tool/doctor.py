@@ -419,7 +419,6 @@ def run_all_checks(
     results: List[CheckResult] = []
     warnings: List[Dict[str, str]] = []
     suggestions: List[str] = []
-
     capabilities = {
         "can_read": True,
         "can_write": True,
@@ -430,90 +429,15 @@ def run_all_checks(
     for check in checks:
         if check.check_func is None:
             continue
-
-        # Run check with appropriate arguments
-        try:
-            if check.name in ["db_exists", "db_readable", "db_writable"]:
-                ok, message, suggestion = check.check_func(db_path)
-            elif check.name in ["db_schema_version", "db_integrity", "db_tables", "fts_index"]:
-                if conn:
-                    ok, message, suggestion = check.check_func(conn)
-                else:
-                    ok = False
-                    message = "No database connection"
-                    suggestion = "Check database path"
-            elif check.name in ["profile_valid", "profile_path"]:
-                ok, message, suggestion = check.check_func(profile)
-            elif check.name == "disk_space":
-                ok, message, suggestion = check.check_func(db_path)
-            elif check.name == "sqlite_wal":
-                ok, message, suggestion = check.check_func(conn if conn else None)
-            else:
-                ok, message, suggestion = check.check_func()
-        except Exception as e:
-            ok = False
-            message = f"Check failed: {e}"
-            suggestion = "Check logs for details"
-
-        result = CheckResult(
-            name=check.name,
-            ok=ok,
-            message=message,
-            suggestion=suggestion,
-            details={
-                "category": check.category,
-                "priority": check.priority,
-                "auto_fixable": check.auto_fixable,
-            },
-        )
+        ok, message, suggestion = _execute_check(check, db_path, profile, conn)
+        result = _build_check_result(check, ok, message, suggestion)
         results.append(result)
 
         if not ok:
-            if check.priority == "P0":
-                if suggestion:
-                    suggestions.append(suggestion)
-            else:
-                warnings.append({
-                    "code": check.name.upper(),
-                    "message": message,
-                })
+            _record_failure(check, message, suggestion, warnings, suggestions, capabilities)
 
-            # Update capabilities
-            if check.category == "database" and check.name in ["db_readable", "db_tables"]:
-                capabilities["can_read"] = False
-            if check.category == "database" and check.name == "db_writable":
-                capabilities["can_write"] = False
-            if check.name == "fts_index":
-                capabilities["can_search"] = False
-            if check.name == "db_schema_version":
-                capabilities["can_migrate"] = True  # Can migrate even if outdated
-
-    # Determine overall status
-    p0_failures = [r for r in results if not r.ok and r.details.get("priority") == "P0"]
-    p1_failures = [r for r in results if not r.ok and r.details.get("priority") == "P1"]
-
-    if p0_failures:
-        status = "unhealthy"
-        overall_ok = False
-    elif p1_failures:
-        status = "degraded"
-        overall_ok = True
-    else:
-        status = "healthy"
-        overall_ok = True
-
-    # Build check results by category
-    checks_by_category: Dict[str, Dict[str, Any]] = {}
-    for result in results:
-        category = result.details["category"]
-        if category not in checks_by_category:
-            checks_by_category[category] = {}
-        checks_by_category[category][result.name] = {
-            "ok": result.ok,
-            "message": result.message,
-        }
-        if result.suggestion:
-            checks_by_category[category][result.name]["suggestion"] = result.suggestion
+    overall_ok, status = _determine_health_status(results)
+    checks_by_category = _group_results_by_category(results)
 
     return {
         "ok": overall_ok,
@@ -523,6 +447,102 @@ def run_all_checks(
         "warnings": warnings,
         "suggestions": suggestions,
     }
+
+
+def _execute_check(
+    check: Check,
+    db_path: str,
+    profile: str,
+    conn: Optional[sqlite3.Connection],
+) -> Tuple[bool, str, Optional[str]]:
+    """Execute a check with the expected argument shape for its check function."""
+    try:
+        if check.name in {"db_exists", "db_readable", "db_writable", "disk_space"}:
+            return check.check_func(db_path)
+        if check.name in {"db_schema_version", "db_integrity", "db_tables", "fts_index"}:
+            if conn:
+                return check.check_func(conn)
+            return False, "No database connection", "Check database path"
+        if check.name in {"profile_valid", "profile_path"}:
+            return check.check_func(profile)
+        if check.name == "sqlite_wal":
+            return check.check_func(conn if conn else None)
+        return check.check_func()
+    except Exception as error:
+        return False, f"Check failed: {error}", "Check logs for details"
+
+
+def _build_check_result(
+    check: Check,
+    ok: bool,
+    message: str,
+    suggestion: Optional[str],
+) -> CheckResult:
+    return CheckResult(
+        name=check.name,
+        ok=ok,
+        message=message,
+        suggestion=suggestion,
+        details={
+            "category": check.category,
+            "priority": check.priority,
+            "auto_fixable": check.auto_fixable,
+        },
+    )
+
+
+def _record_failure(
+    check: Check,
+    message: str,
+    suggestion: Optional[str],
+    warnings: List[Dict[str, str]],
+    suggestions: List[str],
+    capabilities: Dict[str, bool],
+) -> None:
+    if check.priority == "P0":
+        if suggestion:
+            suggestions.append(suggestion)
+    else:
+        warnings.append(
+            {
+                "code": check.name.upper(),
+                "message": message,
+            }
+        )
+
+    if check.category == "database" and check.name in {"db_readable", "db_tables"}:
+        capabilities["can_read"] = False
+    if check.category == "database" and check.name == "db_writable":
+        capabilities["can_write"] = False
+    if check.name == "fts_index":
+        capabilities["can_search"] = False
+    if check.name == "db_schema_version":
+        capabilities["can_migrate"] = True
+
+
+def _determine_health_status(results: List[CheckResult]) -> Tuple[bool, str]:
+    p0_failures = [result for result in results if not result.ok and result.details.get("priority") == "P0"]
+    p1_failures = [result for result in results if not result.ok and result.details.get("priority") == "P1"]
+    if p0_failures:
+        return False, "unhealthy"
+    if p1_failures:
+        return True, "degraded"
+    return True, "healthy"
+
+
+def _group_results_by_category(results: List[CheckResult]) -> Dict[str, Dict[str, Any]]:
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for result in results:
+        category = result.details["category"]
+        if category not in grouped:
+            grouped[category] = {}
+        grouped[category][result.name] = {
+            "ok": result.ok,
+            "message": result.message,
+        }
+        if result.suggestion:
+            grouped[category][result.name]["suggestion"] = result.suggestion
+    return grouped
 
 
 def format_human_output(report: Dict[str, Any]) -> str:

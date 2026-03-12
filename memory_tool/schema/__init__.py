@@ -3,7 +3,7 @@
 This package contains JSON Schema files defining the structure of all
 CLI command responses. Schemas follow draft-07 specification.
 
-Schema Version: 1.0.0
+Schema Version: 1.1.0
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any, Optional
 # MAJOR: Breaking changes to response structure
 # MINOR: Additive changes (new optional fields)
 # PATCH: Documentation fixes, no structural changes
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 # Schema directory
 SCHEMA_DIR = Path(__file__).parent

@@ -43,6 +43,7 @@ class ResponseMeta:
     db_path: Optional[str] = None
     query_time_ms: Optional[int] = None
     pagination: Optional[Dict[str, Any]] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary, excluding None values."""
@@ -58,6 +59,8 @@ class ResponseMeta:
             result["query_time_ms"] = self.query_time_ms
         if self.pagination is not None:
             result["pagination"] = self.pagination
+        if self.extra:
+            result.update(self.extra)
         return result
 
 
@@ -232,11 +235,8 @@ def success(
         db_path=db_path,
         query_time_ms=query_time_ms,
         pagination=pagination,
+        extra=dict(extra_meta),
     )
-
-    if extra_meta:
-        meta_dict = meta.to_dict()
-        meta_dict.update(extra_meta)
 
     return JSONResponse(
         ok=True,

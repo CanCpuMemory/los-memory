@@ -121,97 +121,19 @@ class ResolutionExtractor:
         Returns:
             KnowledgeEntry if extractable, None otherwise
         """
-        # Get incident details
-        row = conn.execute(
-            """
-            SELECT * FROM incidents WHERE id = ?
-            """,
-            (incident_id,)
-        ).fetchone()
-
-        if not row:
+        incident = self._load_incident(conn, incident_id)
+        if not incident:
             return None
 
-        incident = dict(row)
-
-        # Only extract from resolved incidents
         if incident.get("status") != "resolved":
             return None
 
-        # Get linked observations
-        obs_rows = conn.execute(
-            """
-            SELECT o.* FROM observations o
-            JOIN incident_observations io ON o.id = io.observation_id
-            WHERE io.incident_id = ?
-            ORDER BY o.timestamp
-            """,
-            (incident_id,)
-        ).fetchall()
-
-        # Get recovery executions
-        recovery_rows = conn.execute(
-            """
-            SELECT * FROM recovery_executions
-            WHERE incident_id = ? AND status = 'success'
-            ORDER BY created_at
-            """,
-            (incident_id,)
-        ).fetchall()
-
-        # Build symptoms from observations
-        symptoms_parts = []
-        for obs in obs_rows:
-            obs_dict = dict(obs)
-            if obs_dict.get("title"):
-                symptoms_parts.append(obs_dict["title"])
-            if obs_dict.get("summary"):
-                symptoms_parts.append(obs_dict["summary"])
-
-        symptoms = " ".join(symptoms_parts) if symptoms_parts else incident.get("title", "")
-
-        # Extract solution steps from recovery actions
-        solution_steps = []
-        for rec in recovery_rows:
-            rec_dict = dict(rec)
-            if rec_dict.get("output_text"):
-                step = self._extract_step_from_output(rec_dict["output_text"])
-                if step:
-                    solution_steps.append(step)
-
-        # If no recovery actions, try to extract from observations
-        if not solution_steps:
-            for obs in obs_rows:
-                obs_dict = dict(obs)
-                raw = obs_dict.get("raw", "")
-                step = self._extract_step_from_text(raw)
-                if step:
-                    solution_steps.append(step)
-
-        if not solution_steps:
-            solution_steps = ["Investigate logs", "Apply appropriate fix"]
-
-        # Get attribution report if available
-        attr_row = conn.execute(
-            """
-            SELECT * FROM attribution_reports
-            WHERE incident_id = ?
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (incident_id,)
-        ).fetchone()
-
-        root_cause = "Unknown"
-        if attr_row:
-            root_cause = dict(attr_row).get("root_cause_description", "Unknown")
-        else:
-            root_cause = incident.get("description", "Unknown")[:200]
-
-        # Build tags from incident and observations
-        tags = [incident.get("incident_type", ""), incident.get("severity", "")]
-        tags = [t for t in tags if t]
-
+        observations = self._load_linked_observations(conn, incident_id)
+        recoveries = self._load_successful_recoveries(conn, incident_id)
+        symptoms = self._build_symptoms(incident, observations)
+        solution_steps = self._extract_solution_steps(observations, recoveries)
+        root_cause = self._extract_root_cause(conn, incident, incident_id)
+        tags = self._build_tags(incident)
         return KnowledgeEntry(
             incident_type=incident.get("incident_type", "unknown"),
             severity=incident.get("severity", "p2"),
@@ -225,6 +147,107 @@ class ResolutionExtractor:
             tags=tags,
             last_used_at=utc_now(),
         )
+
+    def _load_incident(
+        self,
+        conn: sqlite3.Connection,
+        incident_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        row = conn.execute(
+            """
+            SELECT * FROM incidents WHERE id = ?
+            """,
+            (incident_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def _load_linked_observations(
+        self,
+        conn: sqlite3.Connection,
+        incident_id: int,
+    ) -> List[Dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT o.* FROM observations o
+            JOIN incident_observations io ON o.id = io.observation_id
+            WHERE io.incident_id = ?
+            ORDER BY o.timestamp
+            """,
+            (incident_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _load_successful_recoveries(
+        self,
+        conn: sqlite3.Connection,
+        incident_id: int,
+    ) -> List[Dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT * FROM recovery_executions
+            WHERE incident_id = ? AND status = 'success'
+            ORDER BY created_at
+            """,
+            (incident_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _build_symptoms(
+        self,
+        incident: Dict[str, Any],
+        observations: List[Dict[str, Any]],
+    ) -> str:
+        symptoms_parts = []
+        for observation in observations:
+            if observation.get("title"):
+                symptoms_parts.append(observation["title"])
+            if observation.get("summary"):
+                symptoms_parts.append(observation["summary"])
+        return " ".join(symptoms_parts) if symptoms_parts else incident.get("title", "")
+
+    def _extract_solution_steps(
+        self,
+        observations: List[Dict[str, Any]],
+        recoveries: List[Dict[str, Any]],
+    ) -> List[str]:
+        solution_steps = []
+        for recovery in recoveries:
+            if recovery.get("output_text"):
+                step = self._extract_step_from_output(recovery["output_text"])
+                if step:
+                    solution_steps.append(step)
+
+        if not solution_steps:
+            for observation in observations:
+                step = self._extract_step_from_text(observation.get("raw", ""))
+                if step:
+                    solution_steps.append(step)
+
+        if not solution_steps:
+            return ["Investigate logs", "Apply appropriate fix"]
+        return solution_steps
+
+    def _extract_root_cause(
+        self,
+        conn: sqlite3.Connection,
+        incident: Dict[str, Any],
+        incident_id: int,
+    ) -> str:
+        row = conn.execute(
+            """
+            SELECT * FROM attribution_reports
+            WHERE incident_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (incident_id,),
+        ).fetchone()
+        if row:
+            return dict(row).get("root_cause_description", "Unknown")
+        return incident.get("description", "Unknown")[:200]
+
+    def _build_tags(self, incident: Dict[str, Any]) -> List[str]:
+        return [tag for tag in [incident.get("incident_type", ""), incident.get("severity", "")] if tag]
 
     def _extract_step_from_output(self, output: str) -> Optional[str]:
         """Extract solution step from recovery output."""
@@ -430,7 +453,33 @@ class KnowledgeBase:
         Returns:
             List of (entry, match_score) tuples
         """
-        # Use FTS for text search
+        entry_ids, fts_scores = self._search_entry_ids_with_fts(query, limit)
+        rows = (
+            self._search_rows_by_like(query, limit)
+            if not entry_ids
+            else self._search_rows_by_ids(entry_ids)
+        )
+
+        results = []
+        for row in rows:
+            entry = self._row_to_entry(row)
+            if not self._entry_matches_search_filters(
+                entry=entry,
+                incident_type=incident_type,
+                severity=severity,
+                min_success_rate=min_success_rate,
+            ):
+                continue
+            match_score = self._calculate_match_score(entry, fts_scores)
+            results.append((entry, match_score))
+
+        return sorted(results, key=lambda x: x[1], reverse=True)[:limit]
+
+    def _search_entry_ids_with_fts(
+        self,
+        query: str,
+        limit: int,
+    ) -> tuple[List[int], Dict[int, float]]:
         try:
             fts_rows = self.conn.execute(
                 """
@@ -439,60 +488,60 @@ class KnowledgeBase:
                 ORDER BY rank
                 LIMIT ?
                 """,
-                (query, limit * 2)
+                (query, limit * 2),
             ).fetchall()
-
-            entry_ids = [row["rowid"] for row in fts_rows]
-            fts_scores = {row["rowid"]: row["rank"] for row in fts_rows}
         except sqlite3.OperationalError:
-            # FTS query error, fall back to simple search
-            entry_ids = []
-            fts_scores = {}
+            return [], {}
+        entry_ids = [row["rowid"] for row in fts_rows]
+        fts_scores = {row["rowid"]: row["rank"] for row in fts_rows}
+        return entry_ids, fts_scores
 
-        if not entry_ids:
-            # Fallback to LIKE search
-            pattern = f"%{query}%"
-            rows = self.conn.execute(
-                """
-                SELECT * FROM knowledge_entries
-                WHERE symptoms_pattern LIKE ? OR root_cause_summary LIKE ?
-                ORDER BY success_count DESC
-                LIMIT ?
-                """,
-                (pattern, pattern, limit)
-            ).fetchall()
-        else:
-            # Get full entries
-            placeholders = ",".join("?" * len(entry_ids))
-            rows = self.conn.execute(
-                f"""
-                SELECT * FROM knowledge_entries
-                WHERE id IN ({placeholders})
-                ORDER BY success_count DESC
-                """,
-                entry_ids
-            ).fetchall()
+    def _search_rows_by_like(self, query: str, limit: int):
+        pattern = f"%{query}%"
+        return self.conn.execute(
+            """
+            SELECT * FROM knowledge_entries
+            WHERE symptoms_pattern LIKE ? OR root_cause_summary LIKE ?
+            ORDER BY success_count DESC
+            LIMIT ?
+            """,
+            (pattern, pattern, limit),
+        ).fetchall()
 
-        results = []
-        for row in rows:
-            entry = self._row_to_entry(row)
+    def _search_rows_by_ids(self, entry_ids: List[int]):
+        placeholders = ",".join("?" * len(entry_ids))
+        return self.conn.execute(
+            f"""
+            SELECT * FROM knowledge_entries
+            WHERE id IN ({placeholders})
+            ORDER BY success_count DESC
+            """,
+            entry_ids,
+        ).fetchall()
 
-            # Apply filters
-            if incident_type and entry.incident_type != incident_type:
-                continue
-            if severity and entry.severity != severity:
-                continue
-            if entry.success_rate < min_success_rate:
-                continue
+    def _entry_matches_search_filters(
+        self,
+        entry: KnowledgeEntry,
+        incident_type: Optional[str],
+        severity: Optional[str],
+        min_success_rate: float,
+    ) -> bool:
+        if incident_type and entry.incident_type != incident_type:
+            return False
+        if severity and entry.severity != severity:
+            return False
+        if entry.success_rate < min_success_rate:
+            return False
+        return True
 
-            # Calculate match score
-            fts_score = fts_scores.get(entry.id, 0.5)
-            confidence = entry.confidence_score
-            match_score = (1.0 - fts_score) * 0.5 + confidence * 0.5
-
-            results.append((entry, match_score))
-
-        return sorted(results, key=lambda x: x[1], reverse=True)[:limit]
+    def _calculate_match_score(
+        self,
+        entry: KnowledgeEntry,
+        fts_scores: Dict[int, float],
+    ) -> float:
+        fts_score = fts_scores.get(entry.id, 0.5)
+        confidence = entry.confidence_score
+        return (1.0 - fts_score) * 0.5 + confidence * 0.5
 
     def find_similar(
         self,

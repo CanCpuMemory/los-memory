@@ -114,6 +114,9 @@ See `docs/manuals/GENERAL_MEMORY.md` for practical workflows, cleanup strategy, 
 See `docs/current/CURRENT_STATE.md` for the current implemented command surface, testing notes, and architecture status.
 Historical `memory_tool.core.*` imports are compatibility shims; new development should use the top-level `memory_tool.*` modules.
 Recent hardening also means active sessions are scoped to the current database path, and `los-memory admin doctor` now runs read-only diagnostics without creating a missing SQLite file.
+Current controlled writeback integrations should also use `docs/manuals/VPSAGENTWEB_WRITEBACK_CONTRACT.md` for the metadata contract, feedback metadata, and `--profile` boundary.
+The current stable smoke contract for upstream runtime verification is `review apply --file ... --dry-run` plus `admin manage stats`.
+See `TODO.md` for the remaining local, external, and deferred follow-ups.
 
 ## CI coverage
 - Targeted Ruff checks cover maintained CLI/doctor/session surfaces

@@ -158,7 +158,7 @@ class EventPublisher:
         import uuid
         return str(uuid.uuid4())
 
-    def _persist_event(self, event: ApprovalEvent) -> None:
+    def _persist_event(self, event: ApprovalEvent, commit: bool = True) -> None:
         """Persist event to database."""
         self.conn.execute(
             """
@@ -173,13 +173,30 @@ class EventPublisher:
                 event.timestamp,
             )
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
+
+    def broadcast(self, event: ApprovalEvent) -> None:
+        """Broadcast a persisted event to in-memory subscribers."""
+        # Add to history buffer
+        self._history.add(event)
+
+        # Notify subscribers
+        with self._lock:
+            for callback in self._subscribers:
+                try:
+                    callback(event)
+                except Exception:
+                    pass  # Don't let subscriber errors break publishing
 
     def publish(
         self,
         event_type: str,
         job_id: str,
         data: Dict[str, Any],
+        *,
+        commit: bool = True,
+        broadcast: bool = True,
     ) -> ApprovalEvent:
         """Publish an approval event.
 
@@ -198,18 +215,9 @@ class EventPublisher:
         )
 
         # Persist to database
-        self._persist_event(event)
-
-        # Add to history buffer
-        self._history.add(event)
-
-        # Notify subscribers
-        with self._lock:
-            for callback in self._subscribers:
-                try:
-                    callback(event)
-                except Exception:
-                    pass  # Don't let subscriber errors break publishing
+        self._persist_event(event, commit=commit)
+        if broadcast:
+            self.broadcast(event)
 
         return event
 
@@ -219,6 +227,9 @@ class EventPublisher:
         command: str,
         risk_level: str,
         actor_id: Optional[str] = None,
+        *,
+        commit: bool = True,
+        broadcast: bool = True,
     ) -> ApprovalEvent:
         """Publish approval.pending event.
 
@@ -233,6 +244,8 @@ class EventPublisher:
                 "actor_id": actor_id,
                 "status": "pending_approval",
             },
+            commit=commit,
+            broadcast=broadcast,
         )
 
     def publish_approved(
@@ -241,6 +254,9 @@ class EventPublisher:
         actor_id: str,
         version: int,
         reason: Optional[str] = None,
+        *,
+        commit: bool = True,
+        broadcast: bool = True,
     ) -> ApprovalEvent:
         """Publish approval.approved event.
 
@@ -255,6 +271,8 @@ class EventPublisher:
                 "reason": reason,
                 "status": "approved",
             },
+            commit=commit,
+            broadcast=broadcast,
         )
 
     def publish_rejected(
@@ -263,6 +281,9 @@ class EventPublisher:
         actor_id: str,
         version: int,
         reason: Optional[str] = None,
+        *,
+        commit: bool = True,
+        broadcast: bool = True,
     ) -> ApprovalEvent:
         """Publish approval.rejected event.
 
@@ -277,12 +298,17 @@ class EventPublisher:
                 "reason": reason,
                 "status": "rejected",
             },
+            commit=commit,
+            broadcast=broadcast,
         )
 
     def publish_timeout(
         self,
         job_id: str,
         timeout_hours: int = 48,
+        *,
+        commit: bool = True,
+        broadcast: bool = True,
     ) -> ApprovalEvent:
         """Publish approval.rejected event for timeout.
 
@@ -297,6 +323,8 @@ class EventPublisher:
                 "status": "rejected",
                 "auto": True,
             },
+            commit=commit,
+            broadcast=broadcast,
         )
 
     def subscribe(

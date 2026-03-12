@@ -84,98 +84,125 @@ class VPSAgentWebClient:
         Raises:
             VPSAgentWebError: If request fails after retries
         """
-        url = f"{self._base_url}{endpoint}"
+        url = self._build_request_url(endpoint)
+        request_headers = self._build_request_headers(headers)
+        body = self._build_request_body(data)
+        connection_timeout, read_timeout = self._build_request_timeouts()
+        last_error: Optional[Exception] = None
+
+        for attempt in range(self._retry_count):
+            try:
+                return self._execute_request_once(
+                    method=method,
+                    url=url,
+                    body=body,
+                    headers=request_headers,
+                    connection_timeout=connection_timeout,
+                    read_timeout=read_timeout,
+                )
+
+            except socket.timeout as e:
+                last_error = e
+                self._sleep_before_retry(attempt)
+
+            except HTTPError as e:
+                status, error_body = self._parse_http_error(e)
+                if 400 <= status < 500:
+                    self._raise_client_http_error(status, error_body)
+
+                last_error = e
+                self._sleep_before_retry(attempt)
+
+            except URLError as e:
+                last_error = e
+                self._sleep_before_retry(attempt)
+
+        self._raise_retries_exhausted(last_error)
+
+    def _build_request_url(self, endpoint: str) -> str:
+        return f"{self._base_url}{endpoint}"
+
+    def _build_request_headers(
+        self, headers: Optional[Dict[str, str]]
+    ) -> Dict[str, str]:
         request_headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
         if headers:
             request_headers.update(headers)
+        return request_headers
 
-        body = json.dumps(data).encode("utf-8") if data else None
+    def _build_request_body(
+        self, data: Optional[Dict[str, Any]]
+    ) -> Optional[bytes]:
+        return json.dumps(data).encode("utf-8") if data else None
 
-        last_error: Optional[Exception] = None
-
+    def _build_request_timeouts(self) -> Tuple[int, int]:
         # Connection timeout is shorter than read timeout
-        connection_timeout = min(5, self._timeout // 3)
-        read_timeout = self._timeout
+        return min(5, self._timeout // 3), self._timeout
 
-        for attempt in range(self._retry_count):
-            try:
-                req = Request(
-                    url,
-                    data=body,
-                    headers=request_headers,
-                    method=method,
-                )
+    def _execute_request_once(
+        self,
+        method: str,
+        url: str,
+        body: Optional[bytes],
+        headers: Dict[str, str],
+        connection_timeout: int,
+        read_timeout: int,
+    ) -> Tuple[int, Dict[str, Any]]:
+        req = Request(
+            url,
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        original_timeout = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(connection_timeout)
+            with urlopen(req, timeout=read_timeout) as response:
+                return response.getcode(), self._parse_response_body(response)
+        finally:
+            socket.setdefaulttimeout(original_timeout)
 
-                # Use socket timeout for connection, then urlopen timeout for read
-                original_timeout = socket.getdefaulttimeout()
-                try:
-                    socket.setdefaulttimeout(connection_timeout)
-                    with urlopen(req, timeout=read_timeout) as response:
-                        status = response.getcode()
-                        content_type = response.headers.get("Content-Type", "")
+    def _parse_response_body(self, response: Any) -> Dict[str, Any]:
+        content_type = response.headers.get("Content-Type", "")
+        raw_body = response.read().decode("utf-8")
+        if "application/json" in content_type:
+            return json.loads(raw_body)
 
-                        # Check if response is JSON
-                        if "application/json" not in content_type:
-                            # Try to read anyway, might be error response
-                            raw_body = response.read().decode("utf-8")
-                            try:
-                                response_body = json.loads(raw_body)
-                            except json.JSONDecodeError:
-                                response_body = {
-                                    "error": {"message": f"Non-JSON response: {raw_body[:200]}"}
-                                }
-                        else:
-                            response_body = json.loads(response.read().decode("utf-8"))
+        try:
+            return json.loads(raw_body)
+        except json.JSONDecodeError:
+            return {"error": {"message": f"Non-JSON response: {raw_body[:200]}"}}
 
-                        return status, response_body
-                finally:
-                    socket.setdefaulttimeout(original_timeout)
+    def _parse_http_error(self, error: HTTPError) -> Tuple[int, Dict[str, Any]]:
+        status = error.code
+        try:
+            error_body = json.loads(error.read().decode("utf-8"))
+        except Exception:
+            error_body = {"error": {"message": str(error)}}
+        return status, error_body
 
-            except socket.timeout as e:
-                last_error = e
-                # Connection timeout - retry with backoff
-                delay = self._calculate_backoff(attempt)
-                time.sleep(delay)
+    def _raise_client_http_error(
+        self, status: int, error_body: Dict[str, Any]
+    ) -> None:
+        raise VPSAgentWebError(
+            message=error_body.get("error", {}).get("message", f"HTTP {status}"),
+            status_code=status,
+            error_code=error_body.get("error", {}).get("code"),
+            response_body=error_body,
+        )
 
-            except HTTPError as e:
-                status = e.code
-                try:
-                    error_body = json.loads(e.read().decode("utf-8"))
-                except Exception:
-                    error_body = {"error": {"message": str(e)}}
+    def _sleep_before_retry(self, attempt: int) -> None:
+        delay = self._calculate_backoff(attempt)
+        time.sleep(delay)
 
-                # Don't retry on 4xx errors (client errors)
-                if 400 <= status < 500:
-                    raise VPSAgentWebError(
-                        message=error_body.get("error", {}).get(
-                            "message", f"HTTP {status}"
-                        ),
-                        status_code=status,
-                        error_code=error_body.get("error", {}).get("code"),
-                        response_body=error_body,
-                    )
-
-                # Retry on 5xx errors
-                last_error = e
-                delay = self._calculate_backoff(attempt)
-                time.sleep(delay)
-
-            except URLError as e:
-                last_error = e
-                delay = self._calculate_backoff(attempt)
-                time.sleep(delay)
-
-        # All retries exhausted
+    def _raise_retries_exhausted(self, last_error: Optional[Exception]) -> None:
         error_msg = f"Request failed after {self._retry_count} attempts"
         if last_error:
             error_msg += f": {last_error}"
-        raise VPSAgentWebError(
-            message=error_msg,
-            status_code=0,
-        )
+        raise VPSAgentWebError(message=error_msg, status_code=0)
 
     def _calculate_backoff(self, attempt: int) -> float:
         """Calculate exponential backoff with jitter.

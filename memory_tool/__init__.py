@@ -5,14 +5,18 @@ from .models import Checkpoint, Observation, Session
 from .database import connect_db, ensure_fts, ensure_schema, init_db, SCHEMA_VERSION
 from .utils import (
     auto_tags_from_text,
+    metadata_to_json,
     normalize_tags_list,
+    normalize_metadata_dict,
     normalize_text,
+    parse_metadata_json,
     parse_ids,
     resolve_db_path,
     tags_to_json,
     tags_to_text,
     utc_now,
     DEFAULT_PROFILE,
+    OBSERVATION_METADATA_RESERVED_KEYS,
     PROFILE_CHOICES,
     PROFILE_DB_PATHS,
 )
@@ -75,14 +79,18 @@ __all__ = [
     "SCHEMA_VERSION",
     # Utils
     "auto_tags_from_text",
+    "metadata_to_json",
     "normalize_tags_list",
+    "normalize_metadata_dict",
     "normalize_text",
+    "parse_metadata_json",
     "parse_ids",
     "resolve_db_path",
     "tags_to_json",
     "tags_to_text",
     "utc_now",
     "DEFAULT_PROFILE",
+    "OBSERVATION_METADATA_RESERVED_KEYS",
     "PROFILE_CHOICES",
     "PROFILE_DB_PATHS",
     # Operations
