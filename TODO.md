@@ -65,6 +65,7 @@
 - [x] Cleanup pass (2026-03-13): split v10 approval table migration into table-scoped builders while preserving schema SQL and constraints.
 - [x] Cleanup pass (2026-03-13): split v9/v10/v11 migration table/index builders into finer helper units while preserving migration SQL behavior.
 - [x] Cleanup pass (2026-03-13): split `ensure_schema` core table bootstrapping into table-scoped helpers while preserving bootstrap + migration behavior.
+- [x] Cleanup pass (2026-03-13): split `ApprovalStore._ensure_tables` into table/index helpers while preserving DDL SQL and commit behavior.
 
 ## Local Remaining
 

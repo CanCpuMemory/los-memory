@@ -157,7 +157,13 @@ class ApprovalStore:
 
     def _ensure_tables(self) -> None:
         """Ensure approval tables exist."""
-        # Main approval requests table
+        self._ensure_approval_requests_table()
+        self._ensure_approval_request_indexes()
+        self._ensure_approval_audit_log_table()
+        self._ensure_approval_audit_indexes()
+        self.conn.commit()
+
+    def _ensure_approval_requests_table(self) -> None:
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS approval_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,6 +183,8 @@ class ApprovalStore:
                 context TEXT DEFAULT '{}'
             )
         """)
+
+    def _ensure_approval_request_indexes(self) -> None:
         self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_approval_status
             ON approval_requests(status)
@@ -190,7 +198,7 @@ class ApprovalStore:
             ON approval_requests(job_id)
         """)
 
-        # Audit log table
+    def _ensure_approval_audit_log_table(self) -> None:
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS approval_audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,6 +216,8 @@ class ApprovalStore:
                 FOREIGN KEY (request_id) REFERENCES approval_requests(id)
             )
         """)
+
+    def _ensure_approval_audit_indexes(self) -> None:
         self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_audit_request
             ON approval_audit_log(request_id)
@@ -216,7 +226,6 @@ class ApprovalStore:
             CREATE INDEX IF NOT EXISTS idx_audit_timestamp
             ON approval_audit_log(timestamp)
         """)
-        self.conn.commit()
 
     def _log_audit(
         self,
