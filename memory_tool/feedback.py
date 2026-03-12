@@ -137,8 +137,7 @@ def apply_feedback(
     Returns:
         Result dictionary with action taken
     """
-    from .operations import run_delete, run_edit, run_get
-
+    run_get, run_edit, run_delete = _load_feedback_operation_runners()
     observation = _get_observation_or_raise(conn, observation_id, run_get)
     intent = parse_feedback_intent(feedback_text)
     result = {
@@ -148,9 +147,45 @@ def apply_feedback(
         "feedback_text": feedback_text,
         "metadata": metadata or {},
     }
+    if _dispatch_feedback_action(
+        conn=conn,
+        intent=intent,
+        observation=observation,
+        observation_id=observation_id,
+        feedback_text=feedback_text,
+        auto_apply=auto_apply,
+        metadata=metadata,
+        result=result,
+        run_edit=run_edit,
+        run_delete=run_delete,
+    ):
+        return result
 
-    if intent.action == "delete":
-        _apply_delete_feedback(
+    result["action"] = "unknown"
+    result["message"] = "Could not determine feedback intent"
+    return result
+
+
+def _load_feedback_operation_runners():
+    from .operations import run_delete, run_edit, run_get
+
+    return run_get, run_edit, run_delete
+
+
+def _dispatch_feedback_action(
+    conn,
+    intent: FeedbackIntent,
+    observation: Any,
+    observation_id: int,
+    feedback_text: str,
+    auto_apply: bool,
+    metadata: Optional[dict[str, Any]],
+    result: dict,
+    run_edit,
+    run_delete,
+) -> bool:
+    handlers = {
+        "delete": lambda: _apply_delete_feedback(
             conn=conn,
             observation_id=observation_id,
             feedback_text=feedback_text,
@@ -158,10 +193,8 @@ def apply_feedback(
             metadata=metadata,
             result=result,
             run_delete=run_delete,
-        )
-        return result
-    if intent.action == "correct":
-        _apply_correct_feedback(
+        ),
+        "correct": lambda: _apply_correct_feedback(
             conn=conn,
             observation_id=observation_id,
             feedback_text=feedback_text,
@@ -171,10 +204,8 @@ def apply_feedback(
             observation=observation,
             intent=intent,
             run_edit=run_edit,
-        )
-        return result
-    if intent.action == "supplement":
-        _apply_supplement_feedback(
+        ),
+        "supplement": lambda: _apply_supplement_feedback(
             conn=conn,
             observation_id=observation_id,
             feedback_text=feedback_text,
@@ -184,11 +215,13 @@ def apply_feedback(
             observation=observation,
             intent=intent,
             run_edit=run_edit,
-        )
-        return result
-    result["action"] = "unknown"
-    result["message"] = "Could not determine feedback intent"
-    return result
+        ),
+    }
+    handler = handlers.get(intent.action)
+    if handler is None:
+        return False
+    handler()
+    return True
 
 
 def _get_observation_or_raise(conn, observation_id: int, run_get) -> Any:

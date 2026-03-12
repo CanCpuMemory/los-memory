@@ -56,6 +56,7 @@
 - [x] Cleanup pass (2026-03-13): split `viewer.Handler.do_GET` into API route dispatch and endpoint-specific handlers while preserving auth, 404, and 500 response behavior.
 - [x] Cleanup pass (2026-03-13): split `_register_observation_subcommands` into per-subcommand parser builders while preserving CLI options/defaults and legacy compatibility.
 - [x] Cleanup pass (2026-03-13): split `share._write_html_bundle` into header/sessions/observations rendering helpers while preserving export content semantics.
+- [x] Cleanup pass (2026-03-13): split `apply_feedback` into operation-loader + action-dispatch helpers while preserving delete/correct/supplement behavior and feedback logging semantics.
 
 ## Local Remaining
 
