@@ -94,62 +94,98 @@ class AutoRecoveryEngine:
         Returns:
             Dict with trigger results and recovery outcomes
         """
-        results = {
+        results = self._init_evaluation_result()
+        triggered = self.trigger_registry.evaluate(context)
+
+        for trigger_result in triggered:
+            trigger_name, trigger_type = self._extract_trigger_identity(trigger_result)
+            self._append_trigger_fired(results, trigger_name, trigger_type)
+            incident = self._maybe_create_incident(
+                results=results,
+                trigger_result=trigger_result,
+                auto_create_incident=auto_create_incident,
+            )
+            policy = self._find_policy_for_trigger(trigger_name, trigger_type)
+            execution = self._evaluate_recovery_execution(
+                trigger_name=trigger_name,
+                policy=policy,
+                incident=incident,
+                context=context,
+            )
+            results["recoveries_executed"].append(execution)
+
+        return results
+
+    def _init_evaluation_result(self) -> Dict[str, Any]:
+        return {
             "evaluated_at": utc_now(),
             "triggers_fired": [],
             "recoveries_executed": [],
             "incidents_created": [],
         }
 
-        # Evaluate all triggers
-        triggered = self.trigger_registry.evaluate(context)
+    def _extract_trigger_identity(self, trigger_result: Dict[str, Any]) -> tuple[str, str]:
+        return trigger_result["trigger_name"], trigger_result["trigger_type"]
 
-        for trigger_result in triggered:
-            trigger_name = trigger_result["trigger_name"]
-            trigger_type = trigger_result["trigger_type"]
-
-            results["triggers_fired"].append({
+    def _append_trigger_fired(
+        self,
+        results: Dict[str, Any],
+        trigger_name: str,
+        trigger_type: str,
+    ) -> None:
+        results["triggers_fired"].append(
+            {
                 "name": trigger_name,
                 "type": trigger_type,
-            })
+            }
+        )
 
-            # Create or get incident
-            incident = None
-            if auto_create_incident:
-                incident = self._create_incident_from_trigger(trigger_result)
-                results["incidents_created"].append({
-                    "id": incident.id,
-                    "title": incident.title,
-                })
+    def _maybe_create_incident(
+        self,
+        results: Dict[str, Any],
+        trigger_result: Dict[str, Any],
+        auto_create_incident: bool,
+    ):
+        if not auto_create_incident:
+            return None
+        incident = self._create_incident_from_trigger(trigger_result)
+        results["incidents_created"].append(
+            {
+                "id": incident.id,
+                "title": incident.title,
+            }
+        )
+        return incident
 
-            # Find recovery policy
-            policy = self.policy_manager.find_policy_by_trigger(
-                trigger_id=trigger_name,
-                trigger_type=trigger_type,
-            )
+    def _find_policy_for_trigger(self, trigger_name: str, trigger_type: str):
+        return self.policy_manager.find_policy_by_trigger(
+            trigger_id=trigger_name,
+            trigger_type=trigger_type,
+        )
 
-            if not policy:
-                results["recoveries_executed"].append({
-                    "trigger": trigger_name,
-                    "status": "no_policy",
-                })
-                continue
-
-            # Execute recovery
-            recovery_result = self._execute_recovery(
-                incident_id=incident.id if incident else None,
-                policy=policy,
-                context=context,
-            )
-
-            results["recoveries_executed"].append({
+    def _evaluate_recovery_execution(
+        self,
+        trigger_name: str,
+        policy,
+        incident,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not policy:
+            return {
                 "trigger": trigger_name,
-                "policy_id": policy.trigger_id,
-                "status": recovery_result["status"],
-                "action_results": recovery_result["action_results"],
-            })
-
-        return results
+                "status": "no_policy",
+            }
+        recovery_result = self._execute_recovery(
+            incident_id=incident.id if incident else None,
+            policy=policy,
+            context=context,
+        )
+        return {
+            "trigger": trigger_name,
+            "policy_id": policy.trigger_id,
+            "status": recovery_result["status"],
+            "action_results": recovery_result["action_results"],
+        }
 
     def _create_incident_from_trigger(
         self,

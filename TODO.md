@@ -57,6 +57,7 @@
 - [x] Cleanup pass (2026-03-13): split `_register_observation_subcommands` into per-subcommand parser builders while preserving CLI options/defaults and legacy compatibility.
 - [x] Cleanup pass (2026-03-13): split `share._write_html_bundle` into header/sessions/observations rendering helpers while preserving export content semantics.
 - [x] Cleanup pass (2026-03-13): split `apply_feedback` into operation-loader + action-dispatch helpers while preserving delete/correct/supplement behavior and feedback logging semantics.
+- [x] Cleanup pass (2026-03-13): split `AutoRecoveryEngine.evaluate_and_recover` into evaluation-step helpers while preserving trigger/policy/incidents/recovery result semantics.
 
 ## Local Remaining
 
