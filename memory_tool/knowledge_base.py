@@ -305,7 +305,13 @@ class KnowledgeBase:
 
     def _ensure_tables(self) -> None:
         """Ensure knowledge base tables exist."""
-        # Main knowledge entries table
+        self._ensure_knowledge_entries_table()
+        self._ensure_knowledge_fts_table()
+        self._ensure_knowledge_fts_triggers()
+        self._ensure_knowledge_indexes()
+        self.conn.commit()
+
+    def _ensure_knowledge_entries_table(self) -> None:
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS knowledge_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -324,13 +330,13 @@ class KnowledgeBase:
             )
         """)
 
-        # FTS virtual table for symptoms search
+    def _ensure_knowledge_fts_table(self) -> None:
         self.conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
             USING fts5(symptoms_pattern, root_cause_summary, content='knowledge_entries', content_rowid='id')
         """)
 
-        # Triggers to keep FTS index in sync
+    def _ensure_knowledge_fts_triggers(self) -> None:
         self.conn.execute("""
             CREATE TRIGGER IF NOT EXISTS knowledge_ai
             AFTER INSERT ON knowledge_entries BEGIN
@@ -355,7 +361,7 @@ class KnowledgeBase:
             END
         """)
 
-        # Indexes
+    def _ensure_knowledge_indexes(self) -> None:
         self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_knowledge_type_severity
             ON knowledge_entries(incident_type, severity)
@@ -368,8 +374,6 @@ class KnowledgeBase:
             CREATE INDEX IF NOT EXISTS idx_knowledge_last_used
             ON knowledge_entries(last_used_at)
         """)
-
-        self.conn.commit()
 
     def add_entry(self, entry: KnowledgeEntry) -> int:
         """Add a new knowledge entry.
