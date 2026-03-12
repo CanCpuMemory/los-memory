@@ -403,6 +403,12 @@ def _migrate_to_v9(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_to_v9_create_recovery_tables(conn: sqlite3.Connection) -> None:
+    _migrate_to_v9_create_recovery_actions_table(conn)
+    _migrate_to_v9_create_recovery_executions_table(conn)
+    _migrate_to_v9_create_recovery_policies_table(conn)
+
+
+def _migrate_to_v9_create_recovery_actions_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS recovery_actions (
@@ -417,6 +423,9 @@ def _migrate_to_v9_create_recovery_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _migrate_to_v9_create_recovery_executions_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS recovery_executions (
@@ -433,6 +442,9 @@ def _migrate_to_v9_create_recovery_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _migrate_to_v9_create_recovery_policies_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS recovery_policies (
@@ -572,6 +584,13 @@ def _migrate_to_v10_create_approval_nonces_table(conn: sqlite3.Connection) -> No
 
 
 def _migrate_to_v10_create_approval_indexes(conn: sqlite3.Connection) -> None:
+    _migrate_to_v10_create_approval_request_indexes(conn)
+    _migrate_to_v10_create_approval_audit_indexes(conn)
+    _migrate_to_v10_create_approval_event_indexes(conn)
+    _migrate_to_v10_create_approval_nonce_indexes(conn)
+
+
+def _migrate_to_v10_create_approval_request_indexes(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_approval_status
@@ -590,6 +609,9 @@ def _migrate_to_v10_create_approval_indexes(conn: sqlite3.Connection) -> None:
         ON approval_requests(job_id)
         """
     )
+
+
+def _migrate_to_v10_create_approval_audit_indexes(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_audit_request
@@ -602,6 +624,9 @@ def _migrate_to_v10_create_approval_indexes(conn: sqlite3.Connection) -> None:
         ON approval_audit_log(timestamp)
         """
     )
+
+
+def _migrate_to_v10_create_approval_event_indexes(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_approval_events_job
@@ -614,6 +639,9 @@ def _migrate_to_v10_create_approval_indexes(conn: sqlite3.Connection) -> None:
         ON approval_events(created_at)
         """
     )
+
+
+def _migrate_to_v10_create_approval_nonce_indexes(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_nonce_expires
@@ -624,6 +652,12 @@ def _migrate_to_v10_create_approval_indexes(conn: sqlite3.Connection) -> None:
 
 def _migrate_to_v11(conn: sqlite3.Connection) -> None:
     """Create attribution tables and indexes."""
+    _migrate_to_v11_create_attribution_reports_table(conn)
+    _migrate_to_v11_create_incident_attributions_table(conn)
+    _migrate_to_v11_create_attribution_indexes(conn)
+
+
+def _migrate_to_v11_create_attribution_reports_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS attribution_reports (
@@ -640,6 +674,9 @@ def _migrate_to_v11(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _migrate_to_v11_create_incident_attributions_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS incident_attributions (
@@ -654,6 +691,9 @@ def _migrate_to_v11(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _migrate_to_v11_create_attribution_indexes(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_attribution_incident
