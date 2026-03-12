@@ -151,94 +151,36 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             f"(max {SCHEMA_VERSION})."
         )
 
-    if version < 1:
-        _migrate_to_v1(conn)
-        set_schema_version(conn, 1)
-        version = 1
+    for target_version, migrate in _schema_migration_steps():
+        if version >= target_version:
+            continue
+        migrate(conn)
+        set_schema_version(conn, target_version)
+        version = target_version
 
-    if version < 2:
-        _migrate_to_v2(conn)
-        set_schema_version(conn, 2)
-        version = 2
 
-    if version < 3:
-        _migrate_to_v3(conn)
-        set_schema_version(conn, 3)
-        version = 3
-
-    if version < 4:
-        _migrate_to_v4(conn)
-        set_schema_version(conn, 4)
-        version = 4
-
-    if version < 5:
-        _migrate_to_v5(conn)
-        set_schema_version(conn, 5)
-        version = 5
-
-    if version < 6:
-        _migrate_to_v6(conn)
-        set_schema_version(conn, 6)
-        version = 6
-
-    if version < 7:
-        _migrate_to_v7(conn)
-        set_schema_version(conn, 7)
-        version = 7
-
-    if version < 8:
-        _migrate_to_v8(conn)
-        set_schema_version(conn, 8)
-        version = 8
-
-    if version < 9:
-        _migrate_to_v9(conn)
-        set_schema_version(conn, 9)
-        version = 9
-
-    if version < 10:
-        _migrate_to_v10(conn)
-        set_schema_version(conn, 10)
-        version = 10
-
-    if version < 11:
-        _migrate_to_v11(conn)
-        set_schema_version(conn, 11)
-        version = 11
-
-    if version < 12:
-        _migrate_to_v12(conn)
-        set_schema_version(conn, 12)
-        version = 12
-
-    if version < 13:
-        _migrate_to_v13(conn)
-        set_schema_version(conn, 13)
-        version = 13
-
-    if version < 14:
-        _migrate_to_v14(conn)
-        set_schema_version(conn, 14)
-        version = 14
-
-    if version < 15:
-        _migrate_to_v15(conn)
-        set_schema_version(conn, 15)
-        version = 15
-
-    if version < 16:
-        _migrate_to_v16(conn)
-        set_schema_version(conn, 16)
-        version = 16
-
-    if version < 17:
-        _migrate_to_v17(conn)
-        set_schema_version(conn, 17)
-        version = 17
-
-    if version < 18:
-        _migrate_to_v18(conn)
-        set_schema_version(conn, 18)
+def _schema_migration_steps():
+    """Ordered migration steps from v1 through current schema version."""
+    return (
+        (1, _migrate_to_v1),
+        (2, _migrate_to_v2),
+        (3, _migrate_to_v3),
+        (4, _migrate_to_v4),
+        (5, _migrate_to_v5),
+        (6, _migrate_to_v6),
+        (7, _migrate_to_v7),
+        (8, _migrate_to_v8),
+        (9, _migrate_to_v9),
+        (10, _migrate_to_v10),
+        (11, _migrate_to_v11),
+        (12, _migrate_to_v12),
+        (13, _migrate_to_v13),
+        (14, _migrate_to_v14),
+        (15, _migrate_to_v15),
+        (16, _migrate_to_v16),
+        (17, _migrate_to_v17),
+        (18, _migrate_to_v18),
+    )
 
 
 def _migrate_to_v1(conn: sqlite3.Connection) -> None:

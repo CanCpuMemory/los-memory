@@ -59,6 +59,7 @@
 - [x] Cleanup pass (2026-03-13): split `apply_feedback` into operation-loader + action-dispatch helpers while preserving delete/correct/supplement behavior and feedback logging semantics.
 - [x] Cleanup pass (2026-03-13): split `AutoRecoveryEngine.evaluate_and_recover` into evaluation-step helpers while preserving trigger/policy/incidents/recovery result semantics.
 - [x] Cleanup pass (2026-03-13): split `_register_memory_subcommands` into per-subcommand parser builders while preserving memory command options/defaults.
+- [x] Cleanup pass (2026-03-13): refactor `migrate_schema` to table-driven ordered migration steps while preserving version bump semantics.
 
 ## Local Remaining
 
