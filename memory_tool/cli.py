@@ -240,8 +240,15 @@ def _register_memory_subcommands(subparsers: argparse._SubParsersAction) -> None
     """Register `memory` command group."""
     memory_parser = subparsers.add_parser("memory", help="Memory data access commands")
     memory_subparsers = memory_parser.add_subparsers(dest="memory_action", required=True)
+    _add_memory_search_subcommand(memory_subparsers)
+    _add_memory_list_subcommand(memory_subparsers)
+    _add_memory_get_subcommand(memory_subparsers)
+    _add_memory_timeline_subcommand(memory_subparsers)
+    _add_memory_export_subcommand(memory_subparsers)
+    _add_memory_clean_subcommand(memory_subparsers)
 
-    # memory search
+
+def _add_memory_search_subcommand(memory_subparsers: argparse._SubParsersAction) -> None:
     memory_search = memory_subparsers.add_parser("search", help="Search observations")
     memory_search.add_argument("query")
     memory_search.add_argument("--limit", type=int, default=10)
@@ -254,7 +261,8 @@ def _register_memory_subcommands(subparsers: argparse._SubParsersAction) -> None
         help="Comma-separated tags that every result must contain",
     )
 
-    # memory list
+
+def _add_memory_list_subcommand(memory_subparsers: argparse._SubParsersAction) -> None:
     memory_list = memory_subparsers.add_parser("list", help="List observations")
     memory_list.add_argument("--limit", type=int, default=20)
     memory_list.add_argument("--offset", type=int, default=0)
@@ -264,11 +272,13 @@ def _register_memory_subcommands(subparsers: argparse._SubParsersAction) -> None
         help="Comma-separated tags that every result must contain",
     )
 
-    # memory get
+
+def _add_memory_get_subcommand(memory_subparsers: argparse._SubParsersAction) -> None:
     memory_get = memory_subparsers.add_parser("get", help="Fetch observations by id")
     memory_get.add_argument("ids", help="Comma-separated observation ids")
 
-    # memory timeline
+
+def _add_memory_timeline_subcommand(memory_subparsers: argparse._SubParsersAction) -> None:
     memory_timeline = memory_subparsers.add_parser("timeline", help="Timeline query")
     memory_timeline.add_argument("--start")
     memory_timeline.add_argument("--end")
@@ -279,14 +289,16 @@ def _register_memory_subcommands(subparsers: argparse._SubParsersAction) -> None
     memory_timeline.add_argument("--visual", action="store_true")
     memory_timeline.add_argument("--group-by", choices=["hour", "day", "session"], default=None)
 
-    # memory export
+
+def _add_memory_export_subcommand(memory_subparsers: argparse._SubParsersAction) -> None:
     memory_export = memory_subparsers.add_parser("export", help="Export observations")
     memory_export.add_argument("--format", choices=["json", "csv"], default="json")
     memory_export.add_argument("--output", default=None)
     memory_export.add_argument("--limit", type=int, default=1000)
     memory_export.add_argument("--offset", type=int, default=0)
 
-    # memory clean
+
+def _add_memory_clean_subcommand(memory_subparsers: argparse._SubParsersAction) -> None:
     memory_clean = memory_subparsers.add_parser("clean", help="Delete old observations")
     memory_clean.add_argument("--before")
     memory_clean.add_argument("--older-than-days", type=int)
