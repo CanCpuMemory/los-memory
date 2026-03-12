@@ -115,14 +115,14 @@ See `docs/current/CURRENT_STATE.md` for the current implemented command surface,
 Historical `memory_tool.core.*` imports are compatibility shims; new development should use the top-level `memory_tool.*` modules.
 Recent hardening also means active sessions are scoped to the current database path, and `los-memory admin doctor` now runs read-only diagnostics without creating a missing SQLite file.
 Current controlled writeback integrations should also use `docs/manuals/VPSAGENTWEB_WRITEBACK_CONTRACT.md` for the metadata contract, feedback metadata, and `--profile` boundary.
-The current stable smoke contract for upstream runtime verification is `review apply --file ... --dry-run` plus `admin manage stats`.
+The current stable smoke contract for upstream runtime verification is `review apply --file ... --dry-run`, `admin manage stats`, and `observation delete --dry-run`.
 See `TODO.md` for the remaining local, external, and deferred follow-ups.
 
 ## CI coverage
 - Targeted Ruff checks cover maintained CLI/doctor/session surfaces
 - Docs command lint validates command examples under `docs/`
 - CLI contract tests lock structured output and exit-code behavior
-- Unit, selected integration smoke, hub-lite integration, approval migration E2E, and BDD smoke run in CI
+- Unit, selected integration smoke, hub-lite integration, approval migration E2E, BDD smoke, and adapter grouped-command runtime checks run in CI
 
 ## Codex / Claude install and usage
 See `docs/manuals/CODEX_CLAUDE_INSTALL.md` for setup and daily usage from each assistant.

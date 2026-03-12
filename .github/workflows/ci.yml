@@ -41,6 +41,7 @@ jobs:
             scripts/create_lsclaw_records.py \
             scripts/cross_repo_reporter.py \
             scripts/validate_ledger_boundary.py \
+            scripts/verify_los_memory_adapter.py \
             scripts/check_docs_cli_commands.py \
             tests/cli/test_cli_contract.py \
             tests/cli/test_cli_basic.py \
@@ -99,6 +100,18 @@ jobs:
         if: matrix.python-version == '3.11'
         run: |
           pytest tests/integration/test_lsclaw_smoke.py -q
+
+  check-los-memory-adapter:
+    name: check:los-memory-adapter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-python-dev
+        with:
+          python-version: "3.11"
+      - name: Verify los-memory adapter grouped command runtime paths
+        run: |
+          python scripts/verify_los_memory_adapter.py
 
   approval-migration-e2e:
     runs-on: ubuntu-latest

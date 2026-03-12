@@ -26,7 +26,7 @@ This document records the current, implemented state of `los-memory`.
 - `Observation` records now persist structured `metadata`, and `observation add/edit`, `memory get`, and `memory export` preserve that metadata round-trip
 - `Feedback` records now also persist structured `metadata`, and both `observation feedback` and `review apply` propagate it into feedback history
 - `--profile` is a storage-partition selector only; tenant/user/request/trace identity belongs in structured metadata rather than profile naming
-- The current stable smoke contract for upstream runtime verification is `review apply --file ... --dry-run` plus `admin manage stats`
+- The current stable smoke contract for upstream runtime verification is `review apply --file ... --dry-run`, `admin manage stats`, and `observation delete --dry-run`
 
 ## Current Testing Notes
 

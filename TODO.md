@@ -7,7 +7,7 @@
 - [x] Formalize feedback metadata write path and review-apply propagation.
 - [x] Publish a repo-local writeback contract for `VPS Agent Web` / controlled integrators.
 - [x] Keep `README.md` and `docs/current/CURRENT_STATE.md` aligned with the implemented metadata + profile boundary.
-- [x] Freeze `review apply --file ... --dry-run` and `admin manage stats` as stable smoke contract targets.
+- [x] Freeze `review apply --file ... --dry-run`, `admin manage stats`, and `observation delete --dry-run` as stable smoke contract targets.
 - [x] Cleanup pass (2026-03-12): enforce SQLite foreign keys at connection bootstrap.
 - [x] Cleanup pass (2026-03-12): align checkpoint observation query to snapshot boundary (`timestamp <= checkpoint.timestamp`) and keep checkpoint project in sync during project archive.
 - [x] Cleanup pass (2026-03-12): preserve observation `metadata` on session/checkpoint read paths.
@@ -68,8 +68,8 @@
 
 ## External Follow-ups (`lsclaw`)
 
-- [ ] Add `check:los-memory-adapter` to a default gate path, not just standalone script entrypoints.
-- [ ] Expand `verify-los-memory-adapter` runtime coverage beyond `--help` checks to include real grouped-command smoke for `admin manage`, `observation delete`, and `review apply`.
+- [x] Add `check:los-memory-adapter` to a default gate path, not just standalone script entrypoints.
+- [x] Expand `verify-los-memory-adapter` runtime coverage beyond `--help` checks to include real grouped-command smoke for `admin manage`, `observation delete`, and `review apply`.
 
 ## Deferred
 

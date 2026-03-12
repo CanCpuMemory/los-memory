@@ -25,11 +25,13 @@ The following commands can be treated as stable smoke contract targets for upstr
 
 - `review apply --file <json> --dry-run`
 - `admin manage stats`
+- `observation delete <id> --dry-run`
 
 Rationale:
 
 - `review apply --dry-run` validates the batch review/correction path without mutating stored observations.
 - `admin manage stats` is a read-only aggregate check with a small, stable JSON surface.
+- `observation delete --dry-run` validates identifier-based delete routing and match accounting without mutating data.
 
 ## Profile Boundary
 

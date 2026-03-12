@@ -84,6 +84,25 @@ def test_lsclaw_integration_smoke(tmp_path: Path) -> None:
     assert len(results) == 1
     assert results[0]["title"] == "Scoped decision"
 
+    stats = _run_cli(db_path, "admin", "manage", "stats")
+    assert stats["ok"] is True
+    assert stats["action"] == "stats"
+    assert stats["total"] == 2
+    assert isinstance(stats["projects"], list)
+    assert isinstance(stats["kinds"], list)
+
+    delete_preview = _run_cli(
+        db_path,
+        "observation",
+        "delete",
+        str(scoped_id),
+        "--dry-run",
+    )
+    assert delete_preview["ok"] is True
+    assert delete_preview["matched"] == 1
+    assert delete_preview["deleted"] == 0
+    assert delete_preview["dry_run"] is True
+
     transition = _run_cli(
         db_path,
         "tool",
