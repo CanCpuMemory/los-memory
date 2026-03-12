@@ -499,6 +499,13 @@ def _migrate_to_v10(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_to_v10_create_approval_tables(conn: sqlite3.Connection) -> None:
+    _migrate_to_v10_create_approval_requests_table(conn)
+    _migrate_to_v10_create_approval_audit_log_table(conn)
+    _migrate_to_v10_create_approval_events_table(conn)
+    _migrate_to_v10_create_approval_nonces_table(conn)
+
+
+def _migrate_to_v10_create_approval_requests_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS approval_requests (
@@ -518,6 +525,9 @@ def _migrate_to_v10_create_approval_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _migrate_to_v10_create_approval_audit_log_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS approval_audit_log (
@@ -534,6 +544,9 @@ def _migrate_to_v10_create_approval_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _migrate_to_v10_create_approval_events_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS approval_events (
@@ -545,6 +558,9 @@ def _migrate_to_v10_create_approval_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _migrate_to_v10_create_approval_nonces_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS approval_nonces (
