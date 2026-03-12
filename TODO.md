@@ -61,6 +61,7 @@
 - [x] Cleanup pass (2026-03-13): split `_register_memory_subcommands` into per-subcommand parser builders while preserving memory command options/defaults.
 - [x] Cleanup pass (2026-03-13): refactor `migrate_schema` to table-driven ordered migration steps while preserving version bump semantics.
 - [x] Cleanup pass (2026-03-13): split approval-audit and incident non-status enum guard installers into focused helper units while preserving trigger SQL contracts.
+- [x] Cleanup pass (2026-03-13): split `MemoryClient.edit` into serialization + run helpers while preserving update payload and not-found behavior.
 
 ## Local Remaining
 

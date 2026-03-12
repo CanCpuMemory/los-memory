@@ -507,6 +507,42 @@ class MemoryClient:
         results = run_timeline(conn, start, end, around_id, window_minutes, limit, offset=offset)
         return [ObservationData(r) for r in results]
 
+    def _serialize_optional_tags(self, tags: Optional[List[str]]) -> Optional[str]:
+        if tags is None:
+            return None
+        return tags_to_json(tags)
+
+    def _serialize_optional_metadata(self, metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+        if metadata is None:
+            return None
+        return metadata_to_json(metadata)
+
+    def _run_edit_observation(
+        self,
+        conn: sqlite3.Connection,
+        obs_id: int,
+        project: Optional[str],
+        kind: Optional[str],
+        title: Optional[str],
+        summary: Optional[str],
+        tags: Optional[List[str]],
+        raw: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        return run_edit(
+            conn,
+            obs_id,
+            project,
+            kind,
+            title,
+            summary,
+            self._serialize_optional_tags(tags),
+            raw,
+            timestamp=None,
+            auto_tags=False,
+            metadata=self._serialize_optional_metadata(metadata),
+        )
+
     def edit(
         self,
         obs_id: int,
@@ -537,23 +573,16 @@ class MemoryClient:
             NotFoundError: If observation not found
         """
         conn = self._ensure_connected()
-
-        tags_str = None
-        if tags is not None:
-            tags_str = tags_to_json(tags)
-
-        result = run_edit(
+        result = self._run_edit_observation(
             conn,
             obs_id,
             project,
             kind,
             title,
             summary,
-            tags_str,
+            tags,
             raw,
-            timestamp=None,
-            auto_tags=False,
-            metadata=metadata_to_json(metadata) if metadata is not None else None,
+            metadata,
         )
 
         if not result.get("ok"):
