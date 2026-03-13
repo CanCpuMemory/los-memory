@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Overview
+
+Writeback contract hardening release focused on bulk JSON ingestion,
+metadata-aware retrieval, warning hygiene, and CLI/doc consistency.
+
+### Added
+
+- `observation bulk --input <json|@file|@->` for multi-item observation writes
+  from inline JSON, files, or stdin
+- Metadata-native equality filters for `memory search` and `memory list` via
+  `--metadata-filter`
+- Python client support for bulk observation writes and metadata-filtered
+  `search()` / `list()`
+- Local `make smoke-contract` shortcut for the stable adapter verification path
+
+### Changed
+
+- Standardized maintained local entrypoints on `los-memory` and
+  `python -m memory_tool` / `python -m memory_tool.viewer` /
+  `python -m memory_tool.ingest`
+- Updated active manuals and contract docs to describe bulk JSON writeback,
+  metadata filters, and the current preferred CLI entrypoints
+- Refreshed current-state and future-development notes so they match the live
+  repo/test surface
+
+### Fixed
+
+- Removed blanket pytest warning suppression so new warning debt is visible by
+  default
+- Closed test-side SQLite / HTTP error resource leaks so the suite stays clean
+  under default warning handling
+- Extended adapter/runtime smoke coverage from `--help` checks to real grouped
+  command paths (`admin manage stats`, `observation delete --dry-run`,
+  `review apply --file ... --dry-run`)
+
+### Tests
+
+- Added contract coverage for metadata filters on `memory search` / `memory list`
+- Added coverage for bulk write JSON/stdin flows and dry-run rollback behavior
+- Full local suite now passes with `675 passed`
+
 ## [2.0.0] - 2026-03-07
 
 ### Overview
