@@ -76,6 +76,7 @@
 - [ ] Continue non-blocking complexity cleanup opportunistically if new hotspots emerge.
 - [x] Cleanup pass (2026-03-13): align Makefile shortcuts with the modern `los-memory` / `python -m memory_tool` CLI entrypoints while preserving local workflow compatibility.
 - [x] Cleanup pass (2026-03-13): align core README/manual command examples with the modern `python -m memory_tool` / `python -m memory_tool.viewer` / `python -m memory_tool.ingest` entrypoints while keeping the legacy script path documented as compatibility-only.
+- [x] Cleanup pass (2026-03-13): align remaining active lsclaw integration manuals to the modern `python -m memory_tool` review-apply entrypoint while keeping compatibility notes explicit elsewhere.
 - [x] Cleanup pass (2026-03-13): surface current warning debt by removing blanket warning suppression, then fix or explicitly filter expected approval migration deprecation warnings.
 - [x] Cleanup pass (2026-03-13): close test-side resource leaks in SSE/adapter coverage so the suite stays warning-clean under default pytest warning mode.
 - [x] Cleanup pass (2026-03-13): refresh stale future-development guidance so it reflects the current CI/test layout instead of historical placeholders.

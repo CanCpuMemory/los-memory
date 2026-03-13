@@ -120,14 +120,14 @@ if (requiredTags) {
 执行：
 
 ```bash
-python3 /path/to/los-memory/memory_tool/memory_tool.py \
+python3 -m memory_tool \
   --profile shared review apply --file review-feedback.json
 ```
 
 灰度期先用：
 
 ```bash
-python3 /path/to/los-memory/memory_tool/memory_tool.py \
+python3 -m memory_tool \
   --profile shared review apply --file review-feedback.json --dry-run
 ```
 
