@@ -43,6 +43,7 @@ from .database import connect_db, ensure_fts, ensure_schema
 from .models import Observation, Session
 from .operations import (
     add_observation,
+    run_bulk_add,
     run_search,
     run_timeline,
     run_get,
@@ -436,6 +437,7 @@ class MemoryClient:
         limit: int = 20,
         offset: int = 0,
         require_tags: Optional[List[str]] = None,
+        metadata_filters: Optional[Dict[str, Any]] = None,
     ) -> List[ObservationData]:
         """List observations.
 
@@ -443,12 +445,19 @@ class MemoryClient:
             limit: Maximum results
             offset: Result offset
             require_tags: Tags that results must have
+            metadata_filters: Metadata key/value filters that results must match
 
         Returns:
             List of observation data
         """
         conn = self._ensure_connected()
-        results = run_list(conn, limit, offset=offset, required_tags=require_tags)
+        results = run_list(
+            conn,
+            limit,
+            offset=offset,
+            required_tags=require_tags,
+            metadata_filters=metadata_filters,
+        )
         return [ObservationData(r) for r in results]
 
     def search(
@@ -458,6 +467,7 @@ class MemoryClient:
         offset: int = 0,
         mode: str = "auto",
         require_tags: Optional[List[str]] = None,
+        metadata_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Search observations.
 
@@ -467,6 +477,7 @@ class MemoryClient:
             offset: Result offset
             mode: Search mode (auto, fts, like)
             require_tags: Tags that results must have
+            metadata_filters: Metadata key/value filters that results must match
 
         Returns:
             List of search results with observation and rank
@@ -479,7 +490,17 @@ class MemoryClient:
             offset=offset,
             mode=mode,
             required_tags=require_tags,
+            metadata_filters=metadata_filters,
         )
+
+    def add_many(
+        self,
+        items: List[Dict[str, Any]],
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Add multiple observations from JSON-style payload items."""
+        conn = self._ensure_connected()
+        return run_bulk_add(conn, items, dry_run=dry_run)
 
     def timeline(
         self,

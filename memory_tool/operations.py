@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional
 
 if TYPE_CHECKING:
     from .models import Observation
@@ -33,20 +33,10 @@ def normalize_rows(rows: Iterable[sqlite3.Row]) -> List["Observation"]:
     return results
 
 
-def add_observation(
+def _normalize_session_id(
     conn: sqlite3.Connection,
-    timestamp: str,
-    project: str,
-    kind: str,
-    title: str,
-    summary: str,
-    tags: str,
-    tags_text: str,
-    raw: str,
-    session_id: Optional[int] = None,
-    metadata: str = "{}",
-) -> int:
-    """Add a new observation and return its ID."""
+    session_id: Optional[int],
+) -> Optional[int]:
     normalized_session_id: Optional[int]
     if session_id is None:
         normalized_session_id = None
@@ -63,7 +53,23 @@ def add_observation(
                 (candidate_session_id,),
             ).fetchone()
             normalized_session_id = candidate_session_id if exists else None
+    return normalized_session_id
 
+
+def _insert_observation(
+    conn: sqlite3.Connection,
+    timestamp: str,
+    project: str,
+    kind: str,
+    title: str,
+    summary: str,
+    tags: str,
+    tags_text: str,
+    raw: str,
+    session_id: Optional[int] = None,
+    metadata: str = "{}",
+) -> int:
+    normalized_session_id = _normalize_session_id(conn, session_id)
     cursor = conn.execute(
         """
         INSERT INTO observations (timestamp, project, kind, title, summary, tags, tags_text, raw, session_id, metadata)
@@ -82,8 +88,38 @@ def add_observation(
             metadata,
         ),
     )
-    conn.commit()
     return int(cursor.lastrowid)
+
+
+def add_observation(
+    conn: sqlite3.Connection,
+    timestamp: str,
+    project: str,
+    kind: str,
+    title: str,
+    summary: str,
+    tags: str,
+    tags_text: str,
+    raw: str,
+    session_id: Optional[int] = None,
+    metadata: str = "{}",
+) -> int:
+    """Add a new observation and return its ID."""
+    obs_id = _insert_observation(
+        conn,
+        timestamp,
+        project,
+        kind,
+        title,
+        summary,
+        tags,
+        tags_text,
+        raw,
+        session_id=session_id,
+        metadata=metadata,
+    )
+    conn.commit()
+    return obs_id
 
 
 def _normalize_required_tags(required_tags: Optional[List[str]]) -> List[str]:
@@ -100,6 +136,40 @@ def _matches_required_tags(item_tags: List[str], required_tags: List[str]) -> bo
     return all(tag in tag_set for tag in required_tags)
 
 
+def _normalize_metadata_filters(metadata_filters: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if not metadata_filters:
+        return {}
+    return {str(key): value for key, value in metadata_filters.items()}
+
+
+def _matches_metadata_filters(item_metadata: dict[str, Any], metadata_filters: dict[str, Any]) -> bool:
+    if not metadata_filters:
+        return True
+    metadata = item_metadata or {}
+    return all(metadata.get(key) == value for key, value in metadata_filters.items())
+
+
+def _filter_results(
+    results: List[dict],
+    required_tags: List[str],
+    metadata_filters: dict[str, Any],
+) -> List[dict]:
+    return [
+        item
+        for item in results
+        if _matches_required_tags(item.get("tags", []), required_tags)
+        and _matches_metadata_filters(item.get("metadata", {}), metadata_filters)
+    ]
+
+
+def _slice_filtered_results(results: List[Any], limit: int, offset: int) -> List[Any]:
+    if offset < 0:
+        offset = 0
+    if limit < 0:
+        return results[offset:]
+    return results[offset:offset + limit]
+
+
 def run_search(
     conn: sqlite3.Connection,
     query: str,
@@ -108,6 +178,7 @@ def run_search(
     mode: str = "auto",
     quote: bool = False,
     required_tags: Optional[List[str]] = None,
+    metadata_filters: Optional[dict[str, Any]] = None,
 ) -> List[dict]:
     """Search observations using FTS or LIKE."""
     from .utils import parse_metadata_json, parse_tags_json, quote_fts_query
@@ -115,18 +186,23 @@ def run_search(
     if not query:
         return []
     required = _normalize_required_tags(required_tags)
+    metadata_filter_map = _normalize_metadata_filters(metadata_filters)
+    use_post_filters = bool(required or metadata_filter_map)
     fts_query = quote_fts_query(query) if quote else query
     if mode != "like":
         try:
             fts_results = _run_search_fts(
                 conn=conn,
                 fts_query=fts_query,
-                limit=limit,
-                offset=offset,
+                limit=None if use_post_filters else limit,
+                offset=0 if use_post_filters else offset,
                 parse_tags_json=parse_tags_json,
                 parse_metadata_json=parse_metadata_json,
             )
-            return _filter_search_results_by_tags(fts_results, required)
+            filtered_results = _filter_results(fts_results, required, metadata_filter_map)
+            if use_post_filters:
+                return _slice_filtered_results(filtered_results, limit, offset)
+            return filtered_results
         except sqlite3.OperationalError:
             if mode == "fts":
                 raise
@@ -134,24 +210,26 @@ def run_search(
     like_results = _run_search_like(
         conn=conn,
         query=query,
-        limit=limit,
-        offset=offset,
+        limit=None if use_post_filters else limit,
+        offset=0 if use_post_filters else offset,
         parse_tags_json=parse_tags_json,
         parse_metadata_json=parse_metadata_json,
     )
-    return _filter_search_results_by_tags(like_results, required)
+    filtered_results = _filter_results(like_results, required, metadata_filter_map)
+    if use_post_filters:
+        return _slice_filtered_results(filtered_results, limit, offset)
+    return filtered_results
 
 
 def _run_search_fts(
     conn: sqlite3.Connection,
     fts_query: str,
-    limit: int,
+    limit: int | None,
     offset: int,
     parse_tags_json,
     parse_metadata_json,
 ) -> List[dict]:
-    rows = conn.execute(
-        """
+    query = """
         SELECT observations.id, observations.timestamp, observations.project,
                observations.kind, observations.title, observations.summary,
                observations.tags, observations.raw, observations.session_id, observations.metadata,
@@ -160,10 +238,12 @@ def _run_search_fts(
         JOIN observations ON observations_fts.rowid = observations.id
         WHERE observations_fts MATCH ?
         ORDER BY score
-        LIMIT ? OFFSET ?
-        """,
-        (fts_query, limit, offset),
-    ).fetchall()
+    """
+    params: list[Any] = [fts_query]
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    rows = conn.execute(query, params).fetchall()
     return [
         _row_to_search_result(
             row=row,
@@ -178,21 +258,22 @@ def _run_search_fts(
 def _run_search_like(
     conn: sqlite3.Connection,
     query: str,
-    limit: int,
+    limit: int | None,
     offset: int,
     parse_tags_json,
     parse_metadata_json,
 ) -> List[dict]:
-    rows = conn.execute(
-        """
+    sql = """
         SELECT id, timestamp, project, kind, title, summary, tags, raw, session_id, metadata
         FROM observations
         WHERE title LIKE ? OR summary LIKE ? OR tags_text LIKE ? OR raw LIKE ?
         ORDER BY id DESC
-        LIMIT ? OFFSET ?
-        """,
-        tuple([f"%{query}%"] * 4 + [limit, offset]),
-    ).fetchall()
+    """
+    params: list[Any] = [f"%{query}%"] * 4
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    rows = conn.execute(sql, params).fetchall()
     return [
         _row_to_search_result(
             row=row,
@@ -222,16 +303,6 @@ def _row_to_search_result(
         "session_id": row["session_id"] if "session_id" in row.keys() else None,
         "metadata": parse_metadata_json(row["metadata"]) if "metadata" in row.keys() else {},
     }
-
-
-def _filter_search_results_by_tags(results: List[dict], required_tags: List[str]) -> List[dict]:
-    if not required_tags:
-        return results
-    return [
-        item
-        for item in results
-        if _matches_required_tags(item.get("tags", []), required_tags)
-    ]
 
 
 def run_timeline(
@@ -354,17 +425,140 @@ def run_list(
     limit: int,
     offset: int = 0,
     required_tags: Optional[List[str]] = None,
+    metadata_filters: Optional[dict[str, Any]] = None,
 ) -> List["Observation"]:
     """List latest observations."""
     required = _normalize_required_tags(required_tags)
-    rows = conn.execute(
-        "SELECT * FROM observations ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        (limit, offset),
-    ).fetchall()
+    metadata_filter_map = _normalize_metadata_filters(metadata_filters)
+    use_post_filters = bool(required or metadata_filter_map)
+    if use_post_filters:
+        rows = conn.execute(
+            "SELECT * FROM observations ORDER BY timestamp DESC",
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM observations ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
     results = normalize_rows(rows)
-    if not required:
+    if not use_post_filters:
         return results
-    return [item for item in results if _matches_required_tags(item.tags, required)]
+    filtered_results = [
+        item
+        for item in results
+        if _matches_required_tags(item.tags, required)
+        and _matches_metadata_filters(item.metadata, metadata_filter_map)
+    ]
+    return _slice_filtered_results(filtered_results, limit, offset)
+
+
+def _normalize_bulk_observation_item(raw_item: object) -> dict[str, Any]:
+    from .utils import (
+        auto_tags_from_text,
+        metadata_to_json,
+        normalize_metadata_dict,
+        normalize_tags_list,
+        tags_to_json,
+        tags_to_text,
+    )
+
+    if not isinstance(raw_item, dict):
+        raise ValueError("bulk_observation_item_must_be_object")
+
+    raw_title = raw_item.get("title")
+    raw_summary = raw_item.get("summary")
+    title = "" if raw_title is None else str(raw_title).strip()
+    summary = "" if raw_summary is None else str(raw_summary).strip()
+    if not title:
+        raise ValueError("bulk_observation_title_required")
+    if not summary:
+        raise ValueError("bulk_observation_summary_required")
+
+    project = str(raw_item.get("project") or "general")
+    kind = str(raw_item.get("kind") or "note")
+    timestamp = str(raw_item.get("timestamp") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    raw = str(raw_item.get("raw") or "")
+    auto_tags = bool(raw_item.get("auto_tags", False))
+    tags_list = normalize_tags_list(raw_item.get("tags", []))
+    if auto_tags and not tags_list:
+        tags_list = auto_tags_from_text(title, summary)
+
+    metadata = normalize_metadata_dict(raw_item.get("metadata", {}))
+
+    return {
+        "timestamp": timestamp,
+        "project": project,
+        "kind": kind,
+        "title": title,
+        "summary": summary,
+        "tags": tags_to_json(tags_list),
+        "tags_text": tags_to_text(tags_list),
+        "raw": raw,
+        "session_id": raw_item.get("session_id"),
+        "metadata": metadata_to_json(metadata),
+    }
+
+
+def run_bulk_add(
+    conn: sqlite3.Connection,
+    items: list[dict[str, Any]],
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Create multiple observations from JSON-style payload items."""
+    from .utils import parse_metadata_json, parse_tags_json
+
+    normalized_items = [_normalize_bulk_observation_item(item) for item in items]
+    created_ids: list[int] = []
+
+    try:
+        for item in normalized_items:
+            created_ids.append(
+                _insert_observation(
+                    conn,
+                    item["timestamp"],
+                    item["project"],
+                    item["kind"],
+                    item["title"],
+                    item["summary"],
+                    item["tags"],
+                    item["tags_text"],
+                    item["raw"],
+                    session_id=item["session_id"],
+                    metadata=item["metadata"],
+                )
+            )
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    result_ids = [] if dry_run else created_ids
+    results = [
+        {
+            "id": None if dry_run else created_id,
+            "timestamp": item["timestamp"],
+            "project": item["project"],
+            "kind": item["kind"],
+            "title": item["title"],
+            "summary": item["summary"],
+            "tags": parse_tags_json(item["tags"]),
+            "raw": item["raw"],
+            "session_id": _normalize_session_id(conn, item["session_id"]),
+            "metadata": parse_metadata_json(item["metadata"]),
+        }
+        for created_id, item in zip(created_ids, normalized_items)
+    ]
+    return {
+        "ok": True,
+        "total": len(normalized_items),
+        "created": 0 if dry_run else len(created_ids),
+        "ids": result_ids,
+        "results": results,
+        "dry_run": dry_run,
+    }
 
 
 def run_export(conn: sqlite3.Connection, limit: int, offset: int = 0) -> List["Observation"]:

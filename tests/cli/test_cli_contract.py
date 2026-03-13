@@ -331,6 +331,120 @@ def test_observation_feedback_metadata_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.contract
+def test_memory_search_and_list_support_metadata_filters(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    assert _run_cli("--db", str(db_path), "init").returncode == 0
+
+    payloads = [
+        {
+            "title": "Tenant A note",
+            "summary": "metadata filter baseline",
+            "metadata": {"tenant_id": "tenant-a", "trace_id": "trace-a", "source": "vps-agent-web"},
+        },
+        {
+            "title": "Tenant B note",
+            "summary": "metadata filter baseline",
+            "metadata": {"tenant_id": "tenant-b", "trace_id": "trace-b", "source": "vps-agent-web"},
+        },
+    ]
+    for item in payloads:
+        result = _run_cli(
+            "--db",
+            str(db_path),
+            "observation",
+            "add",
+            "--title",
+            item["title"],
+            "--summary",
+            item["summary"],
+            "--metadata",
+            json.dumps(item["metadata"], ensure_ascii=False),
+        )
+        assert result.returncode == 0
+
+    metadata_filter = json.dumps({"tenant_id": "tenant-a", "source": "vps-agent-web"}, ensure_ascii=False)
+    search_result = _run_cli(
+        "--db",
+        str(db_path),
+        "memory",
+        "search",
+        "baseline",
+        "--metadata-filter",
+        metadata_filter,
+    )
+    assert search_result.returncode == 0
+    search_payload = json.loads(search_result.stdout)
+    assert [item["title"] for item in search_payload["results"]] == ["Tenant A note"]
+
+    list_result = _run_cli(
+        "--db",
+        str(db_path),
+        "memory",
+        "list",
+        "--metadata-filter",
+        metadata_filter,
+    )
+    assert list_result.returncode == 0
+    list_payload = json.loads(list_result.stdout)
+    assert [item["title"] for item in list_payload["results"]] == ["Tenant A note"]
+
+
+@pytest.mark.contract
+def test_observation_bulk_accepts_stdin_json_and_preserves_metadata(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    assert _run_cli("--db", str(db_path), "init").returncode == 0
+
+    bulk_payload = {
+        "items": [
+            {
+                "project": "ops",
+                "kind": "decision",
+                "title": "Bulk note one",
+                "summary": "Created via stdin bulk path",
+                "tags": ["bulk", "tenant:a"],
+                "metadata": {"tenant_id": "tenant-a", "trace_id": "trace-bulk-1", "source": "vps-agent-web"},
+            },
+            {
+                "project": "ops",
+                "kind": "note",
+                "title": "Bulk note two",
+                "summary": "Created via stdin bulk path",
+                "auto_tags": True,
+                "metadata": {"tenant_id": "tenant-a", "trace_id": "trace-bulk-2", "source": "vps-agent-web"},
+            },
+        ]
+    }
+    bulk_result = _run_cli_with_input(
+        "--db",
+        str(db_path),
+        "observation",
+        "bulk",
+        "--input",
+        "@-",
+        stdin=json.dumps(bulk_payload, ensure_ascii=False),
+    )
+    assert bulk_result.returncode == 0
+    bulk_response = json.loads(bulk_result.stdout)
+    assert bulk_response["ok"] is True
+    assert bulk_response["total"] == 2
+    assert bulk_response["created"] == 2
+    assert len(bulk_response["ids"]) == 2
+    assert bulk_response["results"][0]["metadata"]["tenant_id"] == "tenant-a"
+
+    get_result = _run_cli(
+        "--db",
+        str(db_path),
+        "memory",
+        "get",
+        ",".join(str(obs_id) for obs_id in bulk_response["ids"]),
+    )
+    assert get_result.returncode == 0
+    get_payload = json.loads(get_result.stdout)
+    assert len(get_payload["results"]) == 2
+    assert all(item["metadata"]["tenant_id"] == "tenant-a" for item in get_payload["results"])
+
+
+@pytest.mark.contract
 def test_review_apply_propagates_feedback_metadata(tmp_path: Path) -> None:
     db_path = tmp_path / "memory.db"
     review_path = tmp_path / "review.json"

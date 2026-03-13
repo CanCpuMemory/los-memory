@@ -70,7 +70,7 @@
 
 ## Local Remaining
 
-- [ ] No immediate feature blocker in this repo.
+- [x] Repo currently has no immediate feature blocker.
 - [ ] Keep legacy flat-command compatibility until downstream grouped-command migration is fully absorbed and verified across all integrators.
 - [ ] If a future integrator needs correction provenance beyond current fields, extend feedback metadata rather than introducing a second correction object model.
 - [ ] Continue non-blocking complexity cleanup opportunistically if new hotspots emerge.
@@ -80,6 +80,8 @@
 - [x] Cleanup pass (2026-03-13): surface current warning debt by removing blanket warning suppression, then fix or explicitly filter expected approval migration deprecation warnings.
 - [x] Cleanup pass (2026-03-13): close test-side resource leaks in SSE/adapter coverage so the suite stays warning-clean under default pytest warning mode.
 - [x] Cleanup pass (2026-03-13): refresh stale future-development guidance so it reflects the current CI/test layout instead of historical placeholders.
+- [x] Cleanup pass (2026-03-13): add bulk observation write support from JSON payloads, including `@-` stdin input, as a primary writeback path.
+- [x] Cleanup pass (2026-03-13): add metadata-native equality filters for `memory search` / `memory list` across CLI and Python client surfaces.
 
 ## External Follow-ups (`lsclaw`)
 
@@ -88,5 +90,5 @@
 
 ## Deferred
 
-- [ ] Bulk write / stdin JSON as a primary writeback path.
-- [ ] Metadata-native filters for `memory search` / `memory list`.
+- [x] Former deferred backlog item completed: bulk write / stdin JSON as a primary writeback path.
+- [x] Former deferred backlog item completed: metadata-native filters for `memory search` / `memory list`.

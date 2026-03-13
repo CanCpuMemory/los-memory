@@ -62,6 +62,7 @@ Search:
 
 ```bash
 python3 -m memory_tool --profile codex memory search "retry policy"
+python3 -m memory_tool --profile codex memory search "retry policy" --metadata-filter '{"tenant_id":"tenant-a"}'
 ```
 
 Timeline around an event:
@@ -74,6 +75,13 @@ Fetch full records:
 
 ```bash
 python3 -m memory_tool --profile codex memory get "42,43"
+```
+
+Bulk write from stdin JSON:
+
+```bash
+printf '%s' '{"items":[{"project":"ops","kind":"decision","title":"Bulk note","summary":"Created from stdin JSON","metadata":{"tenant_id":"tenant-a","trace_id":"trace-bulk-1"}}]}' | \
+python3 -m memory_tool --profile codex observation bulk --input @-
 ```
 
 ## 5) Manage memories

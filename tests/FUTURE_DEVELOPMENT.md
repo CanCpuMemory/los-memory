@@ -29,8 +29,8 @@ and `.github/workflows/ci.yml`.
    - Prefer updating this file only after re-running `pytest`.
 
 2. Add coverage for the current deferred product backlog.
-   - Bulk write / stdin JSON as a primary writeback path
-   - Metadata-native filters for `memory search` / `memory list`
+   - Expand regression coverage for bulk write / stdin JSON paths
+   - Expand regression coverage for metadata-native filters on `memory search` / `memory list`
 
 3. Strengthen warning hygiene.
    - Keep expected approval migration deprecation warnings explicitly filtered
@@ -42,8 +42,8 @@ and `.github/workflows/ci.yml`.
 
 - Empty-database behavior for more admin/reporting commands
 - Very long text and high-cardinality tag inputs
-- Metadata filter combinations once metadata-native filtering lands
-- Bulk ingest/write flows once stdin JSON support lands
+- Metadata filter combinations and pagination edge cases
+- Bulk ingest/write validation and dry-run rollback paths
 
 ### Integration gaps
 

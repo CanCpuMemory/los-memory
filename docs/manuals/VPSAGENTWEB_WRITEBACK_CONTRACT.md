@@ -7,17 +7,15 @@ This document defines the current `los-memory` writeback contract for `VPS Agent
 This contract covers:
 
 - `observation add`
+- `observation bulk`
 - `observation edit`
 - `observation feedback`
 - `review apply`
 - `admin manage stats`
 - `memory get`
+- `memory search`
+- `memory list`
 - `memory export`
-
-This contract does not currently include:
-
-- bulk write as a primary path
-- metadata-based filtering for `memory search` / `memory list`
 
 ## Stable Smoke Contract
 
@@ -107,6 +105,48 @@ Expected shape:
       }
     }
   ]
+}
+```
+
+### Bulk Write Path
+
+The primary JSON writeback path is `observation bulk`.
+
+From stdin:
+
+```bash
+printf '%s' '{"items":[{"project":"ops","kind":"decision","title":"Bulk writeback baseline","summary":"stdin bulk path","tags":["tenant:a","user:alice"],"metadata":{"tenant_id":"tenant-a","trace_id":"trace-bulk-1","source":"vps-agent-web"}}]}' | \
+los-memory --profile shared observation bulk \
+  --input @-
+```
+
+From file:
+
+```bash
+los-memory --profile shared observation bulk \
+  --input @review-items.json
+```
+
+Expected shape:
+
+```json
+{
+  "ok": true,
+  "total": 1,
+  "created": 1,
+  "ids": [123],
+  "results": [
+    {
+      "id": 123,
+      "title": "Bulk writeback baseline",
+      "metadata": {
+        "tenant_id": "tenant-a",
+        "trace_id": "trace-bulk-1",
+        "source": "vps-agent-web"
+      }
+    }
+  ],
+  "dry_run": false
 }
 ```
 
@@ -273,9 +313,22 @@ los-memory --profile shared memory export --format json --output export.json
 los-memory --profile shared memory export --format csv --output export.csv
 ```
 
-## Deferred
+## Metadata Query Filters
 
-The following are intentionally out of scope for the current writeback contract:
+`memory search` and `memory list` support metadata-native equality filters.
 
-- bulk write / stdin JSON as the main ingestion interface
-- metadata-native query filters for `memory search` / `memory list`
+Search example:
+
+```bash
+los-memory --profile shared memory search "baseline" \
+  --metadata-filter '{"tenant_id":"tenant-a","source":"vps-agent-web"}'
+```
+
+List example:
+
+```bash
+los-memory --profile shared memory list \
+  --metadata-filter @metadata-filter.json
+```
+
+The filter uses AND semantics across the provided metadata keys.

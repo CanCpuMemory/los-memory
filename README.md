@@ -68,12 +68,17 @@ los-memory observation add --title "API设计决策" --summary "使用REST而非
 
 # 检索
 los-memory memory search "hello"
+los-memory memory search "hello" --metadata-filter '{"tenant_id":"tenant-a"}'
 los-memory memory list --limit 10
 los-memory memory get 1
 
 # 编辑和删除
 los-memory observation edit --id 1 --summary "Hello updated"
 los-memory observation delete 1 --dry-run
+
+# 批量写入
+printf '%s' '{"items":[{"title":"Bulk note","summary":"Created from stdin JSON"}]}' | \
+los-memory observation bulk --input @-
 
 # 会话和检查点
 los-memory session start --summary "Sprint planning"

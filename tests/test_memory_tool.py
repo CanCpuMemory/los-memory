@@ -389,6 +389,110 @@ def test_required_tags_filter_for_search_and_list(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_metadata_filters_for_search_and_list(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    conn = mem.connect_db(str(db_path))
+    mem.ensure_schema(conn)
+    mem.ensure_fts(conn)
+    mem.add_observation(
+        conn,
+        "2026-01-01T00:00:00Z",
+        "tenant-a",
+        "note",
+        "Scoped metadata note",
+        "contains metadata baseline",
+        mem.tags_to_json(["migration"]),
+        mem.tags_to_text(["migration"]),
+        "raw",
+        metadata=mem.metadata_to_json({"tenant_id": "tenant-a", "trace_id": "trace-a", "source": "vps-agent-web"}),
+    )
+    mem.add_observation(
+        conn,
+        "2026-01-01T00:01:00Z",
+        "tenant-b",
+        "note",
+        "Other metadata note",
+        "contains metadata baseline",
+        mem.tags_to_json(["migration"]),
+        mem.tags_to_text(["migration"]),
+        "raw",
+        metadata=mem.metadata_to_json({"tenant_id": "tenant-b", "trace_id": "trace-b", "source": "vps-agent-web"}),
+    )
+
+    scoped_search = mem.run_search(
+        conn,
+        "baseline",
+        limit=10,
+        metadata_filters={"tenant_id": "tenant-a", "source": "vps-agent-web"},
+    )
+    assert len(scoped_search) == 1
+    assert scoped_search[0]["title"] == "Scoped metadata note"
+
+    scoped_list = mem.run_list(
+        conn,
+        limit=10,
+        metadata_filters={"tenant_id": "tenant-a", "source": "vps-agent-web"},
+    )
+    assert len(scoped_list) == 1
+    assert scoped_list[0].title == "Scoped metadata note"
+    conn.close()
+
+
+def test_bulk_add_and_dry_run(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    conn = mem.connect_db(str(db_path))
+    mem.ensure_schema(conn)
+    mem.ensure_fts(conn)
+
+    bulk_result = mem.run_bulk_add(
+        conn,
+        [
+            {
+                "project": "ops",
+                "kind": "decision",
+                "title": "Bulk insert one",
+                "summary": "Persisted",
+                "tags": ["bulk", "alpha"],
+                "metadata": {"tenant_id": "tenant-a", "trace_id": "trace-1"},
+            },
+            {
+                "project": "ops",
+                "kind": "note",
+                "title": "Bulk insert two",
+                "summary": "Also persisted",
+                "auto_tags": True,
+                "metadata": {"tenant_id": "tenant-a", "trace_id": "trace-2"},
+            },
+        ],
+    )
+    assert bulk_result["ok"] is True
+    assert bulk_result["created"] == 2
+    assert len(bulk_result["ids"]) == 2
+
+    persisted = mem.run_get(conn, bulk_result["ids"])
+    assert len(persisted) == 2
+    assert persisted[0].metadata["tenant_id"] == "tenant-a"
+
+    preview = mem.run_bulk_add(
+        conn,
+        [
+            {
+                "project": "ops",
+                "kind": "note",
+                "title": "Preview only",
+                "summary": "Should roll back",
+            }
+        ],
+        dry_run=True,
+    )
+    assert preview["ok"] is True
+    assert preview["created"] == 0
+    assert preview["ids"] == []
+    remaining = mem.run_list(conn, limit=10)
+    assert len(remaining) == 2
+    conn.close()
+
+
 def test_profile_resolution() -> None:
     codex_path = mem.resolve_db_path("codex", None)
     claude_path = mem.resolve_db_path("claude", None)

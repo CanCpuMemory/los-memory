@@ -23,6 +23,7 @@ from .utils import (
 from .operations import (
     add_observation,
     normalize_rows,
+    run_bulk_add,
     run_search,
     run_timeline,
     run_get,
@@ -96,6 +97,7 @@ __all__ = [
     # Operations
     "add_observation",
     "normalize_rows",
+    "run_bulk_add",
     "run_search",
     "run_timeline",
     "run_get",

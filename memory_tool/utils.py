@@ -231,8 +231,8 @@ def parse_metadata_json(metadata_json: str) -> Dict[str, Any]:
     return loaded
 
 
-def load_json_object_input(raw_value: str, param_name: str) -> Dict[str, Any]:
-    """Load a JSON object from inline text, @file, or @- stdin syntax."""
+def load_json_input(raw_value: str, param_name: str) -> Any:
+    """Load JSON from inline text, @file, or @- stdin syntax."""
     source_value = raw_value.strip()
     if not source_value:
         return {}
@@ -248,10 +248,14 @@ def load_json_object_input(raw_value: str, param_name: str) -> Dict[str, Any]:
             payload = Path(source).read_text(encoding="utf-8")
 
     try:
-        loaded = json.loads(payload)
+        return json.loads(payload)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON for {param_name}: {exc.msg}") from exc
 
+
+def load_json_object_input(raw_value: str, param_name: str) -> Dict[str, Any]:
+    """Load a JSON object from inline text, @file, or @- stdin syntax."""
+    loaded = load_json_input(raw_value, param_name)
     if not isinstance(loaded, dict):
         raise ValueError(f"Invalid JSON for {param_name}: expected object")
     return loaded

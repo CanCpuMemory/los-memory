@@ -39,6 +39,7 @@ from .links import create_link, delete_link, find_similar_observations, get_rela
 from .operations import (
     add_observation,
     generate_visual_timeline,
+    run_bulk_add,
     run_clean,
     run_delete,
     run_edit,
@@ -102,6 +103,7 @@ from .utils import (
     OBSERVATION_METADATA_RESERVED_KEYS,
     PROFILE_CHOICES,
     auto_tags_from_text,
+    load_json_input,
     load_json_object_input,
     metadata_to_json,
     normalize_tags_list,
@@ -260,6 +262,11 @@ def _add_memory_search_subcommand(memory_subparsers: argparse._SubParsersAction)
         default="",
         help="Comma-separated tags that every result must contain",
     )
+    memory_search.add_argument(
+        "--metadata-filter",
+        default=None,
+        help="Metadata equality filter as a JSON object. Use '@/path/file.json' or '@-' to read from stdin.",
+    )
 
 
 def _add_memory_list_subcommand(memory_subparsers: argparse._SubParsersAction) -> None:
@@ -270,6 +277,11 @@ def _add_memory_list_subcommand(memory_subparsers: argparse._SubParsersAction) -
         "--require-tags",
         default="",
         help="Comma-separated tags that every result must contain",
+    )
+    memory_list.add_argument(
+        "--metadata-filter",
+        default=None,
+        help="Metadata equality filter as a JSON object. Use '@/path/file.json' or '@-' to read from stdin.",
     )
 
 
@@ -319,6 +331,7 @@ def _register_observation_subcommands(subparsers: argparse._SubParsersAction) ->
     _add_observation_delete_subcommand(obs_subparsers)
     _add_observation_capture_subcommand(obs_subparsers)
     _add_observation_feedback_subcommand(obs_subparsers)
+    _add_observation_bulk_subcommand(obs_subparsers)
     _add_observation_link_subcommand(obs_subparsers)
     _add_observation_unlink_subcommand(obs_subparsers)
     _add_observation_related_subcommand(obs_subparsers)
@@ -386,6 +399,16 @@ def _add_observation_feedback_subcommand(obs_subparsers: argparse._SubParsersAct
     )
     obs_feedback.add_argument("--dry-run", action="store_true")
     obs_feedback.add_argument("--history", action="store_true")
+
+
+def _add_observation_bulk_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
+    obs_bulk = obs_subparsers.add_parser("bulk", help="Create observations from a JSON payload")
+    obs_bulk.add_argument(
+        "--input",
+        required=True,
+        help="JSON array or object-with-items payload. Use '@/path/file.json' or '@-' to read from stdin.",
+    )
+    obs_bulk.add_argument("--dry-run", action="store_true")
 
 
 def _add_observation_link_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
@@ -758,6 +781,8 @@ def _dispatch_observation_command(conn, args) -> dict | None:
         return _handle_obs_capture(conn, args)
     if action == "feedback":
         return _handle_obs_feedback(conn, args)
+    if action == "bulk":
+        return _handle_obs_bulk(conn, args)
     if action == "link":
         return _handle_obs_link(conn, args)
     if action == "unlink":
@@ -1016,6 +1041,35 @@ def _match_cli_review_error(message: str) -> tuple[str, dict] | None:
     return None
 
 
+def _match_cli_bulk_error(message: str) -> tuple[str, dict] | None:
+    bulk_input_errors = {
+        "bulk_observation_input_must_contain_array_or_object": {
+            "param": "--input",
+            "value": "expected top-level JSON array or object",
+        },
+        "bulk_observation_items_must_be_array": {
+            "param": "items",
+            "value": "expected array",
+        },
+        "bulk_observation_item_must_be_object": {
+            "param": "items[]",
+            "value": "expected object",
+        },
+        "bulk_observation_title_required": {
+            "param": "items[].title",
+            "value": "required",
+        },
+        "bulk_observation_summary_required": {
+            "param": "items[].summary",
+            "value": "required",
+        },
+    }
+    payload = bulk_input_errors.get(message)
+    if payload is None:
+        return None
+    return VAL_INVALID_FORMAT, payload
+
+
 def _build_cli_error(exc: ValueError) -> tuple[dict, int]:
     """Map common CLI ValueErrors to standardized error codes."""
     message = str(exc)
@@ -1023,6 +1077,7 @@ def _build_cli_error(exc: ValueError) -> tuple[dict, int]:
         _match_cli_not_found_error,
         _match_cli_validation_error,
         _match_cli_review_error,
+        _match_cli_bulk_error,
     ):
         matched = matcher(message)
         if matched:
@@ -1139,6 +1194,7 @@ def _handle_obs_add(conn, args):
 
 def _handle_memory_search(conn, args):
     required_tags = normalize_tags_list(args.require_tags)
+    metadata_filters = _load_metadata_filters(args.metadata_filter)
     results = run_search(
         conn,
         args.query,
@@ -1147,6 +1203,7 @@ def _handle_memory_search(conn, args):
         mode=args.mode,
         quote=args.fts_quote,
         required_tags=required_tags,
+        metadata_filters=metadata_filters,
     )
     return {"ok": True, "results": results}
 
@@ -1198,7 +1255,14 @@ def _handle_obs_delete(conn, args):
 
 def _handle_memory_list(conn, args):
     required_tags = normalize_tags_list(args.require_tags)
-    results = run_list(conn, args.limit, offset=args.offset, required_tags=required_tags)
+    metadata_filters = _load_metadata_filters(args.metadata_filter)
+    results = run_list(
+        conn,
+        args.limit,
+        offset=args.offset,
+        required_tags=required_tags,
+        metadata_filters=metadata_filters,
+    )
     return {"ok": True, "results": [asdict(r) for r in results]}
 
 
@@ -1542,6 +1606,14 @@ def _handle_obs_related(conn, args):
         }
 
 
+def _handle_obs_bulk(conn, args):
+    payload = _load_bulk_observation_input(args.input)
+    result = run_bulk_add(conn, payload, dry_run=args.dry_run)
+    result["profile"] = args.profile
+    result["db"] = args.db
+    return result
+
+
 # Legacy wrapper functions for backward compatibility
 def _handle_review_apply_legacy(conn, args):
     """Legacy wrapper for review-feedback command."""
@@ -1599,6 +1671,32 @@ def _load_observation_metadata(raw_value: str | None) -> dict:
         if key not in reserved_keys:
             ordered[key] = value
     return ordered
+
+
+def _load_metadata_filters(raw_value: str | None) -> dict[str, object]:
+    if raw_value is None:
+        return {}
+    metadata = load_json_object_input(raw_value, "--metadata-filter")
+    normalized = {str(key): value for key, value in metadata.items()}
+    if "profile" in normalized:
+        raise ValueError("Invalid JSON for --metadata-filter: profile must be provided via --profile")
+    return normalized
+
+
+def _load_bulk_observation_input(raw_value: str) -> list[dict[str, object]]:
+    payload = load_json_input(raw_value, "--input")
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        if "items" not in payload:
+            raise ValueError("bulk_observation_items_must_be_array")
+        items = payload["items"]
+    else:
+        raise ValueError("bulk_observation_input_must_contain_array_or_object")
+
+    if not isinstance(items, list):
+        raise ValueError("bulk_observation_items_must_be_array")
+    return items
 
 
 def _parse_ids_argument(raw_value: str, param_name: str):

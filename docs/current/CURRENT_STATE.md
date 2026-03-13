@@ -25,7 +25,9 @@ This document records the current, implemented state of `los-memory`.
 - Active session state is now bound to the current database path, so profile-level session files do not leak session state across different SQLite databases
 - `admin doctor` performs read-only diagnostics and does not create a missing database file as a side effect of health checks
 - `Observation` records now persist structured `metadata`, and `observation add/edit`, `memory get`, and `memory export` preserve that metadata round-trip
+- `observation bulk --input <json|@file|@->` supports multi-item writeback from inline JSON, files, or stdin
 - `Feedback` records now also persist structured `metadata`, and both `observation feedback` and `review apply` propagate it into feedback history
+- `memory search` and `memory list` support metadata-native equality filters via `--metadata-filter`
 - `--profile` is a storage-partition selector only; tenant/user/request/trace identity belongs in structured metadata rather than profile naming
 - The current stable smoke contract for upstream runtime verification is `review apply --file ... --dry-run`, `admin manage stats`, and `observation delete --dry-run`
 
