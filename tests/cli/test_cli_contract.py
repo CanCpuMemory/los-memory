@@ -11,11 +11,10 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CLI_PATH = ROOT / "memory_tool" / "memory_tool.py"
 
 
 def _run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    cmd = [sys.executable, str(CLI_PATH), "--output", "json", *args]
+    cmd = [sys.executable, "-m", "memory_tool", "--output", "json", *args]
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
@@ -24,7 +23,7 @@ def _run_cli_with_input(
     stdin: str,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = [sys.executable, str(CLI_PATH), "--output", "json", *args]
+    cmd = [sys.executable, "-m", "memory_tool", "--output", "json", *args]
     return subprocess.run(cmd, input=stdin, capture_output=True, text=True, env=env)
 
 

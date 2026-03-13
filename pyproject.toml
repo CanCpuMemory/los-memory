@@ -98,7 +98,14 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--disable-warnings",
+]
+
+filterwarnings = [
+    "error::ResourceWarning",
+    "ignore:The approval module is deprecated and will be removed in a future version.*:DeprecationWarning",
+    "ignore:The approval system is being migrated to VPS Agent Web.*:DeprecationWarning",
+    "ignore:Approval commands are deprecated and will be removed.*:DeprecationWarning",
+    "ignore:Approval command is deprecated. Migrate to VPS Agent Web.*:DeprecationWarning",
 ]
 
 # Coverage configuration

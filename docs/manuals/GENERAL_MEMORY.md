@@ -21,15 +21,15 @@ You can always override directly with `--db /path/to/memory.db`.
 
 ## 2) Initialize
 ```bash
-python3 memory_tool/memory_tool.py --profile codex init
-python3 memory_tool/memory_tool.py --profile claude init
+python3 -m memory_tool --profile codex init
+python3 -m memory_tool --profile claude init
 ```
 
 ## 3) Add memories
 Direct add:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex observation add \
+python3 -m memory_tool --profile codex observation add \
   --project "payments" \
   --kind "decision" \
   --title "Retry policy" \
@@ -40,102 +40,102 @@ python3 memory_tool/memory_tool.py --profile codex observation add \
 Edit existing memory:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex observation edit --id 42 --summary "Updated summary" --tags "api,retry"
+python3 -m memory_tool --profile codex observation edit --id 42 --summary "Updated summary" --tags "api,retry"
 ```
 
 Delete by id:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex observation delete "42" --dry-run
-python3 memory_tool/memory_tool.py --profile codex observation delete "42"
+python3 -m memory_tool --profile codex observation delete "42" --dry-run
+python3 -m memory_tool --profile codex observation delete "42"
 ```
 
 Ingest from stdin/file:
 
 ```bash
-cat incident.txt | python3 memory_tool/ingest.py --profile codex --project "ops" --auto-tags
-python3 memory_tool/ingest.py --profile claude --raw-file notes.md --kind "meeting"
+cat incident.txt | python3 -m memory_tool.ingest --profile codex --project "ops" --auto-tags
+python3 -m memory_tool.ingest --profile claude --raw-file notes.md --kind "meeting"
 ```
 
 ## 4) Retrieve memories
 Search:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory search "retry policy"
+python3 -m memory_tool --profile codex memory search "retry policy"
 ```
 
 Timeline around an event:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory timeline --around-id 42 --window-minutes 180
+python3 -m memory_tool --profile codex memory timeline --around-id 42 --window-minutes 180
 ```
 
 Fetch full records:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory get "42,43"
+python3 -m memory_tool --profile codex memory get "42,43"
 ```
 
 ## 5) Manage memories
 Summary stats:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex admin manage stats
+python3 -m memory_tool --profile codex admin manage stats
 ```
 
 Top projects:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex admin manage projects --limit 10
+python3 -m memory_tool --profile codex admin manage projects --limit 10
 ```
 
 Top tags:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex admin manage tags --limit 25
+python3 -m memory_tool --profile codex admin manage tags --limit 25
 ```
 
 Compact DB:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex admin manage vacuum
+python3 -m memory_tool --profile codex admin manage vacuum
 ```
 
 ## 6) Clean memories safely
 Start with dry run:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory clean --older-than-days 90 --dry-run
+python3 -m memory_tool --profile codex memory clean --older-than-days 90 --dry-run
 ```
 
 Delete old notes from one project:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory clean --older-than-days 90 --project ops
+python3 -m memory_tool --profile codex memory clean --older-than-days 90 --project ops
 ```
 
 Delete by tag:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory clean --tag temp,noise
+python3 -m memory_tool --profile codex memory clean --tag temp,noise
 ```
 
 Delete everything (explicit):
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory clean --all
+python3 -m memory_tool --profile codex memory clean --all
 ```
 
 Reclaim space after cleanup:
 
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory clean --older-than-days 365 --vacuum
+python3 -m memory_tool --profile codex memory clean --older-than-days 365 --vacuum
 ```
 
 ## 7) Viewer
 ```bash
-python3 memory_tool/viewer.py --profile codex
-python3 memory_tool/viewer.py --profile claude --auth-token "secret-token"
+python3 -m memory_tool.viewer --profile codex
+python3 -m memory_tool.viewer --profile claude --auth-token "secret-token"
 ```
 
 ## 8) Additional Commands
@@ -143,21 +143,21 @@ python3 memory_tool/viewer.py --profile claude --auth-token "secret-token"
 ### Feedback and Corrections
 Provide natural language feedback to correct or supplement memories:
 ```bash
-python3 memory_tool/memory_tool.py --profile codex observation feedback "修正: API密钥是yyy" --id 42
+python3 -m memory_tool --profile codex observation feedback "修正: API密钥是yyy" --id 42
 ```
 
 ### Tool Memory Tracking
 Log and analyze tool usage:
 ```bash
-python3 memory_tool/memory_tool.py --profile codex tool log --tool search_files --input '{"q":"TODO"}' --status success
-python3 memory_tool/memory_tool.py --profile codex tool stats
+python3 -m memory_tool --profile codex tool log --tool search_files --input '{"q":"TODO"}' --status success
+python3 -m memory_tool --profile codex tool stats
 ```
 
 ### Memory Linking
 Create relationships between related memories:
 ```bash
-python3 memory_tool/memory_tool.py --profile codex observation link --from 123 --to 456 --type refines
-python3 memory_tool/memory_tool.py --profile codex observation related 123
+python3 -m memory_tool --profile codex observation link --from 123 --to 456 --type refines
+python3 -m memory_tool --profile codex observation related 123
 ```
 
 ## 9) Cross-agent workflow patterns
@@ -174,8 +174,8 @@ Recommended fields:
 
 ## 10) Backup and export
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory export --format json --output codex-memory.json
-python3 memory_tool/memory_tool.py --profile claude memory export --format csv --output claude-memory.csv
+python3 -m memory_tool --profile codex memory export --format json --output codex-memory.json
+python3 -m memory_tool --profile claude memory export --format csv --output claude-memory.csv
 ```
 
 For full backup, copy the DB files directly.

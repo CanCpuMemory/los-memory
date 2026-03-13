@@ -95,16 +95,16 @@ python3 memory_tool/memory_tool.py --profile codex observation delete "1" --dry-
 
 ## Viewer
 ```bash
-python3 memory_tool/viewer.py --profile codex
-python3 memory_tool/viewer.py --profile claude --auth-token "mytoken"
+python3 -m memory_tool.viewer --profile codex
+python3 -m memory_tool.viewer --profile claude --auth-token "mytoken"
 ```
 
 If using `--auth-token`, open with `?token=...` or send `Authorization: Bearer ...`.
 
 ## Export
 ```bash
-python3 memory_tool/memory_tool.py --profile codex memory export --format json --output export.json
-python3 memory_tool/memory_tool.py --profile claude memory export --format csv --output export.csv
+python3 -m memory_tool --profile codex memory export --format json --output export.json
+python3 -m memory_tool --profile claude memory export --format csv --output export.csv
 ```
 
 ## General memory usage guide
@@ -136,6 +136,7 @@ make help
 make init-codex
 make init-claude
 make stats PROFILE=codex
+make smoke-contract
 ```
 
 ## Latency benchmark

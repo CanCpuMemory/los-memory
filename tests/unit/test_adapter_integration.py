@@ -51,7 +51,10 @@ class TestApprovalMigrationAdapterPhases:
             )
         """)
         conn.commit()
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def test_local_only_routes_to_local(self, local_conn):
         """Test LOCAL_ONLY phase routes to local storage."""
@@ -201,7 +204,10 @@ class TestAdapterWorkflows:
                 vps_active_secret="vps-secret",
             ),
         )
-        return ApprovalMigrationAdapter(config, conn)
+        try:
+            yield ApprovalMigrationAdapter(config, conn)
+        finally:
+            conn.close()
 
     def test_create_request_workflow(self, adapter):
         """Test full create request workflow."""
@@ -312,7 +318,10 @@ class TestAdapterErrorHandling:
             vps_agent_web=VPSAgentWebConfig(url="https://unreachable.example.com"),
             hmac=HMACConfig(vps_active_secret="secret"),
         )
-        return ApprovalMigrationAdapter(config, conn)
+        try:
+            yield ApprovalMigrationAdapter(config, conn)
+        finally:
+            conn.close()
 
     def test_handles_remote_connection_error(self, adapter):
         """Test handling remote connection errors."""
@@ -330,14 +339,15 @@ class TestAdapterErrorHandling:
         """Test handling authentication errors."""
         from urllib.error import HTTPError
 
+        error = HTTPError(
+            url="https://test.example.com/jobs",
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=None,
+        )
         with patch.object(adapter._remote_client, "create_request") as mock_create:
-            mock_create.side_effect = HTTPError(
-                url="https://test.example.com/jobs",
-                code=401,
-                msg="Unauthorized",
-                hdrs={},
-                fp=None,
-            )
+            mock_create.side_effect = error
 
             with pytest.raises(HTTPError):
                 adapter.create_request(
@@ -345,6 +355,7 @@ class TestAdapterErrorHandling:
                     command="deploy",
                     risk_level="high",
                 )
+        error.close()
 
     def test_handles_timeout_error(self, adapter):
         """Test handling timeout errors."""
@@ -368,7 +379,10 @@ class TestAdapterConfiguration:
         db_path = tmp_path / "test.db"
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def test_custom_config_initialization(self, local_conn):
         """Test adapter with custom configuration."""

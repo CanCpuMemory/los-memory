@@ -143,7 +143,8 @@ def test_ingest_helper(tmp_path: Path) -> None:
 
     cmd = [
         sys.executable,
-        str(MEMORY_DIR / "ingest.py"),
+        "-m",
+        "memory_tool.ingest",
         "--db",
         str(db_path),
         "--raw-file",
@@ -517,6 +518,7 @@ def test_edit_and_delete(tmp_path: Path) -> None:
     remaining = mem.run_list(conn, limit=10)
     assert len(remaining) == 1
     assert remaining[0].id == first_id
+    conn.close()
 
 
 def test_log_agent_transition(tmp_path: Path) -> None:
@@ -628,5 +630,4 @@ def test_apply_review_feedback_dry_run(tmp_path: Path) -> None:
     assert report["dry_run"] is True
     current = mem.run_get(conn, [obs_id])[0]
     assert current.summary == "Keep me"
-    conn.close()
     conn.close()

@@ -59,20 +59,22 @@ def test_make_request_raises_on_4xx_with_error_payload(vps_client, monkeypatch):
         409,
         {"error": {"message": "conflict", "code": "version_conflict"}},
     )
+    try:
+        monkeypatch.setattr(
+            "memory_tool.migrate_out.approval.vps_client.urlopen",
+            lambda *args, **kwargs: (_ for _ in ()).throw(error),
+        )
+        monkeypatch.setattr("memory_tool.migrate_out.approval.vps_client.time.sleep", lambda _: None)
 
-    monkeypatch.setattr(
-        "memory_tool.migrate_out.approval.vps_client.urlopen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(error),
-    )
-    monkeypatch.setattr("memory_tool.migrate_out.approval.vps_client.time.sleep", lambda _: None)
+        with pytest.raises(VPSAgentWebError, match="conflict") as exc_info:
+            vps_client._make_request("POST", "/api/v1/jobs")
 
-    with pytest.raises(VPSAgentWebError, match="conflict") as exc_info:
-        vps_client._make_request("POST", "/api/v1/jobs")
-
-    err = exc_info.value
-    assert err.status_code == 409
-    assert err.error_code == "version_conflict"
-    assert err.response_body["error"]["message"] == "conflict"
+        err = exc_info.value
+        assert err.status_code == 409
+        assert err.error_code == "version_conflict"
+        assert err.response_body["error"]["message"] == "conflict"
+    finally:
+        error.close()
 
 
 def test_make_request_retries_on_5xx_and_returns_success(vps_client, monkeypatch):
@@ -87,17 +89,20 @@ def test_make_request_retries_on_5xx_and_returns_success(vps_client, monkeypatch
 
     sleep_calls: list[float] = []
 
-    monkeypatch.setattr("memory_tool.migrate_out.approval.vps_client.urlopen", _fake_urlopen)
-    monkeypatch.setattr(
-        "memory_tool.migrate_out.approval.vps_client.time.sleep",
-        lambda delay: sleep_calls.append(delay),
-    )
+    try:
+        monkeypatch.setattr("memory_tool.migrate_out.approval.vps_client.urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            "memory_tool.migrate_out.approval.vps_client.time.sleep",
+            lambda delay: sleep_calls.append(delay),
+        )
 
-    status, body = vps_client._make_request("GET", "/healthz")
-    assert attempts["count"] == 2
-    assert sleep_calls, "retry backoff should sleep at least once"
-    assert status == 200
-    assert body["success"] is True
+        status, body = vps_client._make_request("GET", "/healthz")
+        assert attempts["count"] == 2
+        assert sleep_calls, "retry backoff should sleep at least once"
+        assert status == 200
+        assert body["success"] is True
+    finally:
+        server_error.close()
 
 
 def test_make_request_handles_non_json_response_body(vps_client, monkeypatch):

@@ -1,11 +1,11 @@
 PYTHON ?= python3
-TOOL := memory_tool/memory_tool.py
-INGEST := memory_tool/ingest.py
-VIEWER := memory_tool/viewer.py
+CLI := $(PYTHON) -m memory_tool
+INGEST := $(PYTHON) -m memory_tool.ingest
+VIEWER := $(PYTHON) -m memory_tool.viewer
 PROFILE ?= codex
 
 .PHONY: help init-codex init-claude init-shared stats clean-preview vacuum \
-	search list viewer ingest-file ingest-stdin
+	search list viewer ingest-file ingest-stdin smoke-contract
 
 help:
 	@echo "Targets:"
@@ -20,37 +20,41 @@ help:
 	@echo "  viewer          Start viewer (PROFILE=codex, PORT=37777)"
 	@echo "  ingest-file     Ingest file (FILE=notes.txt, PROFILE=codex)"
 	@echo "  ingest-stdin    Ingest from stdin: cat file | make ingest-stdin"
+	@echo "  smoke-contract  Run the stable adapter smoke contract locally"
 
 init-codex:
-	$(PYTHON) $(TOOL) --profile codex init
+	$(CLI) --profile codex init
 
 init-claude:
-	$(PYTHON) $(TOOL) --profile claude init
+	$(CLI) --profile claude init
 
 init-shared:
-	$(PYTHON) $(TOOL) --profile shared init
+	$(CLI) --profile shared init
 
 stats:
-	$(PYTHON) $(TOOL) --profile $(PROFILE) admin manage stats
+	$(CLI) --profile $(PROFILE) admin manage stats
 
 clean-preview:
-	$(PYTHON) $(TOOL) --profile $(PROFILE) memory clean --older-than-days $${DAYS:-90} --dry-run
+	$(CLI) --profile $(PROFILE) memory clean --older-than-days $${DAYS:-90} --dry-run
 
 vacuum:
-	$(PYTHON) $(TOOL) --profile $(PROFILE) admin manage vacuum
+	$(CLI) --profile $(PROFILE) admin manage vacuum
 
 search:
-	$(PYTHON) $(TOOL) --profile $(PROFILE) memory search "$${Q:-memory}" --limit $${LIMIT:-20}
+	$(CLI) --profile $(PROFILE) memory search "$${Q:-memory}" --limit $${LIMIT:-20}
 
 list:
-	$(PYTHON) $(TOOL) --profile $(PROFILE) memory list --limit $${LIMIT:-20}
+	$(CLI) --profile $(PROFILE) memory list --limit $${LIMIT:-20}
 
 viewer:
-	$(PYTHON) $(VIEWER) --profile $(PROFILE) --port $${PORT:-37777}
+	$(VIEWER) --profile $(PROFILE) --port $${PORT:-37777}
 
 ingest-file:
 	@if [ -z "$${FILE}" ]; then echo "FILE is required"; exit 1; fi
-	$(PYTHON) $(INGEST) --profile $(PROFILE) --raw-file "$${FILE}" --auto-tags
+	$(INGEST) --profile $(PROFILE) --raw-file "$${FILE}" --auto-tags
 
 ingest-stdin:
-	$(PYTHON) $(INGEST) --profile $(PROFILE) --auto-tags
+	$(INGEST) --profile $(PROFILE) --auto-tags
+
+smoke-contract:
+	$(PYTHON) scripts/verify_los_memory_adapter.py

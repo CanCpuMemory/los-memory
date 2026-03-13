@@ -6,6 +6,7 @@ This document records the current, implemented state of `los-memory`.
 
 - Primary runtime shape: local Python CLI and Python API backed by SQLite
 - Main entrypoint: `los-memory`
+- Preferred Python module entrypoint: `python3 -m memory_tool`
 - Backward-compatible script entrypoint: `python3 memory_tool/memory_tool.py`
 - Default profiles: `claude`, `codex`, `shared`
 

@@ -17,14 +17,14 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CLI_PATH = ROOT / "memory_tool" / "memory_tool.py"
 
 
 def _run_cli(db_path: Path, *args: str) -> dict:
     """Run CLI command and return JSON output."""
     cmd = [
         sys.executable,
-        str(CLI_PATH),
+        "-m",
+        "memory_tool",
         "--db",
         str(db_path),
         "--output",

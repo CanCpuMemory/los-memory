@@ -169,17 +169,19 @@ class TestDualWriteManagerModes:
             local_conn=conn_factory,
             remote_client=mock_remote,
         )
+        try:
+            result = manager.create_request(
+                job_id="job-123",
+                command="deploy",
+                risk_level="high",
+            )
 
-        result = manager.create_request(
-            job_id="job-123",
-            command="deploy",
-            risk_level="high",
-        )
-
-        assert result.success is True
-        assert result.local_success is True
-        assert result.remote_success is True
-        mock_remote.create_request.assert_called_once()
+            assert result.success is True
+            assert result.local_success is True
+            assert result.remote_success is True
+            mock_remote.create_request.assert_called_once()
+        finally:
+            manager.close_thread_connections()
 
     def test_strict_mode_local_fails(self, setup_manager):
         """Test STRICT mode when local write fails."""
@@ -195,17 +197,19 @@ class TestDualWriteManagerModes:
             local_conn=broken_conn_factory,
             remote_client=mock_remote,
         )
+        try:
+            result = manager.create_request(
+                job_id="job-123",
+                command="deploy",
+                risk_level="high",
+            )
 
-        result = manager.create_request(
-            job_id="job-123",
-            command="deploy",
-            risk_level="high",
-        )
-
-        assert result.success is False
-        assert result.local_success is False
-        # Remote may be called (parallel execution), but overall result is failure
-        # in STRICT mode when local fails
+            assert result.success is False
+            assert result.local_success is False
+            # Remote may be called (parallel execution), but overall result is failure
+            # in STRICT mode when local fails
+        finally:
+            manager.close_thread_connections()
 
     def test_local_preferred_mode_remote_fails(self, setup_manager):
         """Test LOCAL_PREFERRED mode when remote fails."""
@@ -219,17 +223,19 @@ class TestDualWriteManagerModes:
             local_conn=conn_factory,
             remote_client=mock_remote,
         )
+        try:
+            result = manager.create_request(
+                job_id="job-123",
+                command="deploy",
+                risk_level="high",
+            )
 
-        result = manager.create_request(
-            job_id="job-123",
-            command="deploy",
-            risk_level="high",
-        )
-
-        # Should succeed because local succeeded
-        assert result.success is True
-        assert result.local_success is True
-        assert result.remote_success is False
+            # Should succeed because local succeeded
+            assert result.success is True
+            assert result.local_success is True
+            assert result.remote_success is False
+        finally:
+            manager.close_thread_connections()
 
     def test_remote_preferred_mode_prioritizes_remote(self, setup_manager):
         """Test REMOTE_PREFERRED mode returns remote data."""
@@ -247,15 +253,17 @@ class TestDualWriteManagerModes:
             local_conn=conn_factory,
             remote_client=mock_remote,
         )
+        try:
+            result = manager.create_request(
+                job_id="job-123",
+                command="deploy",
+                risk_level="high",
+            )
 
-        result = manager.create_request(
-            job_id="job-123",
-            command="deploy",
-            risk_level="high",
-        )
-
-        assert result.success is True
-        assert result.remote_result is not None
+            assert result.success is True
+            assert result.remote_result is not None
+        finally:
+            manager.close_thread_connections()
 
     def test_read_only_mode(self, setup_manager):
         """Test READ_ONLY mode doesn't call remote."""
@@ -267,16 +275,18 @@ class TestDualWriteManagerModes:
             local_conn=conn_factory,
             remote_client=mock_remote,
         )
+        try:
+            result = manager.create_request(
+                job_id="job-123",
+                command="deploy",
+                risk_level="high",
+            )
 
-        result = manager.create_request(
-            job_id="job-123",
-            command="deploy",
-            risk_level="high",
-        )
-
-        assert result.success is False
-        assert "Read-only mode" in result.error_message
-        mock_remote.create_request.assert_not_called()
+            assert result.success is False
+            assert "Read-only mode" in result.error_message
+            mock_remote.create_request.assert_not_called()
+        finally:
+            manager.close_thread_connections()
 
 
 class TestDualWriteManagerThreadSafety:
@@ -318,30 +328,35 @@ class TestDualWriteManagerThreadSafety:
         )
 
         # Write initial data
-        for i in range(10):
-            manager.create_request(
-                job_id=f"job-{i}",
-                command=f"cmd-{i}",
-                risk_level="medium",
-            )
-
-        results = []
-        errors = []
-
-        def get_status(job_id: str):
-            try:
-                result = manager.get_request_status(job_id)
-                results.append(result)
-            except Exception as e:
-                errors.append(e)
-
-        # Concurrent reads
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        try:
             for i in range(10):
-                executor.submit(get_status, f"job-{i}")
+                manager.create_request(
+                    job_id=f"job-{i}",
+                    command=f"cmd-{i}",
+                    risk_level="medium",
+                )
 
-        assert len(errors) == 0
-        assert len(results) == 10
+            results = []
+            errors = []
+
+            def get_status(job_id: str):
+                try:
+                    result = manager.get_request_status(job_id)
+                    results.append(result)
+                except Exception as e:
+                    errors.append(e)
+                finally:
+                    manager.close_thread_connections()
+
+            # Concurrent reads
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                for i in range(10):
+                    executor.submit(get_status, f"job-{i}")
+
+            assert len(errors) == 0
+            assert len(results) == 10
+        finally:
+            manager.close_thread_connections()
 
     def test_thread_local_connections(self, tmp_path):
         """Test each thread gets its own connection."""
@@ -372,7 +387,10 @@ class TestDualWriteManagerThreadSafety:
 
         def get_connection(thread_name: str):
             conn = manager._get_connection()
-            connections[thread_name] = id(conn)
+            try:
+                connections[thread_name] = id(conn)
+            finally:
+                manager.close_thread_connections()
 
         # Get connections from multiple threads
         threads = [
@@ -387,6 +405,7 @@ class TestDualWriteManagerThreadSafety:
 
         # Each thread should have a different connection
         assert len(set(connections.values())) == 5
+        manager.close_thread_connections()
 
 
 class TestDualWriteManagerStatusQueries:
@@ -422,11 +441,15 @@ class TestDualWriteManagerStatusQueries:
 
         mock_remote = MagicMock()
         config = DualWriteConfig(mode=DualWriteMode.LOCAL_PREFERRED)
-        return DualWriteManager(
+        manager = DualWriteManager(
             config=config,
             local_conn=conn_factory,
             remote_client=mock_remote,
         )
+        try:
+            yield manager
+        finally:
+            manager.close_thread_connections()
 
     def test_get_request_status_prefers_local(self, manager):
         """Test get_request_status prefers local by default."""

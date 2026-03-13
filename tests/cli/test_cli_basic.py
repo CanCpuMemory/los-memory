@@ -10,9 +10,8 @@ class TestCLIEntryPoint:
 
     def test_cli_help(self):
         """Test CLI help command."""
-        # Use cli.py directly since __main__.py doesn't exist
         result = subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--help"],
+            [sys.executable, "-m", "memory_tool", "--help"],
             capture_output=True,
             text=True
         )
@@ -22,7 +21,7 @@ class TestCLIEntryPoint:
     def test_cli_version_info(self):
         """Test CLI shows version/help info."""
         result = subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--help"],
+            [sys.executable, "-m", "memory_tool", "--help"],
             capture_output=True,
             text=True
         )
@@ -36,7 +35,7 @@ class TestCLIInit:
         """Test init command creates database file."""
         db_path = tmp_path / "test.db"
         result = subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True,
             text=True
         )
@@ -47,7 +46,7 @@ class TestCLIInit:
         """Test init command outputs JSON."""
         db_path = tmp_path / "test.db"
         result = subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True,
             text=True
         )
@@ -62,7 +61,7 @@ class TestCLIInit:
         env["MEMORY_DB_PATH"] = str(db_path)
 
         result = subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "init"],
+            [sys.executable, "-m", "memory_tool", "init"],
             capture_output=True,
             text=True,
             env=env,
@@ -83,14 +82,14 @@ class TestCLIObservation:
 
         # Initialize DB first
         subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True
         )
 
         # Add observation
         result = subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "observation", "add",
                 "--title", "Test Observation",
@@ -111,12 +110,12 @@ class TestCLIObservation:
 
         # Initialize and add observation
         subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True
         )
         subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "observation", "add",
                 "--title", "Test",
@@ -128,7 +127,7 @@ class TestCLIObservation:
         # List observations
         result = subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "memory", "list"
             ],
@@ -145,12 +144,12 @@ class TestCLIObservation:
         db_path = tmp_path / "test.db"
 
         subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True,
         )
         subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "observation", "add",
                 "--title", "Export test",
@@ -161,7 +160,7 @@ class TestCLIObservation:
 
         result = subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "memory", "export",
                 "--format", "json",
@@ -180,13 +179,13 @@ class TestCLIObservation:
         db_path = tmp_path / "test.db"
 
         subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True,
         )
 
         result = subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "memory", "export",
                 "--format", "csv",
@@ -209,14 +208,14 @@ class TestCLISession:
 
         # Initialize DB
         subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True
         )
 
         # Start session
         result = subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "session", "start",
                 "--project", "test"
@@ -232,7 +231,7 @@ class TestCLISession:
         # Stop session
         result = subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "session", "stop"
             ],
@@ -248,13 +247,13 @@ class TestCLISession:
         db_path = tmp_path / "test.db"
 
         subprocess.run(
-            [sys.executable, "-m", "memory_tool.cli", "--db", str(db_path), "init"],
+            [sys.executable, "-m", "memory_tool", "--db", str(db_path), "init"],
             capture_output=True,
         )
 
         result = subprocess.run(
             [
-                sys.executable, "-m", "memory_tool.cli",
+                sys.executable, "-m", "memory_tool",
                 "--db", str(db_path),
                 "--output", "json",
                 "session", "show", "999",
