@@ -88,7 +88,24 @@
 - [x] Add `check:los-memory-adapter` to a default gate path, not just standalone script entrypoints.
 - [x] Expand `verify-los-memory-adapter` runtime coverage beyond `--help` checks to include real grouped-command smoke for `admin manage`, `observation delete`, and `review apply`.
 
+## Phase 演进定位
+
+los-memory 在 lsclaw 六阶段演进框架中的角色：
+
+| Phase | 角色 | 状态 |
+|-------|------|------|
+| P2 可追踪性 | State Snapshot 持久化后端 | 待定义存储格式 |
+| P4 领域隔离 | Memory Domain 持久化后端 | ✅ 已就绪（12 种类型 + scope 隔离） |
+| P5 插件运行时 | Embedding Capability 提供方 | ⚠️ 待建设（Step 3b） |
+| P6 大型治理 | Event Store（Event Sourcing 后端） | 🔴 远期 |
+
 ## Deferred
 
 - [x] Former deferred backlog item completed: bulk write / stdin JSON as a primary writeback path.
 - [x] Former deferred backlog item completed: metadata-native filters for `memory search` / `memory list`.
+- [ ] **Step 3b: Embedding 管道下沉** (关联 T4)
+  - los-memory 新增 `memory search --semantic <query>` 命令
+  - 默认确定性 embedding（TF-IDF 风格 32 维向量）
+  - lsclaw 侧删除确定性 embedding 管线，保留 OpenAI embedding 作为可选高级功能
+  - 预估 6h，作为 los-memory 独立 feature 迭代
+  - 阻塞项：los-memory 当前零 embedding 基础设施
