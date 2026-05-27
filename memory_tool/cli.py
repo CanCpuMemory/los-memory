@@ -352,6 +352,11 @@ def _add_observation_add_subcommand(obs_subparsers: argparse._SubParsersAction) 
         help="Observation metadata JSON object. Use '@/path/file.json' or '@-' to read from stdin.",
     )
     obs_add.add_argument("--auto-tags", action="store_true")
+    obs_add.add_argument("--auto-importance", action="store_true")
+    obs_add.add_argument(
+        "--dedup-mode", choices=["allow", "skip"], default="allow",
+        help="Dedup strategy: 'allow' always inserts, 'skip' skips duplicates"
+    )
     obs_add.add_argument("--llm-hook", default=DEFAULT_LLM_HOOK)
 
 
@@ -409,6 +414,12 @@ def _add_observation_bulk_subcommand(obs_subparsers: argparse._SubParsersAction)
         help="JSON array or object-with-items payload. Use '@/path/file.json' or '@-' to read from stdin.",
     )
     obs_bulk.add_argument("--dry-run", action="store_true")
+    obs_bulk.add_argument("--auto-tags", action="store_true")
+    obs_bulk.add_argument("--auto-importance", action="store_true")
+    obs_bulk.add_argument(
+        "--dedup-mode", choices=["allow", "skip"], default="allow",
+        help="Dedup strategy: 'allow' always inserts, 'skip' skips duplicates"
+    )
 
 
 def _add_observation_link_subcommand(obs_subparsers: argparse._SubParsersAction) -> None:
@@ -1176,7 +1187,31 @@ def _handle_obs_add(conn, args):
             tags_list = normalize_tags_list(hook_result.get("tags"))
 
     if args.auto_tags and not tags_list:
-        tags_list = auto_tags_from_text(title, summary)
+        tags_list = auto_tags_from_text(title, summary, kind=args.kind)
+
+    # Auto-importance
+    if args.auto_importance:
+        from .utils import calculate_importance
+        metadata["importance"] = calculate_importance(args.kind, title, summary)
+
+    # Dedup check
+    if args.dedup_mode == "skip":
+        from .utils import compute_content_hash
+        content_hash = compute_content_hash(title, summary)
+        metadata["contentHash"] = content_hash
+        existing = conn.execute(
+            "SELECT id FROM observations "
+            "WHERE json_extract(metadata, '$.contentHash') = ?",
+            (content_hash,),
+        ).fetchone()
+        if existing:
+            return {
+                "ok": True,
+                "skipped": True,
+                "existingId": existing[0],
+                "title": title,
+                "profile": args.profile,
+            }
 
     active_session = get_bound_active_session(conn, args.profile, args.db)
     session_id = active_session["session_id"] if active_session else None
@@ -1608,7 +1643,12 @@ def _handle_obs_related(conn, args):
 
 def _handle_obs_bulk(conn, args):
     payload = _load_bulk_observation_input(args.input)
-    result = run_bulk_add(conn, payload, dry_run=args.dry_run)
+    result = run_bulk_add(
+        conn, payload,
+        dry_run=args.dry_run,
+        dedup_mode=getattr(args, "dedup_mode", "allow"),
+        auto_importance=getattr(args, "auto_importance", False),
+    )
     result["profile"] = args.profile
     result["db"] = args.db
     return result

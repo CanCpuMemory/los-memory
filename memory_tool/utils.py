@@ -1,6 +1,7 @@
 """Utility functions for the memory tool."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -261,8 +262,19 @@ def load_json_object_input(raw_value: str, param_name: str) -> Dict[str, Any]:
     return loaded
 
 
-def auto_tags_from_text(title: str, summary: str, limit: int = 6) -> List[str]:
-    """Auto-generate tags from title and summary."""
+def auto_tags_from_text(
+    title: str, summary: str, kind: str = "", limit: int = 6
+) -> List[str]:
+    """Auto-generate tags from title and summary, including type:kind tag."""
+    tags: List[str] = []
+
+    # Add type tag when kind is provided
+    if kind:
+        type_tag = f"type:{kind}"
+        if type_tag not in tags:
+            tags.append(type_tag)
+
+    # Add keyword tags from content
     text = normalize_text(f"{title} {summary}").lower()
     tokens = re.findall(r"[a-z0-9][a-z0-9\\-]{2,}", text)
     counts: dict[str, int] = {}
@@ -272,7 +284,39 @@ def auto_tags_from_text(title: str, summary: str, limit: int = 6) -> List[str]:
             continue
         counts[token] = counts.get(token, 0) + 1
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    return [tag for tag, _ in ranked[:limit]]
+    keyword_tags = [tag for tag, _ in ranked[:limit]]
+    for tag in keyword_tags:
+        if tag not in tags:
+            tags.append(tag)
+
+    # Add auto-generated marker
+    if "auto-generated" not in tags:
+        tags.append("auto-generated")
+
+    return tags
+
+
+def compute_content_hash(title: str, summary: str) -> str:
+    """SHA256 hash of title+summary for dedup."""
+    text = f"{normalize_text(title)}|{normalize_text(summary)}"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def calculate_importance(kind: str, title: str, summary: str) -> float:
+    """Score 0.0-1.0 based on kind and content signals."""
+    base = {
+        "observation": 0.5,
+        "session": 0.7,
+        "checkpoint": 0.8,
+        "feedback": 0.6,
+        "link": 0.4,
+    }.get(kind, 0.5)
+    text = f"{title} {summary}".lower()
+    if any(kw in text for kw in ["error", "bug", "incident", "critical", "failure"]):
+        base = min(1.0, base + 0.2)
+    if len(summary) > 200:
+        base = min(1.0, base + 0.1)
+    return round(base, 2)
 
 
 def parse_ids(ids_raw: str) -> List[int]:

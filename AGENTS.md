@@ -1,5 +1,9 @@
 # los-memory AGENTS
 
+> **Workspace**: Part of `los-workspace` (`~/projects/los-workspace`).
+> Cross-project rules: `~/projects/los-workspace/AGENTS.md`
+> Authority boundary spec: `~/projects/los-workspace/docs/architecture/five-project-boundary-spec.md`
+
 ## Scope
 
 This repo is a local SQLite memory ledger for Codex and Claude workflows. Core records are stable; several extensions are optional or experimental; the approval module is deprecated and migrating out.

@@ -481,7 +481,7 @@ def _normalize_bulk_observation_item(raw_item: object) -> dict[str, Any]:
     auto_tags = bool(raw_item.get("auto_tags", False))
     tags_list = normalize_tags_list(raw_item.get("tags", []))
     if auto_tags and not tags_list:
-        tags_list = auto_tags_from_text(title, summary)
+        tags_list = auto_tags_from_text(title, summary, kind=kind)
 
     metadata = normalize_metadata_dict(raw_item.get("metadata", {}))
 
@@ -503,15 +503,58 @@ def run_bulk_add(
     conn: sqlite3.Connection,
     items: list[dict[str, Any]],
     dry_run: bool = False,
+    dedup_mode: str = "allow",
+    auto_importance: bool = False,
 ) -> dict[str, Any]:
-    """Create multiple observations from JSON-style payload items."""
-    from .utils import parse_metadata_json, parse_tags_json
+    """Create multiple observations from JSON-style payload items.
+
+    Args:
+        conn: Database connection.
+        items: List of observation dicts.
+        dry_run: If True, roll back after insertion.
+        dedup_mode: "allow" (default) to always insert, "skip" to skip items
+            whose content hash already exists in the database.
+        auto_importance: If True, auto-calculate importance score.
+    """
+    from .utils import (
+        calculate_importance,
+        compute_content_hash,
+        metadata_to_json,
+        parse_metadata_json,
+        parse_tags_json,
+    )
 
     normalized_items = [_normalize_bulk_observation_item(item) for item in items]
     created_ids: list[int] = []
+    skipped: list[dict[str, Any]] = []
 
     try:
         for item in normalized_items:
+            metadata = parse_metadata_json(item["metadata"])
+
+            # Auto-importance
+            if auto_importance:
+                metadata["importance"] = calculate_importance(
+                    item["kind"], item["title"], item["summary"]
+                )
+
+            # Dedup check
+            if dedup_mode == "skip":
+                content_hash = compute_content_hash(item["title"], item["summary"])
+                metadata["contentHash"] = content_hash
+                existing = conn.execute(
+                    "SELECT id FROM observations "
+                    "WHERE json_extract(metadata, '$.contentHash') = ?",
+                    (content_hash,),
+                ).fetchone()
+                if existing:
+                    skipped.append({
+                        "item": {"title": item["title"], "summary": item["summary"]},
+                        "existingId": existing[0],
+                    })
+                    continue
+
+            item["metadata"] = metadata_to_json(metadata)
             created_ids.append(
                 _insert_observation(
                     conn,
@@ -555,6 +598,8 @@ def run_bulk_add(
         "ok": True,
         "total": len(normalized_items),
         "created": 0 if dry_run else len(created_ids),
+        "skipped": len(skipped),
+        "skippedDetails": skipped,
         "ids": result_ids,
         "results": results,
         "dry_run": dry_run,

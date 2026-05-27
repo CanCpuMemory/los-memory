@@ -5,6 +5,8 @@ from .models import Checkpoint, Observation, Session
 from .database import connect_db, ensure_fts, ensure_schema, init_db, SCHEMA_VERSION
 from .utils import (
     auto_tags_from_text,
+    calculate_importance,
+    compute_content_hash,
     metadata_to_json,
     normalize_tags_list,
     normalize_metadata_dict,
@@ -80,6 +82,8 @@ __all__ = [
     "SCHEMA_VERSION",
     # Utils
     "auto_tags_from_text",
+    "calculate_importance",
+    "compute_content_hash",
     "metadata_to_json",
     "normalize_tags_list",
     "normalize_metadata_dict",
