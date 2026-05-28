@@ -255,8 +255,13 @@ def _add_memory_search_subcommand(memory_subparsers: argparse._SubParsersAction)
     memory_search.add_argument("query")
     memory_search.add_argument("--limit", type=int, default=10)
     memory_search.add_argument("--offset", type=int, default=0)
-    memory_search.add_argument("--mode", choices=["auto", "fts", "like"], default="auto")
+    memory_search.add_argument("--mode", choices=["auto", "fts", "like", "semantic"], default="auto")
     memory_search.add_argument("--fts-quote", action="store_true")
+    memory_search.add_argument("--semantic", action="store_true", help="Use semantic (vector) search")
+    memory_search.add_argument("--vector-weight", type=float, default=0.7,
+                               help="Weight for vector similarity (0.0-1.0, default 0.7)")
+    memory_search.add_argument("--keyword-weight", type=float, default=0.3,
+                               help="Weight for keyword match (0.0-1.0, default 0.3)")
     memory_search.add_argument(
         "--require-tags",
         default="",
@@ -1230,6 +1235,22 @@ def _handle_obs_add(conn, args):
 def _handle_memory_search(conn, args):
     required_tags = normalize_tags_list(args.require_tags)
     metadata_filters = _load_metadata_filters(args.metadata_filter)
+
+    # Semantic search path
+    if args.semantic or args.mode == "semantic":
+        from .operations import run_semantic_search
+        results = run_semantic_search(
+            conn,
+            args.query,
+            limit=args.limit,
+            offset=args.offset,
+            vector_weight=args.vector_weight,
+            keyword_weight=args.keyword_weight,
+            required_tags=required_tags if required_tags else None,
+        )
+        return {"ok": True, "results": results}
+
+    # Text search paths (FTS/like)
     results = run_search(
         conn,
         args.query,

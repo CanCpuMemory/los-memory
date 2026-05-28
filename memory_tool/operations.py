@@ -305,6 +305,106 @@ def _row_to_search_result(
     }
 
 
+def run_semantic_search(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int = 10,
+    offset: int = 0,
+    vector_weight: float = 0.7,
+    keyword_weight: float = 0.3,
+    required_tags: Optional[List[str]] = None,
+) -> List[dict]:
+    """Semantic search using deterministic embeddings + cosine similarity.
+
+    Loads all observations with embeddings, computes query embedding,
+    and ranks by combined vector + keyword score.
+
+    Args:
+        conn: Database connection.
+        query: Search query string.
+        limit: Maximum results.
+        offset: Result offset.
+        vector_weight: Weight for cosine similarity (0.0-1.0).
+        keyword_weight: Weight for keyword match score (0.0-1.0).
+        required_tags: Tags that results must have.
+
+    Returns:
+        List of results with id, title, summary, combinedScore, etc.
+    """
+    from .embedding import (
+        compute_embedding,
+        cosine_similarity,
+        keyword_score,
+        tokenize,
+    )
+    from .utils import parse_metadata_json, parse_tags_json
+
+    query = query.strip()
+    if not query:
+        return []
+
+    # Fetch all observations with embeddings
+    rows = conn.execute(
+        "SELECT id, title, summary, tags, metadata FROM observations "
+        "WHERE metadata IS NOT NULL AND json_extract(metadata, '$.embedding') IS NOT NULL"
+    ).fetchall()
+
+    if not rows:
+        # Fallback: try observations without embeddings (use title+summary on-the-fly)
+        rows = conn.execute(
+            "SELECT id, title, summary, tags, metadata FROM observations"
+        ).fetchall()
+
+    required = set(t.strip().lower() for t in (required_tags or []) if t.strip())
+    query_tokens = tokenize(query)
+    query_vec = compute_embedding(query)
+
+    scored = []
+    for row in rows:
+        tags = parse_tags_json(row["tags"])
+        metadata = parse_metadata_json(row["metadata"]) if row["metadata"] else {}
+
+        # Tag filter
+        if required:
+            row_tags = set(t.strip().lower() for t in tags)
+            if not required.issubset(row_tags):
+                continue
+
+        title = row["title"] or ""
+        summary = row["summary"] or ""
+
+        # Vector score
+        stored_embedding = metadata.get("embedding")
+        if stored_embedding and isinstance(stored_embedding, list):
+            vs = cosine_similarity(query_vec, stored_embedding)
+        else:
+            # Compute on-the-fly from title+summary
+            from .embedding import text_for_embedding
+            doc_text = text_for_embedding(title, summary)
+            doc_vec = compute_embedding(doc_text)
+            vs = cosine_similarity(query_vec, doc_vec)
+
+        # Keyword score
+        content_tokens = tokenize(f"{title} {summary}")
+        ks = keyword_score(query_tokens, content_tokens)
+
+        combined = ks * keyword_weight + vs * vector_weight
+
+        scored.append({
+            "id": row["id"],
+            "title": title,
+            "summary": summary,
+            "tags": tags,
+            "vectorScore": round(vs, 4),
+            "keywordScore": round(ks, 4),
+            "combinedScore": round(combined, 4),
+        })
+
+    # Sort by combined score descending
+    scored.sort(key=lambda r: r["combinedScore"], reverse=True)
+    return scored[offset:offset + limit]
+
+
 def run_timeline(
     conn: sqlite3.Connection,
     start: Optional[str],
