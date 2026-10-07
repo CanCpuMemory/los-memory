@@ -1,5 +1,23 @@
 # TODO
 
+## Dual-track migration (approved 2026-09-26)
+
+- [x] Isolated canonical Nowledge mirror, revision history, refresh receipts and read-only SSH MCP.
+- [x] Fix Chinese substring fallback, scoped deduplication, metadata ranking filters and mixed embedding coverage.
+- [x] Configure local Kimi/Codex/Grok with primary Nowledge and comparison shadow.
+- [x] Document proposed cross-device/provider/agent/model/project architecture, retrieval pipeline and upstream research.
+- [ ] P0 — Freeze canonical evidence and 40 real retrieval cases; expand to 120 before hybrid tuning.
+- [ ] P1 — Measure and reduce sync traffic, collect 14 days of operation, prove off-host restore.
+- [ ] P2 — Implement authenticated identity/event/revision contracts in isolation; validate real multi-client workflows.
+- [ ] P3 — Evaluate Chinese full-text + learned vectors, RRF, version-safe generation switching and degradation.
+- [ ] P4 — Evaluate evidence-backed temporal relations; retain only graph features with measured benefit.
+- [ ] P5 — Implement scoped Working Memory, handoffs, thread evidence and revocation propagation.
+- [ ] P6 — Validate NAS34 candidate deployment and pass migration gates before the user's switch-window decision.
+
+Readiness review (2026-10-07) re-baselined progress against these stages: `docs/design/nowledge-replacement-readiness.md`. It records gap list G1–G12 and work packages W-00–W-11; W-00 (data-contract fix), W-10 (sync metering) and W-01/W-02 (evaluation + lexical projection) are the next executable steps. The 14-day availability window closes 2026-10-10 13:14.
+
+Stage goals, dependencies, acceptance metrics and rollback are maintained in `docs/design/memory-roadmap.md`; architecture and retrieval contracts are design proposals, not current runtime features.
+
 ## Completed
 
 - [x] Restore parser-level compatibility for legacy flat commands during downstream migration.
@@ -104,8 +122,6 @@ los-memory 在 lsclaw 六阶段演进框架中的角色：
 - [x] Former deferred backlog item completed: bulk write / stdin JSON as a primary writeback path.
 - [x] Former deferred backlog item completed: metadata-native filters for `memory search` / `memory list`.
 - [ ] **Step 3b: Embedding 管道下沉** (关联 T4)
-  - los-memory 新增 `memory search --semantic <query>` 命令
-  - 默认确定性 embedding（TF-IDF 风格 32 维向量）
-  - lsclaw 侧删除确定性 embedding 管线，保留 OpenAI embedding 作为可选高级功能
-  - 预估 6h，作为 los-memory 独立 feature 迭代
-  - 阻塞项：los-memory 当前零 embedding 基础设施
+  - 2026-09-26 实查：已有 `memory search <query> --semantic` 与 SHA256 token hash 32 维向量，并非学习式 embedding 或完整 TF-IDF。
+  - 本轮修复 metadata 过滤和有/无 embedding 混合记录覆盖；真实检索质量仍须黄金样例评估。
+  - lsclaw 管线迁移和可选模型 embedding 属于历史跨仓计划，未在本轮实施或验证。

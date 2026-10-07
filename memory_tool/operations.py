@@ -194,15 +194,16 @@ def run_search(
             fts_results = _run_search_fts(
                 conn=conn,
                 fts_query=fts_query,
-                limit=None if use_post_filters else limit,
-                offset=0 if use_post_filters else offset,
+                limit=None if use_post_filters or mode == "auto" else limit,
+                offset=0 if use_post_filters or mode == "auto" else offset,
                 parse_tags_json=parse_tags_json,
                 parse_metadata_json=parse_metadata_json,
             )
             filtered_results = _filter_results(fts_results, required, metadata_filter_map)
-            if use_post_filters:
-                return _slice_filtered_results(filtered_results, limit, offset)
-            return filtered_results
+            if filtered_results or mode == "fts":
+                if use_post_filters or mode == "auto":
+                    return _slice_filtered_results(filtered_results, limit, offset)
+                return filtered_results
         except sqlite3.OperationalError:
             if mode == "fts":
                 raise
@@ -313,8 +314,9 @@ def run_semantic_search(
     vector_weight: float = 0.7,
     keyword_weight: float = 0.3,
     required_tags: Optional[List[str]] = None,
+    metadata_filters: Optional[dict[str, Any]] = None,
 ) -> List[dict]:
-    """Semantic search using deterministic embeddings + cosine similarity.
+    """Rank using deterministic token hashes and cosine similarity, not learned semantics.
 
     Loads all observations with embeddings, computes query embedding,
     and ranks by combined vector + keyword score.
@@ -343,17 +345,9 @@ def run_semantic_search(
     if not query:
         return []
 
-    # Fetch all observations with embeddings
     rows = conn.execute(
-        "SELECT id, title, summary, tags, metadata FROM observations "
-        "WHERE metadata IS NOT NULL AND json_extract(metadata, '$.embedding') IS NOT NULL"
+        "SELECT id, title, summary, tags, metadata FROM observations"
     ).fetchall()
-
-    if not rows:
-        # Fallback: try observations without embeddings (use title+summary on-the-fly)
-        rows = conn.execute(
-            "SELECT id, title, summary, tags, metadata FROM observations"
-        ).fetchall()
 
     required = set(t.strip().lower() for t in (required_tags or []) if t.strip())
     query_tokens = tokenize(query)
@@ -363,6 +357,8 @@ def run_semantic_search(
     for row in rows:
         tags = parse_tags_json(row["tags"])
         metadata = parse_metadata_json(row["metadata"]) if row["metadata"] else {}
+        if not _matches_metadata_filters(metadata, metadata_filters or {}):
+            continue
 
         # Tag filter
         if required:
@@ -644,8 +640,8 @@ def run_bulk_add(
                 metadata["contentHash"] = content_hash
                 existing = conn.execute(
                     "SELECT id FROM observations "
-                    "WHERE json_extract(metadata, '$.contentHash') = ?",
-                    (content_hash,),
+                    "WHERE json_extract(metadata, '$.contentHash') = ? AND project = ? AND kind = ?",
+                    (content_hash, item["project"], item["kind"]),
                 ).fetchone()
                 if existing:
                     skipped.append({
@@ -751,6 +747,13 @@ def run_edit(
         updates["timestamp"] = timestamp
     if metadata is not None:
         updates["metadata"] = metadata
+
+    if title is not None or summary is not None:
+        from .utils import compute_content_hash, parse_metadata_json, metadata_to_json
+        refreshed = parse_metadata_json(metadata if metadata is not None else row["metadata"])
+        refreshed["contentHash"] = compute_content_hash(current_title, current_summary)
+        refreshed.pop("embedding", None)
+        updates["metadata"] = metadata_to_json(refreshed)
 
     if tags is not None:
         current_tags = normalize_tags_list(tags)

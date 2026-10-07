@@ -2,6 +2,21 @@
 
 Local SQLite memory tool for Codex and Claude Code workflows.
 
+## Nowledge dual-track validation (2026-09-26)
+
+Nowledge remains the primary memory service. An isolated M3 shadow mirrors canonical durable memories and exposes read-only SSH MCP tools to Kimi, Codex and Grok. Existing local profiles remain independent.
+
+- [Design and migration gates](docs/design/dual-track-memory.md)
+- [Deployment, usage and rollback](docs/manuals/SHADOW_MEMORY.md)
+- [Validation evidence](docs/reports/2026-09-26-dual-track.md)
+
+The next service iteration is documented, not yet implemented:
+
+- [Cross-device / provider / agent / model / project architecture](docs/design/memory-service-architecture.md)
+- [Ingestion, vector and temporal-graph retrieval](docs/design/memory-retrieval-pipeline.md)
+- [Phased goals and acceptance gates](docs/design/memory-roadmap.md)
+- [Memory tools and storage research](docs/reports/2026-09-26-memory-landscape.md)
+
 ## Architecture (v2.0.0+)
 
 ```

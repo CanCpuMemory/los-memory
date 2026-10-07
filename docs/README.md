@@ -10,6 +10,17 @@ This repository separates documentation by usage instead of keeping every note a
 
 ## Design
 
+- [Memory service architecture](design/memory-service-architecture.md): proposed identities, scopes, APIs, consistency and topology
+- [Recording and retrieval pipeline](design/memory-retrieval-pipeline.md): proposed full-text, vector, temporal graph and context assembly
+- [Phased optimization roadmap](design/memory-roadmap.md): P0–P6 goals, quality/resource gates and rollback
+- [Nowledge replacement readiness review (2026-10-07)](design/nowledge-replacement-readiness.md): executed-state evidence, gap list G1–G12, work packages W-00–W-11
+- [Upstream memory tool research](reports/2026-09-26-memory-landscape.md): verified source links and adoption boundaries
+
+- [Dual-track memory and migration gates](design/dual-track-memory.md)
+- [Shadow operation manual](manuals/SHADOW_MEMORY.md)
+- [2026-09-26 validation](reports/2026-09-26-dual-track.md)
+- [2026-09-26 resource assessment: M3 and NAS34](reports/2026-09-26-resource-assessment.md)
+
 - `docs/design/`: forward-looking design documents, interface proposals, and design-review artifacts
 - Broad adoption posture documents that do not describe the current implemented state also belong in `docs/design/`
 

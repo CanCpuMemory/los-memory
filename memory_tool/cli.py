@@ -1206,8 +1206,8 @@ def _handle_obs_add(conn, args):
         metadata["contentHash"] = content_hash
         existing = conn.execute(
             "SELECT id FROM observations "
-            "WHERE json_extract(metadata, '$.contentHash') = ?",
-            (content_hash,),
+            "WHERE json_extract(metadata, '$.contentHash') = ? AND project = ? AND kind = ?",
+            (content_hash, project, args.kind),
         ).fetchone()
         if existing:
             return {
@@ -1247,6 +1247,7 @@ def _handle_memory_search(conn, args):
             vector_weight=args.vector_weight,
             keyword_weight=args.keyword_weight,
             required_tags=required_tags if required_tags else None,
+            metadata_filters=metadata_filters,
         )
         return {"ok": True, "results": results}
 

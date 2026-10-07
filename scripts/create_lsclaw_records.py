@@ -30,7 +30,7 @@ PARENT_TASK_ID = "epic-20260309063153"
 CHILD_TASK_ID = "los-memory-20260309063153"
 SESSION_ID = "child-los-memory-20260309063153"
 REPO_NAME = "los-memory"
-REPO_PATH = "/Users/echerlos/syncthing/project/los-memory"
+REPO_PATH = "/Users/echerlos/syncfolder/project/los-memory"
 
 
 def get_database_connection(db_path: str | None = None) -> Any:

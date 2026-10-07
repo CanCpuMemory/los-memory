@@ -2,11 +2,14 @@
 
 > **Workspace**: Part of `los-workspace` (`~/projects/los-workspace`).
 > Cross-project rules: `~/projects/los-workspace/AGENTS.md`
-> Authority boundary spec: `~/projects/los-workspace/docs/architecture/five-project-boundary-spec.md`
+> Current workspace boundary: `~/projects/los-workspace/WORKSPACE.md`
+> Historical boundary context only: `~/projects/los-workspace/docs/archive/seven-project-boundary-spec.md`
 
 ## Scope
 
 This repo is a local SQLite memory ledger for Codex and Claude workflows. Core records are stable; several extensions are optional or experimental; the approval module is deprecated and migrating out.
+
+The user approved bounded Nowledge dual-track validation on 2026-09-26. `memory_tool.shadow*` owns a separate read-only mirror and SSH MCP; Nowledge remains primary. Follow `docs/design/dual-track-memory.md` and `docs/manuals/SHADOW_MEMORY.md` for this lane. Do not merge shadow storage into existing profile databases or infer authorization to switch the primary.
 
 ## Read Order
 
