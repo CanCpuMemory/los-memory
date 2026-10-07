@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -647,7 +649,6 @@ def rotate_log(path, max_bytes=8 * 1024 * 1024, keep=5):
     archived inode and the visible log frozen. Truncating in place keeps the
     inode, so the next write lands in a fresh empty file.
     """
-    import shutil
     path = Path(path).expanduser()
     if not path.exists():
         return {"path": str(path), "rotated": False, "reason": "missing"}
@@ -675,9 +676,251 @@ def rotate_log(path, max_bytes=8 * 1024 * 1024, keep=5):
             "kept": min(len(archives), keep), "removed": removed}
 
 
+# ---------------------------------------------------------------------------
+# Divergence instrumentation (phase 1 of the read-path rollover)
+#
+# Rolling reads onto the shadow cannot start before we know *where the two
+# backends disagree*, and that data has to come from real queries rather than
+# from a corpus written against the corpus (see docs/reports/2026-10-07-eval-baseline.md
+# §6 on the circularity). So `shadow_compare` instruments real lookups.
+#
+# It must not repeat the mistake the DSH profile already made once: prompt-time
+# recall was switched off because `nmem memories search` costs a measured
+# 12.8-13.0 s per call. So the compare path is split — the shadow side is
+# answered immediately (indexed terms are ~1-2 ms) and the query is only
+# *queued*; `drain_compare` runs the slow Nowledge side later, off the critical
+# path, deduplicated and capped.
+# ---------------------------------------------------------------------------
+
+COMPARE_PENDING_CAP = 5000
+COMPARE_CACHE_TTL_HOURS = 24
+
+# Deliberately regex-only: routing must be deterministic, auditable and free.
+# An LLM in this decision would make the phase-1 divergence data unexplainable.
+LITERAL_ANCHOR = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}"                       # uuid
+    r"|[0-9a-f]{12,}"                                # long hash (incl. sha256: prefix body)
+    r"|\b[0-9a-f]{8,11}\b"                           # short hash / abbreviated id
+    r"|\b\d+\.\d+(?:\.\d+)?\b"                       # version
+    r"|(?:~|/)[\w./-]{3,}"                           # path
+    r"|\b[A-Z][A-Z0-9_]{3,}\b"                       # ERROR_CODE / CONSTANT
+    r"|\b[\w-]+\.(?:md|py|json|sh|toml|ya?ml|db|sqlite3?|log|mjs|ts)\b"   # filename
+    r"|\b\w+(?:-\w+){2,}\b")                         # 3+ hyphenated segments: mcp-los-memory-shadow
+
+
+def classify_query(query):
+    """Route a query to a backend class. Deterministic and side-effect free."""
+    text = query or ""
+    if LITERAL_ANCHOR.search(text):
+        return "literal_anchor"
+    if any(CJK_CHAR.search(term) and len(term) <= 4 for term in text.split()):
+        return "short_cjk"
+    return "conceptual"
+
+
+def compare_paths(state_dir=None):
+    base = Path(state_dir) if state_dir else DEFAULT_DB.expanduser().parent
+    return {"pending": base / "compare-pending.jsonl",
+            "results": base / "compare-results.jsonl",
+            "cache": base / "compare-cache.json"}
+
+
+def compare_shadow(conn, query, limit=10, space="default"):
+    """The shadow side of a comparison. No network, no writes to the mirror."""
+    started = time.perf_counter()
+    results, meta = search_detailed(conn, query, limit=limit, space=space)
+    return {"query": query, "class": classify_query(query),
+            "ids": [item["source_id"] for item in results],
+            "results": results, "meta": meta,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2)}
+
+
+def record_compare(conn, query, limit=10, space="default", state_dir=None):
+    """Answer the shadow side now and queue the query for the slow side later.
+
+    Returns what the caller needs to answer immediately; the Nowledge half and
+    the divergence record are produced by `drain_compare`.
+    """
+    payload = compare_shadow(conn, query, limit=limit, space=space)
+    paths = compare_paths(state_dir)
+    paths["pending"].parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    stamp = time.time()
+    row = {"ts": stamp, "query": query, "limit": limit, "space": space,
+           "class": payload["class"], "shadow_ids": payload["ids"],
+           "shadow_mode": payload["meta"].get("mode"),
+           "scan_terms": payload["meta"].get("scan_terms"),
+           "shadow_latency_ms": payload["latency_ms"]}
+    with open(paths["pending"], "a") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    os.chmod(paths["pending"], 0o600)
+    pending = [line for line in paths["pending"].read_text().splitlines() if line.strip()]
+    if len(pending) > COMPARE_PENDING_CAP:
+        paths["pending"].write_text("\n".join(pending[-COMPARE_PENDING_CAP:]) + "\n")
+        os.chmod(paths["pending"], 0o600)
+    return payload
+
+
+def _resolve_command(command):
+    """Find the primary's search CLI even under launchd's minimal PATH.
+
+    launchd starts jobs with PATH=/usr/bin:/bin:/usr/sbin:/sbin, so a bare
+    `nmem` raised FileNotFoundError in the scheduled drain. Resolving known
+    install locations here means the caller does not have to remember.
+    """
+    if os.path.sep in command:
+        return command
+    found = shutil.which(command)
+    if found:
+        return found
+    for candidate in (Path.home() / ".local/bin" / command,
+                      Path("/usr/local/bin") / command,
+                      Path("/opt/homebrew/bin") / command):
+        if candidate.exists():
+            return str(candidate)
+    return command
+
+
+def _nowledge_ids(query, limit, command, timeout):
+    """Run the primary's own search CLI. Measured at ~13 s, hence the queue."""
+    started = time.perf_counter()
+    result = subprocess.run([command, "memories", "search", query, "-n", str(limit), "-j"],
+                            capture_output=True, text=True, timeout=timeout)
+    elapsed = time.perf_counter() - started
+    if result.returncode != 0:
+        return None, elapsed, (result.stderr or "").strip()[:200]
+    payload = json.loads(result.stdout)
+    items = payload.get("memories", payload) if isinstance(payload, dict) else payload
+    return [item["id"] for item in items if isinstance(item, dict) and item.get("id")], elapsed, None
+
+
+def drain_compare(state_dir=None, max_queries=10, cache_ttl_hours=COMPARE_CACHE_TTL_HOURS,
+                  command=None, timeout=180, limit=None):
+    """Fill in the Nowledge half for queued queries and log the divergence.
+
+    Deduplicated against a short-lived cache and capped per run, because each
+    uncached query costs the primary ~13 s. Re-running is safe: the pending
+    queue is only truncated for the queries actually resolved.
+    """
+    command = _resolve_command(command or os.environ.get("SHADOW_NMEM_BIN") or "nmem")
+    paths = compare_paths(state_dir)
+    if not paths["pending"].exists():
+        return {"pending": 0, "resolved": 0, "results": str(paths["results"])}
+    queued = []
+    for line in paths["pending"].read_text().splitlines():
+        if line.strip():
+            try:
+                queued.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    if not queued:
+        return {"pending": 0, "resolved": 0, "results": str(paths["results"])}
+
+    cache = {}
+    if paths["cache"].exists():
+        try:
+            cache = json.loads(paths["cache"].read_text())
+        except json.JSONDecodeError:
+            cache = {}
+    # Newest occurrence per query wins; older duplicates collapse into it.
+    latest = {}
+    for row in queued:
+        latest[row["query"]] = row
+
+    now = time.time()
+    resolved, deferred, errors = [], 0, []
+    for query, row in sorted(latest.items(), key=lambda item: -item[1]["ts"]):
+        depth = limit or row.get("limit") or 10
+        entry = cache.get(query)
+        if entry and now - entry.get("ts", 0) <= cache_ttl_hours * 3600 and entry.get("limit") == depth:
+            nowledge_ids, elapsed, error = entry["ids"], entry.get("elapsed"), None
+        else:
+            if len(resolved) >= max_queries:
+                deferred += 1
+                continue
+            try:
+                nowledge_ids, elapsed, error = _nowledge_ids(query, depth, command, timeout)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                nowledge_ids, elapsed, error = None, None, type(exc).__name__
+            if error:
+                errors.append({"query": query, "error": error})
+                continue
+            cache[query] = {"ids": nowledge_ids, "ts": now, "elapsed": elapsed, "limit": depth}
+        shadow_ids = row.get("shadow_ids") or []
+        shadow_set, nowledge_set = set(shadow_ids), set(nowledge_ids or [])
+        union = shadow_set | nowledge_set
+        with open(paths["results"], "a") as handle:
+            handle.write(json.dumps({
+                "ts": now, "query": query, "class": row.get("class"),
+                "limit": depth, "shadow_ids": shadow_ids, "nowledge_ids": list(nowledge_ids or []),
+                "shadow_only": sorted(shadow_set - nowledge_set),
+                "nowledge_only": sorted(nowledge_set - shadow_set),
+                "overlap": sorted(shadow_set & nowledge_set),
+                "jaccard": round(len(shadow_set & nowledge_set) / len(union), 4) if union else None,
+                "shadow_mode": row.get("shadow_mode"), "scan_terms": row.get("scan_terms"),
+                "shadow_latency_ms": row.get("shadow_latency_ms"),
+                "nowledge_latency_s": round(elapsed, 2) if elapsed else None,
+            }, ensure_ascii=False) + "\n")
+        resolved.append(query)
+    # Only touch the results file if this run actually wrote a record: an
+    # all-failed drain must not blow up (or create a misleading empty file).
+    if os.path.exists(paths["results"]):
+        os.chmod(paths["results"], 0o600)
+    paths["cache"].write_text(json.dumps(cache, ensure_ascii=False))
+    os.chmod(paths["cache"], 0o600)
+    # Keep only what could not be resolved this run.
+    keep = [row for row in queued if row["query"] not in set(resolved)]
+    paths["pending"].write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in keep))
+    os.chmod(paths["pending"], 0o600)
+    return {"pending": len(queued), "resolved": len(resolved), "deferred": deferred,
+            "errors": errors, "results": str(paths["results"])}
+
+
+def compare_report(state_dir=None):
+    """Aggregate divergence by query class — the input to the category boundary.
+
+    This is the number the rollover decision actually needs: not a headline
+    score, but "on which class of query do the two backends disagree, and in
+    whose favour".
+    """
+    paths = compare_paths(state_dir)
+    if not paths["results"].exists():
+        return {"records": 0, "by_class": {}, "note": "no drained comparisons yet"}
+    per_class = {}
+    records = 0
+    for line in paths["results"].read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        records += 1
+        bucket = per_class.setdefault(row.get("class") or "conceptual",
+                                      {"n": 0, "jaccard": [], "shadow_only": 0,
+                                       "nowledge_only": 0, "agree_empty": 0,
+                                       "shadow_only_queries": 0, "nowledge_only_queries": 0})
+        bucket["n"] += 1
+        if row.get("jaccard") is not None:
+            bucket["jaccard"].append(row["jaccard"])
+        bucket["shadow_only"] += len(row.get("shadow_only") or [])
+        bucket["nowledge_only"] += len(row.get("nowledge_only") or [])
+        if row.get("shadow_only"):
+            bucket["shadow_only_queries"] += 1
+        if row.get("nowledge_only"):
+            bucket["nowledge_only_queries"] += 1
+        if not row.get("shadow_ids") and not row.get("nowledge_ids"):
+            bucket["agree_empty"] += 1
+    for bucket in per_class.values():
+        values = bucket.pop("jaccard")
+        bucket["mean_jaccard"] = round(sum(values) / len(values), 4) if values else None
+    return {"records": records, "by_class": per_class,
+            "reading": "mean_jaccard near 0 with shadow_only>0 means the shadow adds "
+                       "candidates the primary's default search misses; nowledge_only>0 "
+                       "is the risk side — raise the limit before drawing conclusions."}
+
+
 def summary(conn, space="default"):
     """Identity summary for backup/restore comparison.
-
     Compares content, not row counts: a restore is only proven when every
     (space, source_id, digest, active) tuple matches the source.
     """
@@ -694,10 +937,17 @@ def summary(conn, space="default"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["sync", "status", "reindex", "summary", "rotatelog"])
+    parser.add_argument("action", choices=["sync", "status", "reindex", "summary", "rotatelog",
+                                           "compare", "compare-drain", "compare-report"])
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--config", default=str(Path.home() / ".nowledge-mem/config.json"))
     parser.add_argument("--batch", type=int, default=100)
+    parser.add_argument("--query", default=None, help="compare: the query to compare")
+    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--max-queries", type=int, default=10,
+                        help="compare-drain: cap on uncached Nowledge lookups per run "
+                             "(each costs the primary ~13 s)")
+    parser.add_argument("--nowledge-cmd", default=os.environ.get("SHADOW_NMEM_BIN", "nmem"))
     parser.add_argument("--max-bytes", type=int, default=8 * 1024 * 1024)
     parser.add_argument("--keep", type=int, default=5)
     parser.add_argument("--manifest-cache-seconds", type=int, default=0,
@@ -715,6 +965,18 @@ def main():
         elif args.action == "rotatelog":
             result = rotate_log(Path(args.db).expanduser().with_name("sync.out.log"),
                                 args.max_bytes, args.keep)
+        elif args.action == "compare":
+            if not args.query:
+                parser.error("compare requires --query")
+            state_dir = Path(args.db).expanduser().parent
+            result = {key: value for key, value in
+                      record_compare(conn, args.query, limit=args.limit,
+                                     state_dir=state_dir).items() if key != "results"}
+        elif args.action == "compare-drain":
+            result = drain_compare(state_dir=Path(args.db).expanduser().parent,
+                                   max_queries=args.max_queries, command=args.nowledge_cmd)
+        elif args.action == "compare-report":
+            result = compare_report(state_dir=Path(args.db).expanduser().parent)
         elif args.action == "reindex":
             # Same single-writer lock as sync: rebuilding while a sync writes
             # would interleave index rows with record writes.

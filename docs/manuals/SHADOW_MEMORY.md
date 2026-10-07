@@ -51,10 +51,28 @@
 
 - M3 数据：`~/.local/share/los-memory-shadow/shadow.sqlite3`，私有目录与权限。
 - 冻结发布：同目录 `releases/<source-hash>/`；`serve` 启动当前发布的只读 MCP。
-- 定时任务：`~/Library/LaunchAgents/co.los.memory-shadow.plist`，每 300 秒处理最多 100 条。
+- 定时任务：
+  - `co.los.memory-shadow`，每 300 秒处理最多 100 条（轮转，不是全库 5 分钟新鲜）。
+  - `co.los.memory-shadow-maintenance`，每日 05:10 轮转日志（超过 8 MiB 才转，保 5 份）。
+  - `co.los.memory-shadow-compare-drain`，每 900 秒把 `shadow_compare` 入队的查询拿去问主库并记分歧（单轮最多 8 个未缓存查询，24 h 查询缓存）。
 - 凭证：M3 自己的 `~/.nowledge-mem/config.json`，部署不复制客户端密钥。
-- 日志：数据目录下 `sync.out.log`、`sync.err.log`；状态工具报告最近同步及未解决错误。
+- 日志：数据目录下 `sync.out.log`、`sync.err.log`、`compare-drain.out.log`；状态工具报告最近同步及未解决错误。
 - 客户端备份：M1 `~/.local/share/los-memory-shadow/client-backups/<timestamp>/`，含私有配置，禁止提交。
+
+## 并行比较（读取路径轮换阶段 1）
+
+策略见 [SHADOW_INVOCATION_POLICY.md](SHADOW_INVOCATION_POLICY.md)。工具面：
+
+| 入口 | 行为 |
+| --- | --- |
+| MCP `shadow_compare(query, limit?)` | **立刻**返回影子侧（毫秒级），把 query 入队 `compare-pending.jsonl`；**不同步**调用主库 |
+| `shadow compare --query Q` | 同上，命令行形态 |
+| `shadow compare-drain` | 队列里去重后取未缓存的 query 问主库（每个约 13 s），写 `compare-results.jsonl` |
+| `shadow compare-report` | 按查询形态聚合 `mean_jaccard` / `shadow_only` / `nowledge_only` |
+
+`drain` 的两条纪律：**主库查询失败时不写分歧记录**（否则把失败伪装成"一致"），并在输出里报 `errors`；**单轮有上限**（`--max-queries`），跑不完的下轮继续。
+
+`nmem` 的路径由 `_resolve_command` 解析（launchd 的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，裸 `nmem` 会 FileNotFoundError）；plist 另外显式传了 `--nowledge-cmd` 绝对路径与 `PATH`，双保险。
 
 ## 部署与验证
 

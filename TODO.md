@@ -33,8 +33,10 @@ Work packages (2026-10-07):
 
 **Still gated on time or a user decision** (not unfinished work):
 
+- [ ] **Read-path rollover phase 1 (now on)**: call `shadow_compare` alongside normal lookups; the M3 job `co.los.memory-shadow-compare-drain` fills in the primary side every 900 s. Collect ≥30 real queries per query form before setting the phase-2 category boundary. Operator policy: `docs/manuals/SHADOW_INVOCATION_POLICY.md`.
+- [ ] **Phase 2**: route literal/short-CJK queries to the shadow in one client (DSH first), gate on human spot-check ≥20 answers and on `nowledge_only` not causing misses; rollback = remove the MCP entry.
 - **2026-10-10 13:14** — rerun `python3 scripts/shadow_report.py report` for the formal 14-day report (window closes then; interim report + alerting already delivered).
-- **P1 cadence switch** — `--manifest-cache-seconds` is implemented and the metering baseline accrues in `sync_runs`; per the approved plan the live 300 s cadence is deliberately unchanged until 24 h of measured baseline exists.
+- **P1 cadence switch** — `--manifest-cache-seconds` is implemented and the baseline accrues in `sync_runs` (measured 5.42 MiB/run, ≈1.53 GiB/day); per the approved plan the live 300 s cadence stays until the 24 h baseline exists. Consider a 30-minute listing interval so new-record discovery keeps margin against the ≤1 h gate.
 - **DSH new-session call** — plugin `mcp-los-memory-shadow` is `active` in the plugin tree (0 failed); the in-session tool call needs a fresh DSH session (injection timing).
 - **P2 implementation** — design review only; the 5 open questions in `docs/design/p2-write-path-minimal-loop.md` §7 need a user decision first.
 

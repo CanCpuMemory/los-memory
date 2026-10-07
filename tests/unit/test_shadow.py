@@ -91,8 +91,10 @@ def test_mcp_protocol_and_read_only_surface(conn):
     assert result["result"]["protocolVersion"] == "2025-03-26"
     assert dispatch(conn, {"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
     tools = dispatch(conn, {**base, "method": "tools/list"})["result"]["tools"]
-    assert len(tools) == 3
-    assert all(tool["annotations"]["readOnlyHint"] for tool in tools)
+    assert [t["name"] for t in tools] == ["shadow_search", "shadow_get", "shadow_status",
+                                         "shadow_compare"]
+    assert all(tool["annotations"]["readOnlyHint"] for tool in tools), \
+        "every shadow tool must be read-only, including the compare instrumentation"
     result = dispatch(conn, {**base, "method": "tools/call", "params": {
         "name": "shadow_search", "arguments": {"query": "中文"}}})
     payload = json.loads(result["result"]["content"][0]["text"])
@@ -457,3 +459,135 @@ def test_multi_project_record_is_findable_under_each_of_its_projects(conn):
     coverage = search_detailed(conn, "shared body", project="cantool")[1]["coverage"]
     assert coverage["project_multi"] == 1
     assert coverage["project_assigned"] == 1, "only the unambiguous record counts as assigned"
+
+
+# --- divergence instrumentation (phase 1 of the read-path rollover) -------------
+
+def test_query_classifier_is_deterministic_and_explains_itself():
+    from memory_tool.shadow import classify_query
+    literal = ["SQLITE_IOERR_TRUNCATE", "6d24e90a-de0d-4eb5-9a9d-1ec801ad6cf2",
+               "~/.local/state/agent-history/queue.json", "0.10.86", "db.syncthing.sqlite3",
+               "mcp-los-memory-shadow", "sha256:c6ac069fa1cefe2d552c5be0"]
+    short_cjk = ["冷层 热数据", "磁盘满 阶段化", "影子库"]
+    conceptual = ["有些功能明明做完了却像没接上是什么问题", "对比两份媒体清单时怎么让结论站得住"]
+    for query in literal:
+        assert classify_query(query) == "literal_anchor", query
+    for query in short_cjk:
+        assert classify_query(query) == "short_cjk", query
+    for query in conceptual:
+        assert classify_query(query) == "conceptual", query
+    # Same input, same class — routing must not depend on anything else.
+    assert classify_query("冷层 热数据") == classify_query("冷层 热数据")
+
+
+def test_compare_records_the_shadow_side_without_calling_the_primary(conn, tmp_path):
+    """The primary costs ~13 s/query, so the tool must not call it inline."""
+    from memory_tool.shadow import compare_paths, record_compare
+    put(conn, "default", indexed_record("a", "冷层 与热数据", "冻结副本迁移"))
+    payload = record_compare(conn, "冷层 热数据", limit=5, state_dir=tmp_path)
+    assert payload["class"] == "short_cjk"
+    assert payload["ids"] == ["a"]
+    assert payload["latency_ms"] < 2000, "the shadow side must be answered immediately"
+    pending = [json.loads(line) for line in compare_paths(tmp_path)["pending"].read_text().splitlines()]
+    assert len(pending) == 1
+    assert pending[0]["query"] == "冷层 热数据" and pending[0]["shadow_ids"] == ["a"]
+
+
+def test_mcp_compare_queues_and_says_answer_from_the_primary(conn):
+    from memory_tool.shadow_mcp import dispatch
+    put(conn, "default", indexed_record("a", "冷层 与热数据", "冻结副本迁移"))
+    result = dispatch(conn, {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "shadow_compare", "arguments": {"query": "冷层 热数据"}}})
+    payload = json.loads(result["result"]["content"][0]["text"])
+    assert payload["comparison"]["queued"] is True
+    assert "answer from the primary" in payload["comparison"]["note"]
+    assert payload["results"][0]["source_id"] == "a"
+
+
+def test_drain_writes_divergence_and_is_idempotent(conn, tmp_path, monkeypatch):
+    from memory_tool import shadow
+    put(conn, "default", indexed_record("a", "冷层 与热数据", "冻结副本迁移"))
+    shadow.record_compare(conn, "冷层 热数据", limit=5, state_dir=tmp_path)
+    calls = []
+
+    class FakeRun:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps({"memories": [{"id": "a"}, {"id": "other"}]})
+
+    def fake_subprocess(*args, **kwargs):
+        calls.append(args[0])
+        return FakeRun()
+
+    monkeypatch.setattr(shadow.subprocess, "run", fake_subprocess)
+    first = shadow.drain_compare(state_dir=tmp_path, command="nmem")
+    assert first["resolved"] == 1 and not first["errors"]
+    assert len(calls) == 1, "one primary lookup for one query"
+    results = [json.loads(l) for l in shadow.compare_paths(tmp_path)["results"].read_text().splitlines()]
+    assert results[0]["overlap"] == ["a"] and results[0]["nowledge_only"] == ["other"]
+    assert results[0]["jaccard"] == 0.5
+    # Second drain: nothing pending, and the cache prevents another lookup.
+    second = shadow.drain_compare(state_dir=tmp_path, command="nmem")
+    assert second["pending"] == 0
+    assert len(calls) == 1, "the query cache must prevent repeat lookups"
+
+    report = shadow.compare_report(state_dir=tmp_path)
+    assert report["records"] == 1
+    bucket = report["by_class"]["short_cjk"]
+    assert bucket["n"] == 1 and bucket["mean_jaccard"] == 0.5
+    assert bucket["shadow_only_queries"] == 0 and bucket["nowledge_only_queries"] == 1
+
+
+def test_drain_caps_uncached_lookups_and_keeps_the_rest_queued(conn, tmp_path, monkeypatch):
+    """Each uncached query costs ~13 s, so a drain must be bounded."""
+    from memory_tool import shadow
+    for index in range(3):
+        put(conn, "default", indexed_record(f"q{index}", f"term{index} body", "x"))
+        shadow.record_compare(conn, f"term{index}", limit=5, state_dir=tmp_path)
+
+    class FakeRun:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps({"memories": [{"id": "q0"}]})
+
+    monkeypatch.setattr(shadow.subprocess, "run", lambda *a, **k: FakeRun())
+    out = shadow.drain_compare(state_dir=tmp_path, max_queries=2)
+    assert out["resolved"] == 2 and out["deferred"] == 1
+    still_queued = [json.loads(l) for l in
+                    shadow.compare_paths(tmp_path)["pending"].read_text().splitlines() if l.strip()]
+    assert len(still_queued) == 1, "the deferred query stays queued for the next drain"
+    assert still_queued[0]["query"] == "term0", "and it is the one the cap skipped"
+
+
+def test_drain_reports_a_primary_failure_instead_of_faking_agreement(conn, tmp_path, monkeypatch):
+    from memory_tool import shadow
+    put(conn, "default", indexed_record("a", "冷层", "x"))
+    shadow.record_compare(conn, "冷层", limit=5, state_dir=tmp_path)
+
+    class Failing:
+        returncode = 1
+        stdout = ""
+        stderr = "connection refused"
+
+    monkeypatch.setattr(shadow.subprocess, "run", lambda *a, **k: Failing())
+    out = shadow.drain_compare(state_dir=tmp_path, command="nmem")
+    assert out["resolved"] == 0 and out["errors"], "a failed primary lookup must be visible"
+    assert not shadow.compare_paths(tmp_path)["results"].exists(), \
+        "no divergence record may be written from a failed lookup"
+
+
+def test_drain_finds_the_primary_cli_under_a_minimal_path(monkeypatch, tmp_path):
+    """launchd starts jobs with PATH=/usr/bin:/bin:/usr/sbin:/sbin, so a bare
+    `nmem` failed with FileNotFoundError in the scheduled drain. Resolving the
+    known install locations is what makes the job work unattended."""
+    from memory_tool import shadow
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr(shadow.shutil, "which", lambda name: None)
+    fake_home = tmp_path / "home"
+    (fake_home / ".local/bin").mkdir(parents=True)
+    binary = fake_home / ".local/bin/nmem"
+    binary.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(shadow.Path, "home", classmethod(lambda cls: fake_home))
+    assert shadow._resolve_command("nmem") == str(binary)
+    # An explicit path is never second-guessed.
+    assert shadow._resolve_command("/custom/nmem") == "/custom/nmem"

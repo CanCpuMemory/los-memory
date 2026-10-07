@@ -11,6 +11,16 @@ This repo is a local SQLite memory ledger for Codex and Claude workflows. Core r
 
 The user approved bounded Nowledge dual-track validation on 2026-09-26. `memory_tool.shadow*` owns a separate read-only mirror and SSH MCP; Nowledge remains primary. Follow `docs/design/dual-track-memory.md` and `docs/manuals/SHADOW_MEMORY.md` for this lane. Do not merge shadow storage into existing profile databases or infer authorization to switch the primary.
 
+## Shadow memory: when to call it
+
+`docs/manuals/SHADOW_INVOCATION_POLICY.md` is the operative policy. The short form:
+
+- **Use the shadow first** when the query carries a literal anchor (ID, hash, path, filename, error code, version, hostname) or a short CJK term, and when completeness matters more than conceptual recall.
+- **Use Nowledge first** for paraphrased/conceptual questions. The shadow is literal-only; it scores 0 on those by design.
+- **Freshness precondition**: configured availability is not proof of a usable mirror. Check `shadow_status` (or a result's `verified_at`) before relying on it, treat it as an as-of snapshot, and on a degraded result fall back to Nowledge immediately instead of retrying.
+- **Comparison phase is on**: call `shadow_compare` alongside a normal lookup. It records the divergence between the two backends and answers in milliseconds; it is instrumentation, **not** an answer source — keep answering from Nowledge.
+- Never call the primary synchronously inside a comparison path: `nmem memories search` costs a measured ~13 s per query, which is why prompt-time recall is disabled in the DSH profile.
+
 ## Read Order
 
 1. `README.md`

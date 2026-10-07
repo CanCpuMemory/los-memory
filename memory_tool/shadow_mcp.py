@@ -4,17 +4,29 @@ import argparse
 import json
 import os
 import sys
-from .shadow import DEFAULT_DB, connect, get, search_detailed, status
+from .shadow import (DEFAULT_DB, connect, get, record_compare, search_detailed, status)
 
 
-INSTRUCTIONS = ("This is a read-only los-memory shadow of Nowledge. Nowledge remains the primary "
-                "for normal memory reads and all writes. Use shadow tools for explicit comparison and "
-                "validation. Check verified_at and sync status; a shadow result may be stale. "
-                "Do not silently migrate, save here, or treat missing results as missing primary memories. "
-                "shadow_search is literal substring matching, not semantic search; its reply includes "
-                "`meta` describing which index path each term took, whether the result was degraded, and "
-                "the project coverage behind any project filter. An empty project-filtered result is not "
-                "evidence that the project has no memories.")
+INSTRUCTIONS = (
+    "This is a read-only los-memory shadow of Nowledge. Nowledge remains the primary for normal "
+    "memory reads and all writes. Use shadow tools for explicit comparison and validation. Check "
+    "verified_at and sync status; a shadow result may be stale, and it is an as-of snapshot, not "
+    "current truth. Do not silently migrate, save here, or treat missing results as missing primary "
+    "memories. shadow_search is literal substring matching, not semantic search; its reply includes "
+    "`meta` describing which index path each term took (trigram / bigram / scan), any uncovered "
+    "terms, and the project coverage behind a filter. An empty project-filtered result is not "
+    "evidence that the project has no memories.\n"
+    "WHEN TO USE IT: it is strongest where the query carries a literal anchor (ID, hash, path, error "
+    "code, version, hostname, filename) or a short CJK term, when completeness matters more than "
+    "conceptual recall, and when the primary is unreachable. It is useless for paraphrased or "
+    "conceptual questions and for anything needing writes, revisions, threads or graph relations.\n"
+    "FRESHNESS PRECONDITION: configured availability is not proof of a usable mirror. Check "
+    "shadow_status (or the verified_at on a result) before relying on it, and on a degraded or "
+    "stale-looking result fall back to the primary immediately rather than retrying.\n"
+    "DURING THE COMPARISON PHASE call shadow_compare alongside your normal primary lookup. It "
+    "records the divergence between the two backends. Answer from the primary: shadow_compare is "
+    "instrumentation, not a source of answers."
+)
 
 
 def tool(name, description, properties, required):
@@ -40,6 +52,14 @@ TOOLS = [
     tool("shadow_status",
          "Show coverage, freshness, contract coverage, 24h metering and last sync errors before "
          "comparing results.", {}, []),
+    tool("shadow_compare",
+         "Measurement tool for the read-path rollover: returns the shadow's answer immediately and "
+         "queues the same query so a background job can record how the shadow and the primary diverge. "
+         "It is NOT a source of answers — keep answering from the primary. Use it alongside a normal "
+         "memory lookup during the comparison phase. The primary side is deliberately not called here "
+         "because it costs ~13 s per query.",
+         {"query": {"type": "string", "minLength": 1, "maxLength": 500},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}}, ["query"]),
 ]
 
 
@@ -82,6 +102,15 @@ def dispatch(conn, request):
                 if not arguments["source_id"] or len(arguments["source_id"]) > 512:
                     raise ValueError("Invalid source_id")
                 payload = get(conn, **arguments)
+            elif name == "shadow_compare":
+                compare = record_compare(conn, arguments["query"],
+                                         limit=arguments.get("limit", 10))
+                payload = {"results": compare["results"], "meta": compare["meta"],
+                           "comparison": {"class": compare["class"],
+                                          "shadow_ids": compare["ids"],
+                                          "queued": True,
+                                          "note": "primary side is recorded asynchronously; "
+                                                  "answer from the primary"}}
             else:
                 payload = status(conn)
             result = {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],

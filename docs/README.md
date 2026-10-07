@@ -19,6 +19,7 @@ This repository separates documentation by usage instead of keeping every note a
 
 - [Dual-track memory and migration gates](design/dual-track-memory.md)
 - [Shadow operation manual](manuals/SHADOW_MEMORY.md)
+- [Shadow invocation policy and read-path rollover](manuals/SHADOW_INVOCATION_POLICY.md)
 - [2026-09-26 validation](reports/2026-09-26-dual-track.md)
 - [2026-09-26 resource assessment: M3 and NAS34](reports/2026-09-26-resource-assessment.md)
 - [2026-10-07 operation report and alerting](reports/2026-10-07-shadow-operation-report.md)
