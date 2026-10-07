@@ -414,8 +414,8 @@ cjk_bigrams(term, space, source_id)                  -- 中文双字辅助索引
 | W-06 | ✅ 完成 | [客户端接入与真实检索留证](../reports/2026-10-07-client-retrieval-evidence.md)：Codex/Kimi/Grok 三客户端**各由自己的 agent 循环**真实调用 `shadow_status` 并回同一份 JSON；Grok 此前掉线，本轮补注册；DSH 插件 `mcp-los-memory-shadow` 插件树 active、0 failed。残留：`shadow_get` 与 DSH 新会话内调用未取证 |
 | W-07 | ✅ 机制完成，报告待到期 | [运行报告与告警机制](../reports/2026-10-07-shadow-operation-report.md)：报告生成器 + 7 条告警阈值（逐条合成验证会触发，健康基线静默）+ M1 每小时告警 job + M3 每日日志轮转 job（copy-truncate 保 inode）。14 天窗口 **2026-10-10 13:14** 到期后重跑出正式报告 |
 | W-09 | ✅ 完成 | [P2 写入闭环最小设计评审](p2-write-path-minimal-loop.md)：7 条不变量、5 个契约、最小 schema、状态机、11 条负向测试（N1–N11）、5 个待用户确认的开放问题。**设计稿，非实施授权** |
-| W-01 | （见评测报告） | 40 例 case + 双后端 harness + 冻结 Nowledge 基线 |
-| W-08 | （见交付记录） | 分支 + tag + release↔commit 映射 + 推 origin |
+| W-01 | ✅ 完成 | [P0 评测基线](../reports/2026-10-07-eval-baseline.md)：40 例（8 类 × 5）+ 双后端 harness `scripts/shadow_eval.py`，冻结 Nowledge 基线。scope=native 下影子 Hit@5 **0.771** / Recall@5 0.700 / nDCG@10 0.729、**跨项目违规 0**；Nowledge 默认搜索 0.200 / 0.186 / 0.184、no_answer 类 2 条违规。**语义改写类两边都是 0.000 → 该类别无区分度，P3 前必须重做** |
+| W-08 | ✅ 完成 | [交付记录](../reports/2026-10-07-delivery.md)：分支 `feature/nowledge-readiness` + annotated tag `shadow-readiness-2026-10-07` 已推 origin；**现网 M3 发布 `7b5e77bff1ad36c06563` = 该 tag 的 `memory_tool` 树摘要（实测相等）**，代码/提交/现网三者对齐 |
 
 **本轮新增的量化事实**：`/memories` 清单在 2,048 条时是 21 请求 / 5.18 MiB / 3.79 s，单轮实际 121 请求 / 5.73 MiB / 13.3 s；2 字符 CJK 走 bigram 后 1.5–2.2 ms（原全表扫描），零命中 trigram 查询 1.1 ms（原 26 ms）；2 字符 ASCII（`M3`）仍是 27 ms 全表扫描，如实保留为 P3 议题。
 

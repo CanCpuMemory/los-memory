@@ -28,10 +28,15 @@ Work packages (2026-10-07):
 - [x] W-09 P2 write-path minimal design review (design only; 5 open questions need a user decision before implementation).
 - [x] W-10 sync metering: `sync_runs` + bounded `sync_errors` ledger, rolling 24h traffic in `status.metering`.
 - [x] W-11 thread coverage probe: 49/49 deepseek-harness threads map to the DSH session index; codex/grok do not (254/742 records total).
-- [ ] W-01 P0 evaluation: 40-case private corpus + dual-backend harness + frozen Nowledge baseline.
-- [ ] W-08 delivery: branch + tag + release↔commit mapping + push.
+- [x] W-01 P0 evaluation: 40-case private corpus + dual-backend harness + frozen Nowledge baseline (scope=native: shadow Hit@5 0.771, isolation violations 0; Nowledge default search 0.200). The `semantic_paraphrase` category scores 0.000 for **both** backends and must be redesigned before P3.
+- [x] W-08 delivery: branch `feature/nowledge-readiness` + tag `shadow-readiness-2026-10-07` pushed to origin; live M3 release `7b5e77bff1ad36c06563` equals the tag's `memory_tool` tree digest.
 
-**Still gated on time or a user decision**: the 14-day report (2026-10-10 13:14), the P1 cadence switch (needs the 24h baseline), and the P2 open questions in `docs/design/p2-write-path-minimal-loop.md` §7.
+**Still gated on time or a user decision** (not unfinished work):
+
+- **2026-10-10 13:14** — rerun `python3 scripts/shadow_report.py report` for the formal 14-day report (window closes then; interim report + alerting already delivered).
+- **P1 cadence switch** — `--manifest-cache-seconds` is implemented and the metering baseline accrues in `sync_runs`; per the approved plan the live 300 s cadence is deliberately unchanged until 24 h of measured baseline exists.
+- **DSH new-session call** — plugin `mcp-los-memory-shadow` is `active` in the plugin tree (0 failed); the in-session tool call needs a fresh DSH session (injection timing).
+- **P2 implementation** — design review only; the 5 open questions in `docs/design/p2-write-path-minimal-loop.md` §7 need a user decision first.
 
 Stage goals, dependencies, acceptance metrics and rollback are maintained in `docs/design/memory-roadmap.md`; architecture and retrieval contracts are design proposals, not current runtime features.
 

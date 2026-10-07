@@ -26,6 +26,8 @@ This repository separates documentation by usage instead of keeping every note a
 - [2026-10-07 client retrieval evidence](reports/2026-10-07-client-retrieval-evidence.md)
 - [2026-10-07 source API increment probe](reports/2026-10-07-source-api-increment.md)
 - [2026-10-07 thread coverage probe](reports/2026-10-07-thread-coverage.md)
+- [2026-10-07 P0 evaluation baseline (shadow vs Nowledge)](reports/2026-10-07-eval-baseline.md)
+- [2026-10-07 delivery record (branch / tag / release↔commit)](reports/2026-10-07-delivery.md)
 
 - `docs/design/`: forward-looking design documents, interface proposals, and design-review artifacts
 - Broad adoption posture documents that do not describe the current implemented state also belong in `docs/design/`
