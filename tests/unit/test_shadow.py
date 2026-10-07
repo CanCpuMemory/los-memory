@@ -351,11 +351,12 @@ def test_manifest_cache_decouples_listing_from_refresh(conn):
     second = sync(conn, client, manifest_cache_seconds=3600)
     assert second["manifest_cached"] is True
     assert second["manifest_count"] == 1
-    assert (second["requests"], second["bytes"]) == (3, 500), "listing reused, only the get fetched"
+    assert (second["requests"], second["bytes"]) == (1, 200), \
+        "listing reused: this run costs one get, not listing+get"
     # cache 0 is the unchanged production behaviour: list every run
     third = sync(conn, client, manifest_cache_seconds=0)
     assert third["manifest_cached"] is False
-    assert third["requests"] == 5
+    assert third["requests"] == 2, "listing + get"
 
 
 def test_zero_hit_query_trusts_a_built_index_instead_of_rescanning(conn):
@@ -382,3 +383,46 @@ def test_unbuilt_bigram_index_falls_back_to_scan_not_to_a_wrong_empty(conn):
     assert meta["mode"] == "scan", meta
     assert meta["scan_terms"] == ["记忆"], meta
     assert meta["usable"]["bigram"] is False
+
+
+def test_rotate_log_truncates_in_place_so_the_live_writer_keeps_working(conn, tmp_path):
+    """launchd holds the log fd open across runs: renaming would leave it
+    appending to the archived inode and the visible log frozen."""
+    from memory_tool.shadow import rotate_log
+    log = tmp_path / "sync.out.log"
+    log.write_bytes(b"x" * 100)
+    old_inode = log.stat().st_ino
+    quiet = rotate_log(log, max_bytes=1000, keep=3)
+    assert quiet["rotated"] is False and quiet["bytes"] == 100
+    assert not list(tmp_path.glob("sync.out.log.*")), "must not archive below the cap"
+
+    result = rotate_log(log, max_bytes=50, keep=3)
+    assert result["rotated"] is True
+    assert log.stat().st_size == 0, "live file is emptied in place"
+    assert log.stat().st_ino == old_inode, "same inode: the writer's fd still points at it"
+    assert (tmp_path / result["archive"]).stat().st_size == 100
+
+    for _ in range(4):
+        log.write_bytes(b"y" * 100)
+        rotate_log(log, max_bytes=50, keep=3)
+    assert len(list(tmp_path.glob("sync.out.log.*"))) == 3, "archives are bounded"
+
+
+def test_projected_traffic_uses_intervals_not_run_count(conn):
+    """N runs span N-1 intervals; dividing bytes by the span overstates the rate
+    by N/(N-1), which is a factor of two when only two runs are in the window."""
+    from memory_tool.shadow import metering
+    client = Metered({"a": record("a")})
+    sync(conn, client)                       # 300 bytes
+    base = conn.execute("SELECT started_at FROM sync_runs").fetchone()[0]
+    conn.execute("UPDATE sync_runs SET started_at=?", (base - 300,))
+    conn.commit()
+    sync(conn, client)                       # +300 bytes, one true 300 s interval
+    metered = metering(conn, hours=24)
+    assert metered["runs"] == 2
+    assert metered["bytes"] == 600
+    assert metered["observed_interval_seconds"] == 300
+    assert metered["projected_runs_per_day"] == 288
+    # 300 B/run * 288 runs. Tolerance absorbs sub-second jitter in the timestamps;
+    # the bug this pins would show up as ~172800 (a factor of two).
+    assert abs(metered["projected_bytes_per_day"] - 86400) < 500

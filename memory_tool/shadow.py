@@ -442,16 +442,29 @@ def metering(conn, space="default", hours=METERING_WINDOW_HOURS):
         "FROM sync_runs WHERE space=? AND started_at>=?", (space, since)).fetchone()
     runs = row["runs"] or 0
     span = None
+    interval = None
     if runs >= 2:
         first, last = conn.execute(
             "SELECT min(started_at), max(started_at) FROM sync_runs WHERE space=? AND started_at>=?",
             (space, since)).fetchone()
-        span = round(last - first, 3) if last and first and last > first else None
-    per_day = round(row["bytes"] * 86400 / span, 1) if span else None
+        if last and first and last > first:
+            span = round(last - first, 3)
+            # N runs span N-1 intervals. Dividing the byte total by the span
+            # itself would overstate the rate by N/(N-1) — a factor of 2 when only
+            # two runs are in the window, which is exactly when it reads as a
+            # headline number.
+            interval = span / (runs - 1)
+    # Prefer the observed interval; fall back to the documented 300 s cadence.
+    per_run = row["bytes"] / runs if runs else None
+    runs_per_day = 86400 / interval if interval else 86400 / 300
+    per_day = round(per_run * runs_per_day, 1) if per_run else None
     return {"window_hours": hours, "runs": runs, "bytes": row["bytes"], "requests": row["requests"],
             "errors": row["errors"], "changed": row["changed"], "checked": row["checked"],
             "last_started_at": row["last_started_at"], "span_seconds": span,
+            "observed_interval_seconds": round(interval, 1) if interval else None,
+            "bytes_per_run": round(per_run, 1) if per_run else None,
             "projected_bytes_per_day": per_day,
+            "projected_runs_per_day": round(runs_per_day, 1),
             "ledger_window": conn.execute("SELECT count(*) FROM sync_runs WHERE space=?",
                                           (space,)).fetchone()[0]}
 
@@ -550,6 +563,11 @@ def load_manifest(conn, client, space, cache_seconds=0):
 
 def sync(conn, client, batch=100, space="default", manifest_cache_seconds=0):
     report = {"started_at": time.time(), "checked": 0, "changed": 0, "missing": 0, "errors": []}
+    # Traffic counters may be cumulative for the life of the client object. Meter
+    # the delta for THIS run; recording the cumulative value would double-count
+    # every earlier run as soon as a caller reuses the client.
+    start_requests = getattr(client, "requests", 0) or 0
+    start_bytes = getattr(client, "bytes", 0) or 0
     try:
         manifest, report["manifest_cached"] = load_manifest(conn, client, space, manifest_cache_seconds)
         existing = {row["source_id"]: row["verified_at"] for row in
@@ -587,8 +605,8 @@ def sync(conn, client, batch=100, space="default", manifest_cache_seconds=0):
     report["finished_at"] = time.time()
     report["duration"] = round(report["finished_at"] - report["started_at"], 3)
     # Test doubles have no counters; a missing meter is 0, never a fabricated number.
-    report["requests"] = getattr(client, "requests", 0) or 0
-    report["bytes"] = getattr(client, "bytes", 0) or 0
+    report["requests"] = (getattr(client, "requests", 0) or 0) - start_requests
+    report["bytes"] = (getattr(client, "bytes", 0) or 0) - start_bytes
     with conn:
         conn.execute("INSERT OR REPLACE INTO sync_runs VALUES(?,?,?,?,?,?,?,?,?)",
                      (report["started_at"], space, report["checked"], report["changed"],
@@ -604,6 +622,42 @@ def sync(conn, client, batch=100, space="default", manifest_cache_seconds=0):
             (space, space, ERROR_LEDGER_CAP))
         conn.execute("INSERT OR REPLACE INTO state VALUES(?,?)", ("sync:" + space, json.dumps(report)))
     return report
+
+
+def rotate_log(path, max_bytes=8 * 1024 * 1024, keep=5):
+    """Cap an append-only log that launchd writes to.
+
+    Copy-then-truncate, never rename: launchd holds the file descriptor open
+    across runs, so renaming would leave the live writer appending to the
+    archived inode and the visible log frozen. Truncating in place keeps the
+    inode, so the next write lands in a fresh empty file.
+    """
+    import shutil
+    path = Path(path).expanduser()
+    if not path.exists():
+        return {"path": str(path), "rotated": False, "reason": "missing"}
+    size = path.stat().st_size
+    if size <= max_bytes:
+        return {"path": str(path), "rotated": False, "bytes": size}
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    archive = path.with_name(path.name + "." + stamp)
+    # Second granularity is not unique: several rotations inside one second (a
+    # test, or a manual run right after the scheduled one) would overwrite each
+    # other and silently lose an archive.
+    suffix = 0
+    while archive.exists():
+        suffix += 1
+        archive = path.with_name(f"{path.name}.{stamp}.{suffix}")
+    shutil.copyfile(path, archive)
+    with open(path, "r+b") as handle:
+        handle.truncate(0)
+    archives = sorted(path.parent.glob(path.name + ".*"))
+    removed = []
+    for old in archives[:-keep] if keep > 0 else archives:
+        old.unlink()
+        removed.append(old.name)
+    return {"path": str(path), "rotated": True, "bytes": size, "archive": archive.name,
+            "kept": min(len(archives), keep), "removed": removed}
 
 
 def summary(conn, space="default"):
@@ -625,10 +679,12 @@ def summary(conn, space="default"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["sync", "status", "reindex", "summary"])
+    parser.add_argument("action", choices=["sync", "status", "reindex", "summary", "rotatelog"])
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--config", default=str(Path.home() / ".nowledge-mem/config.json"))
     parser.add_argument("--batch", type=int, default=100)
+    parser.add_argument("--max-bytes", type=int, default=8 * 1024 * 1024)
+    parser.add_argument("--keep", type=int, default=5)
     parser.add_argument("--manifest-cache-seconds", type=int, default=0,
                         help="reuse the last active-ID listing for this many seconds "
                              "(0 = list every run, the current production behaviour)")
@@ -641,6 +697,9 @@ def main():
             result = status(conn)
         elif args.action == "summary":
             result = summary(conn)
+        elif args.action == "rotatelog":
+            result = rotate_log(Path(args.db).expanduser().with_name("sync.out.log"),
+                                args.max_bytes, args.keep)
         elif args.action == "reindex":
             # Same single-writer lock as sync: rebuilding while a sync writes
             # would interleave index rows with record writes.

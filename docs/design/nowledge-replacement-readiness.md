@@ -378,14 +378,16 @@ cjk_bigrams(term, space, source_id)                  -- 中文双字辅助索引
 | W-02 | ✅ 完成 | trigram `records_fts`（另一路先落地）+ `cjk_bigrams` 补 2 字符中文；`meta.mode/paths/scan_terms/usable`；索引未建时回退扫描并上报。一致性抽检 8 查询索引 vs 强制扫描 **0 处不一致** |
 | W-10 | ✅ 完成 | `sync_runs` 计量 + `sync_errors` 有界台账；`status.metering` 给出滚动 24h 请求/字节/错误与预计日流量 |
 | W-03 | 🟡 实现完成，现网未切 | `sync --manifest-cache-seconds N`（默认 0 = 现网不变）；单轮实测已测，24h 基线由新计量表自然累积，切换判据见 §5.5 |
-| W-11 | ✅ 完成 | 见 [会话/线程覆盖率探测](../reports/2026-10-07-thread-coverage.md) |
-| W-04 | ✅ 完成 | 见 [源 API 增量能力探测](../reports/2026-10-07-source-api-increment.md) |
-| W-05 | （见报告） | restic → syno + 恢复演练 |
-| W-06 | （见报告） | Grok/DSH 接入 + 真实调用留证 |
-| W-07 | 🟡 生成器就绪 | 14 天窗口 2026-10-10 13:14 到期，先出当前窗口报告 + 告警 + 日志轮转 |
-| W-01 | （见报告） | 40 例 case + 双后端 harness + 冻结基线 |
-| W-09 | （见设计） | P2 写入闭环设计评审 |
-| W-08 | （见报告） | 分支 + tag + release↔commit 映射 |
+| W-11 | ✅ 完成 | [会话/线程覆盖率探测](../reports/2026-10-07-thread-coverage.md)：742/2048 带 `source_thread`、153 个线程；deepseek-harness **49/49 = 100%** 可映射到 DSH 会话索引，codex/grok 0；合计 254/742 记录 = 34.2%。本轮已独立复算确认 |
+| W-04 | ✅ 完成 | [源 API 增量能力探测](../reports/2026-10-07-source-api-increment.md)：`/memories` **无任何增量能力**（10 个候选参数逐字节相同、无 ETag/Last-Modified、无轻量清单、变更流端点全 404）；意外发现 `/fs/find`（轻量清单，含 `next_cursor`）与 `/fs/stat`（唯一暴露 `updated_at`），但 `since` 只按 `created_at` 过滤 → **是新增检测器，不是变更检测器**。本轮已独立复验前两条 |
+| W-05 | ✅ 完成 | [异机加密备份与恢复演练](../reports/2026-10-07-offhost-backup.md)：snapshot→SSH→AES-256-CBC（PBKDF2）→群晖；异地回读哈希一致；**RTO 12.92 s**、身份摘要与在线完全一致；每日 04:30 launchd 实跑 exit 0。restic 不可用（NAS SFTP 关闭且 sudo 需密码）已如实记录 |
+| W-06 | ✅ 完成 | [客户端接入与真实检索留证](../reports/2026-10-07-client-retrieval-evidence.md)：Codex/Kimi/Grok 三客户端**各由自己的 agent 循环**真实调用 `shadow_status` 并回同一份 JSON；Grok 此前掉线，本轮补注册；DSH 插件 `mcp-los-memory-shadow` 插件树 active、0 failed。残留：`shadow_get` 与 DSH 新会话内调用未取证 |
+| W-07 | ✅ 机制完成，报告待到期 | [运行报告与告警机制](../reports/2026-10-07-shadow-operation-report.md)：报告生成器 + 7 条告警阈值（逐条合成验证会触发，健康基线静默）+ M1 每小时告警 job + M3 每日日志轮转 job（copy-truncate 保 inode）。14 天窗口 **2026-10-10 13:14** 到期后重跑出正式报告 |
+| W-09 | ✅ 完成 | [P2 写入闭环最小设计评审](p2-write-path-minimal-loop.md)：7 条不变量、5 个契约、最小 schema、状态机、11 条负向测试（N1–N11）、5 个待用户确认的开放问题。**设计稿，非实施授权** |
+| W-01 | （见评测报告） | 40 例 case + 双后端 harness + 冻结 Nowledge 基线 |
+| W-08 | （见交付记录） | 分支 + tag + release↔commit 映射 + 推 origin |
+
+**本轮新增的量化事实**：`/memories` 清单在 2,048 条时是 21 请求 / 5.18 MiB / 3.79 s，单轮实际 121 请求 / 5.73 MiB / 13.3 s；2 字符 CJK 走 bigram 后 1.5–2.2 ms（原全表扫描），零命中 trigram 查询 1.1 ms（原 26 ms）；2 字符 ASCII（`M3`）仍是 27 ms 全表扫描，如实保留为 P3 议题。
 
 ---
 
