@@ -14,7 +14,24 @@
 - [ ] P5 — Implement scoped Working Memory, handoffs, thread evidence and revocation propagation.
 - [ ] P6 — Validate NAS34 candidate deployment and pass migration gates before the user's switch-window decision.
 
-Readiness review (2026-10-07) re-baselined progress against these stages: `docs/design/nowledge-replacement-readiness.md`. It records gap list G1–G12 and work packages W-00–W-11; W-00 (data-contract fix), W-10 (sync metering) and W-01/W-02 (evaluation + lexical projection) are the next executable steps. The 14-day availability window closes 2026-10-10 13:14.
+Readiness review (2026-10-07) re-baselined progress against these stages: `docs/design/nowledge-replacement-readiness.md`. It records gap list G1–G12 and work packages W-00–W-11. The 14-day availability window closes 2026-10-10 13:14.
+
+Work packages (2026-10-07):
+
+- [x] W-00 data contract: `unit_type→kind`, claim_status default `undeclared`, registry-based `project` (576/2048 = 28.1% coverage, reported as a first-class number), honest `shadow_search` reply.
+- [x] W-02 retrieval projection: trigram `records_fts` + `cjk_bigrams` for 2-character CJK, per-path index trust with reported fallback (8 queries index vs forced scan: 0 differences).
+- [x] W-03 traffic experiment: `sync --manifest-cache-seconds` (default 0 = production unchanged). Live cadence **not** switched; 24h baseline accrues in `sync_runs`.
+- [x] W-04 source API probe: `/memories` has **no** incremental capability; `/fs/find` (lightweight listing) + `/fs/stat` (`updated_at`) found, but `since` filters on `created_at` only. See §5.5.1 of the readiness review for the revised P1 plan.
+- [x] W-05 off-host encrypted backup + timed restore drill (RTO 12.92 s, identity digest identical); daily launchd job.
+- [x] W-06 client access: Codex/Kimi/Grok real agent-driven calls (Grok re-registered); DSH plugin active. Residual: DSH new-session call.
+- [x] W-07 operation report generator + 7 alert thresholds (each proven to fire) + M1 hourly alert job + M3 daily log rotation.
+- [x] W-09 P2 write-path minimal design review (design only; 5 open questions need a user decision before implementation).
+- [x] W-10 sync metering: `sync_runs` + bounded `sync_errors` ledger, rolling 24h traffic in `status.metering`.
+- [x] W-11 thread coverage probe: 49/49 deepseek-harness threads map to the DSH session index; codex/grok do not (254/742 records total).
+- [ ] W-01 P0 evaluation: 40-case private corpus + dual-backend harness + frozen Nowledge baseline.
+- [ ] W-08 delivery: branch + tag + release↔commit mapping + push.
+
+**Still gated on time or a user decision**: the 14-day report (2026-10-10 13:14), the P1 cadence switch (needs the 24h baseline), and the P2 open questions in `docs/design/p2-write-path-minimal-loop.md` §7.
 
 Stage goals, dependencies, acceptance metrics and rollback are maintained in `docs/design/memory-roadmap.md`; architecture and retrieval contracts are design proposals, not current runtime features.
 

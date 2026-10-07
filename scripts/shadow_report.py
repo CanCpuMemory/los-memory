@@ -69,6 +69,45 @@ def fetch_status():
     return json.loads(result.stdout.decode())
 
 
+def disk_state():
+    """Data-directory growth, and the WAL that a reader must never copy raw."""
+    result = ssh(M3_HOST, "cd ~/.local/share/los-memory-shadow && "
+                          "du -sk . 2>/dev/null | cut -f1 && "
+                          "stat -f '%z' shadow.sqlite3 2>/dev/null && "
+                          "stat -f '%z' shadow.sqlite3-wal 2>/dev/null || true")
+    lines = [line.strip() for line in result.stdout.decode().splitlines() if line.strip()]
+    if result.returncode != 0 or not lines:
+        return {"error": "unavailable"}
+    values = [int(line) for line in lines if line.isdigit()]
+    return {"total_bytes": values[0] * 1024 if len(values) > 0 else None,
+            "db_bytes": values[1] if len(values) > 1 else None,
+            "wal_bytes": values[2] if len(values) > 2 else None}
+
+
+def handshake_state():
+    """Probe the *same* path clients use, so the report answers 'can clients reach it'.
+
+    A config file existing is not reachability; this performs a real MCP
+    initialize + tools/list over the launcher the clients point at.
+    """
+    script = ('printf \'%s\\n\' \'{"jsonrpc":"2.0","id":1,"method":"initialize",'
+              '"params":{"protocolVersion":"2025-06-18"}}\' '
+              '\'{"jsonrpc":"2.0","id":2,"method":"tools/list"}\' | '
+              '~/.local/share/los-memory-shadow/serve')
+    result = ssh(M3_HOST, script)
+    tools, server = None, None
+    for line in result.stdout.decode(errors="replace").splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("id") == 2 and "result" in payload:
+            tools = [entry["name"] for entry in payload["result"].get("tools", [])]
+        if payload.get("id") == 1 and "result" in payload:
+            server = payload["result"].get("serverInfo", {}).get("name")
+    return {"ok": tools is not None, "server": server, "tools": tools}
+
+
 def backup_state():
     if not LEDGER.exists():
         return {"last": None, "newest_age_hours": None}
@@ -162,7 +201,11 @@ def evaluate_alerts(status, stats, backups, runs):
     return alerts
 
 
-def render_markdown(stats, status, backups, alerts, generated_at):
+def _mb(value):
+    return "n/a" if not value else f"{value / 1048576:.1f} MiB"
+
+
+def render_markdown(stats, status, backups, alerts, generated_at, disk=None, handshake=None):
     lines = ["# 影子服务运行报告", "",
              f"生成时间：{generated_at}。数据来源：M3 `sync.out.log`、M3 影子库 `shadow status`、"
              "本机异机备份台账。只读采集。", ""]
@@ -219,6 +262,18 @@ def render_markdown(stats, status, backups, alerts, generated_at):
     else:
         lines.append("无告警：所有门槛（最旧验证 ≤24h、轮询未中断、无失败轮、索引 ready、"
                      "契约非空、清单未骤降、异机备份 ≤24h）均满足。")
+    if disk:
+        lines += ["", "## 6b. 磁盘与容量", "",
+                  "| 指标 | 实测 |", "| --- | --- |",
+                  f"| 数据目录 | {_mb(disk.get('total_bytes'))} |",
+                  f"| shadow.sqlite3 | {_mb(disk.get('db_bytes'))} |",
+                  f"| 预写日志 WAL | {_mb(disk.get('wal_bytes'))} |"]
+    if handshake is not None:
+        lines += ["", "## 6c. 客户端可达性（走客户端同一条路径实测）", "",
+                  "| 指标 | 实测 |", "| --- | --- |",
+                  f"| MCP 握手 | {'OK' if handshake.get('ok') else 'FAILED'} |",
+                  f"| serverInfo.name | {handshake.get('server')} |",
+                  f"| 工具面 | {handshake.get('tools')} |"]
     lines += ["", "## 7. 未达标项与口径说明", "",
               "- 14 天窗口的**正式**判定必须在窗口满 14 天后重跑本脚本；本报告若早于该时点，"
               "只作为滚动观察，不能当作门槛已通过。",
@@ -253,13 +308,16 @@ def main():
         print(json.dumps(record, ensure_ascii=False))
         raise SystemExit(1 if alerts else 0)
 
-    markdown = render_markdown(stats, status, backups, alerts, generated_at)
+    disk, handshake = disk_state(), handshake_state()
+    markdown = render_markdown(stats, status, backups, alerts, generated_at, disk, handshake)
     if args.out:
         Path(args.out).write_text(markdown)
     print(markdown)
     print(json.dumps({"stats": stats, "alerts": alerts,
                       "metering": status.get("metering"),
-                      "contract": status.get("contract")}, ensure_ascii=False, default=str),
+                      "contract": status.get("contract"),
+                      "disk": disk, "handshake": handshake},
+                     ensure_ascii=False, default=str),
           file=sys.stderr)
 
 

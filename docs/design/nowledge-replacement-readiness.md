@@ -282,6 +282,32 @@ cjk_bigrams(term, space, source_id)                  -- 中文双字辅助索引
 
 先做 **W-04 源 API 增量能力探测**（`updated_since` / cursor / ETag / 轻量 manifest）；无论结果如何，都要补：退避、时钟/睡眠恢复、同步锁（已有）、失败公平轮转（已有）、源实例识别、tombstone 传播、状态与告警、备份/日志保留上限。
 
+#### 5.5.1 W-04 探测结论（2026-10-07 实测，已落地到设计）
+
+探测结论**推翻了"有增量接口"这一分支**，同时发现了两条计划外的可用通路。详见[源 API 增量探测报告](../reports/2026-10-07-source-api-increment.md)。
+
+| 候选能力 | 结论 | 证据强度 |
+| --- | --- | --- |
+| `/memories` 时间增量（10 个候选参数） | ❌ 不支持 | 强：极早/极晚两值响应**逐字节相同**；阳性对照（`space_id` 非法值 → 422）证明非假阴性；`/openapi.json` 与官方文档均无这些参数 |
+| 条件请求（ETag / Last-Modified / 304） | ❌ 不支持 | 强：列表与单条均无相关响应头；`If-None-Match`/`If-Modified-Since` 都回 200 |
+| `/memories` 轻量清单（`fields`/`select`/`include=id`） | ❌ 不支持 | 强：全部被静默忽略，仍返回 5.18 MiB 含正文 |
+| 变更流端点（`/changes`、`/sync` 等） | ❌ 不存在 | 强：全 404 |
+| **`/fs/find?path=/memories`** | ✅ 可用，且是轻量清单 | 强：只返回 `path`+`snippet`（**无 content**），游标分页（`next_cursor`）。本轮独立复验：首屏 55,025 B，结构为 `{paths, next_cursor}` |
+| **`/fs/stat?path=…/by-id/<id>.memory.md`** | ✅ 可用，且是**唯一暴露 `updated_at` 的入口** | 强：约 349 B/条 |
+| `/fs/find` 的 `since`/`until` | ⚠️ 生效但**只按 `created_at`** | 强：决定性实验——一条 created 05:34:46 / updated 05:36:35 的记录，用 `since=05:35:40` **查不到它**。抽样 81 条中 14 条（≈17.3%）被改过 |
+
+**因此 P1 的正确方案是三层，而不是"cursor 变更流"**：
+
+1. **低频全量清单**：`/fs/find?path=/memories`（实测 0.58 MiB / 3 请求，对比现状 5.18 MiB / 21 请求）——它也是**唯一能发现删除**的手段（源端无 tombstone 信号）。
+2. **高频抓新增**：`/fs/find?since=<游标>` —— 只是新增检测器，**不能**当变更检测器。
+3. **逐 ID 比对 `updated_at`**：`/fs/stat`，全量扫一遍约 0.70 MiB（现状的 13.5%）；识别出变更的 ID 才拉正文。
+
+识别变更后再对这批 ID 走 `/memories/{id}` 取规范正文（**不能用列表项或 snippet 当正文**，与既有原则一致）。
+
+**风险与降级（必须写进实现）**：`/fs/find` 与 `/fs/stat` 未被官方 `sync.md` 覆盖（官方 sync 文档明确"one Mem hub and many clients"，即不承诺多主增量复制），稳定性无保障 → 实现里必须有自检，一旦这些端点行为变化或不可用，**降级到全量 `/memories` 清单**并告警，而不是静默漏数据。另外 `/fs/find` 不带 `state` 过滤（返回 2,118 条 = `state=all`，而非 active 的 2,048），未识别的 `state` 值会被静默降级为"不过滤"，所以参数拼写必须自行校验。
+
+**当前已实现的部分**：`sync --manifest-cache-seconds N`（默认 0 = 现网不变）已经能做第 1+2 层的近似（低频清单 + 高频按 ID 刷新）；第 3 层（`/fs/stat` 比对 `updated_at`）尚未实现，是 P1 的下一步。
+
 ### 5.6 会话/线程层的可借力量（P5 前置）
 
 门槛 5 要求"会话索引"，而 DSH 侧已存在一个相邻资产：`~/.dsh/storages/session-index.db`（1,021 会话 / 事件 EAV + FTS5 投影，另有 `run-diff` 事件级 A/B 工具）。建议：

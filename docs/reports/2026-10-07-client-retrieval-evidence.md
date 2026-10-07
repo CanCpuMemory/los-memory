@@ -8,10 +8,28 @@
 
 | 客户端 | 接入配置 | 握手 | 发现工具 | 真实 agent 调用 |
 | --- | --- | --- | --- | --- |
-| Codex | `~/.codex/config.toml` `[mcp_servers.los-memory-shadow]` | ✅ | — | ✅ `mcp: los-memory-shadow/shadow_status started / (completed)` |
-| Kimi | `~/.kimi-code/mcp.json` | ✅ | — | ✅ 模型自述 `mcp__los-memory-shadow__shadow_status` 并返回 JSON |
-| Grok | **本轮补注册**（此前 0 server） | ✅ `handshake OK (2025-06-18)` | ✅ `3 tools discovered` | ✅ `grok -p … --always-approve` |
+| Codex | `~/.codex/config.toml` `[mcp_servers.los-memory-shadow]` | ✅ | — | ✅ `shadow_status`：`mcp: los-memory-shadow/shadow_status started / (completed)` |
+| Kimi | `~/.kimi-code/mcp.json` | ✅ | — | ✅ `shadow_status` + ✅ `shadow_get` |
+| Grok | **本轮补注册**（此前 0 server） | ✅ `handshake OK (2025-06-18)` | ✅ `3 tools discovered` | ✅ `shadow_status` + ✅ `shadow_get` |
 | DSH | `dsh-mcp-los-memory-shadow` bundle（link 到 `dsplugins/dsh-mcp-los-memory-shadow`） | — | — | ⚠️ 插件树 active，工具可见性需新会话（见下） |
+
+## 按 ID 读取（`shadow_get`）的真实取证
+
+门槛 4 要求"检索**和**按 ID 读取"两项。`shadow_status` 之外，本轮补做了 `shadow_get`：
+
+```sh
+ID=6d24e90a-de0d-4eb5-9a9d-1ec801ad6cf2     # 真实记录：批准 los-memory 双轨验证后迁移（2026-09-26）
+kimi -p '用 los-memory-shadow 的 shadow_get 读取 source_id=…，原样贴出返回 JSON 的 title/digest'
+  title:  批准 los-memory 双轨验证后迁移（2026-09-26）
+  digest: 5cd13fc1bd0dd0c156fa91a3a8326f3eae6fb3468dfc4f5115dc2bad4730aa71
+
+grok -p '…同上…' --always-approve
+  title / digest 与 Kimi 完全一致
+```
+
+**独立复核**：该 digest 直接查影子库 `records.digest` 也是
+`5cd13fc1bd0dd0c156fa91a3a8326f3eae6fb3468dfc4f5115dc2bad4730aa71` —— 与两个客户端返回的一致，
+说明不是客户端或适配层编造的值。
 
 四个客户端拿到的 `shadow_status` 是**同一份** JSON（`total: 2048`、`search_index.state: "ready"`、`contract.project_coverage: 0.2812`、`metering.requests: 121`、`bytes: 5735247`），可交叉印证：影子服务、MCP 适配层、客户端注入三处一致，不存在某个客户端拿到陈旧或裁剪过的字段。
 
@@ -74,6 +92,6 @@ pnpm dsh --profile web --dump-config | grep -A12 'mcp-los-memory-shadow'
 
 ## 残留缺口
 
-1. **按 ID 读取（`shadow_get`）尚未在任一客户端做真实调用**：本轮四个客户端验证的都是 `shadow_status`。门槛 4 要求"检索**和**按 ID 读取"两项，`shadow_get` 还缺真实取证。
-2. **DSH 新会话内的真实调用**未取证（插件树 active，但工具可见性需新会话）。
-3. 本轮未做"用影子结果回答一个真实问题并与 Nowledge 对比"的任务级验证——那属于 W-01 评测夹具的范围，不在本项。
+1. **DSH 新会话内的真实调用**未取证：插件树 active（`include:mcp-los-memory-shadow`，0 failed），但注入时序决定新工具只在新会话可见。判定依据已满足（插件 active），端到端留证留给下一个 DSH 会话，约 30 秒可完成。
+2. 本轮未做"用影子结果回答一个真实问题并与 Nowledge 对比"的任务级验证——那属于 W-01 评测夹具的范围。评测报告见 `2026-10-07-eval-baseline.md`。
+3. 三个客户端的 `shadow_status` 是同一份数据，说明**接入**一致；但它们返回的 JSON 完全相同的另一个原因是该查询本身是常量性的（不带参数）。这不构成"检索质量一致"的证据。
