@@ -33,6 +33,8 @@ grok -p '…同上…' --always-approve
 
 四个客户端拿到的 `shadow_status` 是**同一份** JSON（`total: 2048`、`search_index.state: "ready"`、`contract.project_coverage: 0.2812`、`metering.requests: 121`、`bytes: 5735247`），可交叉印证：影子服务、MCP 适配层、客户端注入三处一致，不存在某个客户端拿到陈旧或裁剪过的字段。
 
+> 注：`project_coverage: 0.2812` 是**取证当时**的真实值。随后修掉了"多项目记录按 label 顺序取第一个"的实现 bug（见 `nowledge-replacement-readiness.md` §5.2），该值更新为 557/2,048 = 27.2%、另 19 条标 `multi`。本报告记录的是当时的观测，不回改。
+
 ## Grok 修复
 
 此前 Grok 是掉的：`~/.grok/config.toml` 0 server，从 `~/.claude.json` 继承的 5 个里没有影子。补注册命令：

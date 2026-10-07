@@ -21,6 +21,11 @@ packages `memory_tool/**/*.py` only.
 """
 
 UNASSIGNED = "unassigned"
+# A record can genuinely carry more than one registered project label (measured
+# 2026-10-07: 19 of 2,048 records, e.g. cantool+lot2extension). Resolving that by
+# whichever label happens to come first in `label_ids` is guessing, and the order
+# is not meaningful. Such records are marked `multi` instead.
+MULTI = "multi"
 
 # label -> project_id. Observed record counts on 2026-10-07 are in comments so a
 # reviewer can see how much coverage each entry actually buys.
@@ -49,18 +54,40 @@ NON_PROJECT_LABELS = {
 
 
 def project_for(label_ids, source_app="", thread_source=""):
-    """Return the registered project id for a record, else ``unassigned``.
+    """Return the registered project id for a record.
 
     ``source_app`` and ``thread_source`` are accepted for signature stability and
     forward compatibility, but they are deliberately **not** used to infer a
     project: they identify the host app, not the project.
+
+    Returns ``MULTI`` when the record carries two or more distinct registered
+    projects — that is a real property of the record, not something to resolve by
+    label order. Retrieval still finds such a record under *each* of its projects
+    because filtering goes through label membership (see ``labels_for``), so
+    marking it ``multi`` costs no recall.
     """
-    if not isinstance(label_ids, (list, tuple)):
+    projects = projects_for(label_ids)
+    if not projects:
         return UNASSIGNED
-    for label in label_ids:
-        if isinstance(label, str) and label in PROJECT_LABELS:
-            return PROJECT_LABELS[label]
-    return UNASSIGNED
+    return projects[0] if len(projects) == 1 else MULTI
+
+
+def projects_for(label_ids):
+    """All distinct registered projects a record's labels map to, sorted."""
+    if not isinstance(label_ids, (list, tuple)):
+        return []
+    return sorted({PROJECT_LABELS[label] for label in label_ids
+                   if isinstance(label, str) and label in PROJECT_LABELS})
+
+
+def labels_for(project):
+    """The label set that makes a record belong to ``project``.
+
+    This is what makes a project filter a set membership test rather than an
+    equality test on one projected column: a cantool+lot2extension record is
+    findable under either project.
+    """
+    return sorted(label for label, value in PROJECT_LABELS.items() if value == project)
 
 
 def known_projects():

@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .shadow_registry import UNASSIGNED, project_for
+from .shadow_registry import MULTI, UNASSIGNED, labels_for, project_for
 
 
 DEFAULT_DB = Path.home() / ".local/share/los-memory-shadow/shadow.sqlite3"
@@ -148,7 +148,8 @@ def facets(record):
     ``metadata.project`` declaration, else ``unassigned``. Nothing is inferred
     from directory names, thread titles or the host app — the architecture design
     forbids guessing a project, and guessing is how cross-project isolation
-    silently breaks.
+    silently breaks. A record carrying several registered projects becomes
+    ``multi`` rather than being resolved by label order.
     """
     metadata = record.get("metadata") or {}
     labels = [item for item in (record.get("label_ids") or []) if isinstance(item, str)]
@@ -292,16 +293,19 @@ def coverage(conn, space="default"):
     total = conn.execute("SELECT count(*) FROM records WHERE space=? AND active=1",
                          (space,)).fetchone()[0]
     if not total:
-        return {"records": 0, "project_assigned": 0, "project_unassigned": 0,
+        return {"records": 0, "project_assigned": 0, "project_unassigned": 0, "project_multi": 0,
                 "claim_undeclared": 0, "kind_unknown": 0, "project_coverage": 0.0}
     row = conn.execute(
-        "SELECT sum(f.project<>'unassigned') assigned, sum(f.claim_status='undeclared') undeclared, "
+        "SELECT sum(f.project NOT IN ('unassigned','multi')) assigned, "
+        "sum(f.project='multi') multi, sum(f.claim_status='undeclared') undeclared, "
         "sum(f.kind='unknown') unknown FROM record_facets f JOIN records r "
         "ON r.space=f.space AND r.source_id=f.source_id WHERE f.space=? AND r.active=1",
         (space,)).fetchone()
     assigned = row["assigned"] or 0
     return {"records": total, "project_assigned": assigned,
-            "project_unassigned": total - assigned, "claim_undeclared": row["undeclared"] or 0,
+            "project_unassigned": total - assigned - (row["multi"] or 0),
+            "project_multi": row["multi"] or 0,
+            "claim_undeclared": row["undeclared"] or 0,
             "kind_unknown": row["unknown"] or 0, "project_coverage": round(assigned / total, 4)}
 
 
@@ -360,8 +364,19 @@ def search_detailed(conn, query, limit=10, project=None, kind=None, space="defau
                "ON f.space=r.space AND f.source_id=r.source_id WHERE r.space=? AND r.active=1")
         params = [space]
         if project is not None:
-            sql += " AND f.project=?"
-            params.append(project)
+            # A project filter is set membership, not equality on one projected
+            # column: a record labelled both cantool and lot2extension must be
+            # findable under either. Records that declared `metadata.project`
+            # without a registered label are still matched by equality.
+            registered = labels_for(project)
+            if registered:
+                marks = ",".join("?" for _ in registered)
+                sql += (" AND (EXISTS (SELECT 1 FROM record_labels rl WHERE rl.space=r.space "
+                        f"AND rl.source_id=r.source_id AND rl.label IN ({marks})) OR f.project=?)")
+                params.extend(registered + [project])
+            else:
+                sql += " AND f.project=?"
+                params.append(project)
         if kind is not None:
             sql += " AND f.kind=?"
             params.append(kind)

@@ -13,7 +13,15 @@
 - `meta.scan_terms`：未能被索引覆盖的词；非空即表示该词仍靠扫描。
 - `meta.coverage`：只要带了 `project` 或 `kind` 过滤就会出现，说明过滤能覆盖多少记录。
 
-**`project` 过滤的真实语义（2026-10-07 实测）**：Nowledge 没有 project 字段——2,048 条记录里 `metadata.project` 出现 **0 次**。project 只在满足以下任一条件时才有值：① 记录带注册过的 label（见 `memory_tool/shadow_registry.py`）；② 记录显式声明 `metadata.project`。两者都没有时是 `unassigned`，**不从目录名、线程标题或宿主 app 猜测**。当前覆盖率 **576 / 2,048（28.1%）**，其余 1,472 条 `unassigned`。因此：
+**`project` 过滤的真实语义（2026-10-07 实测）**：Nowledge 没有 project 字段——2,048 条记录里 `metadata.project` 出现 **0 次**。project 只在满足以下任一条件时才有值：① 记录带注册过的 label（见 `memory_tool/shadow_registry.py`）；② 记录显式声明 `metadata.project`。两者都没有时是 `unassigned`，**不从目录名、线程标题或宿主 app 猜测**。
+
+`project` **不是单值相等**，而是**标签集合成员关系**。一条记录可能真的同时属于两个项目（实测 19 / 2,048 条，例如同时带 `label_cantool` 与 `label_lot2extension`）：
+
+- 这类记录在 `record_facets.project` 里标成 **`multi`**，而不是"按 label 出现顺序取第一个"——顺序没有语义，那样等于猜。
+- 但**过滤不受影响**：`project=cantool` 与 `project=lot2extension` 都能召回它。过滤走 `record_labels` 的成员判定，不是投影列相等。
+- 显式声明 `metadata.project` 且没有注册 label 的记录仍按相等匹配。
+
+当前覆盖：`project_assigned` **557 / 2,048（27.2%）**，`project_multi` 19，其余 `unassigned`。因此：
 
 > `project` 过滤后的空结果**不等于**"这个项目没有记忆"，只等于"该项目的可归属子集里没有"。看 `meta.coverage` 再下结论。
 

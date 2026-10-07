@@ -18,7 +18,7 @@ Readiness review (2026-10-07) re-baselined progress against these stages: `docs/
 
 Work packages (2026-10-07):
 
-- [x] W-00 data contract: `unit_type→kind`, claim_status default `undeclared`, registry-based `project` (576/2048 = 28.1% coverage, reported as a first-class number), honest `shadow_search` reply.
+- [x] W-00 data contract: `unit_type→kind`, claim_status default `undeclared`, registry-based `project` set semantics (557/2048 = 27.2% assigned, 19 `multi`), honest `shadow_search` reply.
 - [x] W-02 retrieval projection: trigram `records_fts` + `cjk_bigrams` for 2-character CJK, per-path index trust with reported fallback (8 queries index vs forced scan: 0 differences).
 - [x] W-03 traffic experiment: `sync --manifest-cache-seconds` (default 0 = production unchanged). Live cadence **not** switched; 24h baseline accrues in `sync_runs`.
 - [x] W-04 source API probe: `/memories` has **no** incremental capability; `/fs/find` (lightweight listing) + `/fs/stat` (`updated_at`) found, but `since` filters on `created_at` only. See §5.5.1 of the readiness review for the revised P1 plan.

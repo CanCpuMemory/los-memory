@@ -231,7 +231,11 @@ indexes: 除主键隐式索引外，无任何额外索引；无 FTS 表
 | `created_at` | 顶层 `created_at` | `time`（相对展示字段）已排除出 digest，继续保持 |
 | `space` | `space_id`，当前仅 `default` | 其他 space 需独立授权与隔离 |
 
-原始方案把 `label_<project>` 当成可推断的形态；实测 2,341 个 label 里项目名与主题名（`label_architecture`、`label_verification`、`label_daily`…）混在同一扁平命名空间，无法自动区分。因此改为**显式注册表白名单 + 显式声明兜底**，未注册一律 `unassigned`，并把实际覆盖率当作一等输出（`status.contract.project_coverage`）。实测 576 / 2,048 = 28.1%。
+原始方案把 `label_<project>` 当成可推断的形态；实测 2,341 个 label 里项目名与主题名（`label_architecture`、`label_verification`、`label_daily`…）混在同一扁平命名空间，无法自动区分。因此改为**显式注册表白名单 + 显式声明兜底**，未注册一律 `unassigned`，并把实际覆盖率当作一等输出（`status.contract.project_coverage`）。
+
+**多项目修正是本轮自测发现的第二个实现 bug**：一条记录可能真的同时带两个注册 label（实测 19 / 2,048，例如 `label_cantool` + `label_lot2extension`）。最初的实现对 `label_ids` 顺序取第一个命中——那是按列表顺序猜，而顺序没有语义。修正为：① `project` 标成保留值 `multi`，不再假装单值；② **过滤改为标签集合成员关系**（`record_labels` EXISTS），所以 `project=cantool` 与 `project=lot2extension` 都能召回该记录，标记 `multi` 不损失召回。
+
+实测覆盖：`project_assigned` **557 / 2,048（27.2%）**、`project_multi` 19、其余 `unassigned`。（此前报告的 28.1% 把 19 条多归属记录按顺序算成了"已归属单项目"，偏高。）
 
 同时修正文档：`SHADOW_MEMORY.md` 的 `project?` 说明、`memory-service-architecture.md` §5 的 `kind` 词表、`memory-roadmap.md` 中依赖 `kind` 的表述。
 

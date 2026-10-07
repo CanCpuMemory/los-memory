@@ -426,3 +426,34 @@ def test_projected_traffic_uses_intervals_not_run_count(conn):
     # 300 B/run * 288 runs. Tolerance absorbs sub-second jitter in the timestamps;
     # the bug this pins would show up as ~172800 (a factor of two).
     assert abs(metered["projected_bytes_per_day"] - 86400) < 500
+
+
+# --- multi-project records: a real property, not a label-order coin flip --------
+
+def test_multi_project_record_is_marked_not_guessed(conn):
+    """19 of 2,048 real records carry two registered project labels. Picking
+    whichever came first in `label_ids` is guessing; the order is not meaningful."""
+    from memory_tool.shadow import facets
+    both = canonical("a", label_ids=["label_cantool", "label_lot2extension"])
+    assert facets(both)["project"] == "multi"
+    single = canonical("b", label_ids=["label_cantool", "label_architecture"])
+    assert facets(single)["project"] == "cantool", "a non-project label must not create ambiguity"
+    # Reordered labels must not change the answer — that was the bug.
+    assert facets(canonical("c", label_ids=["label_lot2extension", "label_cantool"]))["project"] == "multi"
+
+
+def test_multi_project_record_is_findable_under_each_of_its_projects(conn):
+    """Marking it `multi` must not cost recall: the filter is label membership."""
+    from memory_tool.shadow import search_detailed
+    put(conn, "default", canonical("multi1", title="shared body words",
+                                   content="shared body words",
+                                   label_ids=["label_cantool", "label_lot2extension"]))
+    put(conn, "default", canonical("onlytool", title="shared body words",
+                                   content="shared body words",
+                                   label_ids=["label_cantool"]))
+    assert sorted(r["source_id"] for r in search(conn, "shared body", project="cantool")) == \
+        ["multi1", "onlytool"]
+    assert [r["source_id"] for r in search(conn, "shared body", project="lot2extension")] == ["multi1"]
+    coverage = search_detailed(conn, "shared body", project="cantool")[1]["coverage"]
+    assert coverage["project_multi"] == 1
+    assert coverage["project_assigned"] == 1, "only the unambiguous record counts as assigned"
