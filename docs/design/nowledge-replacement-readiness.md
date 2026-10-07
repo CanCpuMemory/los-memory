@@ -404,7 +404,7 @@ cjk_bigrams(term, space, source_id)                  -- 中文双字辅助索引
 
 | 包 | 状态 | 证据 |
 | --- | --- | --- |
-| W-00 | ✅ 完成 | `record_facets`/`record_labels` + `shadow_registry.py`；`shadow_search` 诚实化（`{results, meta}` + `meta.coverage`）；`SHADOW_MEMORY.md`/`CURRENT_STATE.md` 已改；M3 实测 project 覆盖 576/2048 = 28.1%，`claim_undeclared` 1,350 |
+| W-00 | ✅ 完成 | `record_facets`/`record_labels` + `shadow_registry.py`；`shadow_search` 诚实化（`{results, meta}` + `meta.coverage`）；`SHADOW_MEMORY.md`/`CURRENT_STATE.md` 已改；M3 实测 project 明确归属 557/2048 = 27.2%、`multi` 19（多项目记录不再按 label 顺序猜，过滤走标签集合成员关系）、`claim_undeclared` 1,350 |
 | W-02 | ✅ 完成 | trigram `records_fts`（另一路先落地）+ `cjk_bigrams` 补 2 字符中文；`meta.mode/paths/scan_terms/usable`；索引未建时回退扫描并上报。一致性抽检 8 查询索引 vs 强制扫描 **0 处不一致** |
 | W-10 | ✅ 完成 | `sync_runs` 计量 + `sync_errors` 有界台账；`status.metering` 给出滚动 24h 请求/字节/错误与预计日流量 |
 | W-03 | 🟡 实现完成，现网未切 | `sync --manifest-cache-seconds N`（默认 0 = 现网不变）；单轮实测已测，24h 基线由新计量表自然累积，切换判据见 §5.5 |
