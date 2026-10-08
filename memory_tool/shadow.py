@@ -28,6 +28,10 @@ FTS_MIN_TERM = 3
 # Error-ledger bound per space, and the metering window reported by status().
 ERROR_LEDGER_CAP = 500
 METERING_WINDOW_HOURS = 24
+# How often a deactivated (404) record is re-probed. Deletions are discovered by
+# the manifest anyway; this is only a safety net for an upstream restore, so it
+# runs on a slow cycle instead of every rotation (which inflated `missing`).
+TOMBSTONE_RECHECK_SECONDS = 24 * 3600
 
 # CJK ranges whose 2-character terms trigram cannot serve (measured 2026-10-07
 # on SQLite 3.53: trigram matches 迁移门 but not 记忆).
@@ -587,14 +591,28 @@ def sync(conn, client, batch=100, space="default", manifest_cache_seconds=0):
     start_bytes = getattr(client, "bytes", 0) or 0
     try:
         manifest, report["manifest_cached"] = load_manifest(conn, client, space, manifest_cache_seconds)
-        existing = {row["source_id"]: row["verified_at"] for row in
-                    conn.execute("SELECT source_id,verified_at FROM records WHERE space=?", (space,))}
+        records = {row["source_id"]: (row["verified_at"], row["active"]) for row in
+                   conn.execute("SELECT source_id,verified_at,active FROM records WHERE space=?", (space,))}
         attempts = {row["source_id"]: row["attempted_at"] for row in
                     conn.execute("SELECT source_id,attempted_at FROM attempts WHERE space=?", (space,))}
-        candidates = sorted(manifest | set(existing),
-                            key=lambda source_id: (attempts.get(source_id, existing.get(source_id, 0)), source_id))
+        now = time.time()
+        tombstone_cutoff = now - TOMBSTONE_RECHECK_SECONDS
+        # A record the source reported as gone is deactivated but kept, so an
+        # upstream restore is still picked up and the deletion stays auditable.
+        # Re-probing it on every rotation was self-inflicted traffic: the 12
+        # inactive records in the live mirror produced the 0 -> 33 -> 116 `missing`
+        # counts in the daily report, which then reads as a wave of deletions.
+        # Tombstones are re-checked on a slow cycle instead.
+        candidates = set(manifest)
+        candidates.update(
+            source_id for source_id, (verified_at, active) in records.items()
+            if active or attempts.get(source_id, verified_at) <= tombstone_cutoff)
+        ordered = sorted(candidates, key=lambda source_id: (
+            attempts.get(source_id, records.get(source_id, (0, 1))[0]), source_id))
         report["manifest_count"] = len(manifest)
-        for source_id in candidates[:batch]:
+        report["tombstones_deferred"] = len(records) - sum(
+            1 for source_id in records if source_id in candidates)
+        for source_id in ordered[:batch]:
             failure = None
             try:
                 record = client.get(source_id, space)
@@ -718,8 +736,36 @@ def classify_query(query):
     return "conceptual"
 
 
-def compare_paths(state_dir=None):
-    base = Path(state_dir) if state_dir else DEFAULT_DB.expanduser().parent
+def database_path(conn):
+    """Return the file behind an open connection, or None for in-memory databases.
+
+    The compare ledger is derived state and must live beside the mirror it
+    describes. Resolving it from the connection (rather than from the process's
+    default path) is what stops a run against a fixture database from writing
+    entries into the operator's production state directory.
+    """
+    for row in conn.execute("PRAGMA database_list"):
+        # Positional: a caller may hand us a connection without a row_factory.
+        # PRAGMA database_list yields (seq, name, file).
+        name, path = row[1], row[2]
+        if name == "main" and path:
+            return Path(path)
+    return None
+
+
+def compare_paths(state_dir=None, conn=None):
+    """Resolve the compare ledger paths for a mirror.
+
+    ``state_dir`` wins when given; otherwise the directory of ``conn``'s database
+    file is used, so the ledger always sits next to the mirror it belongs to.
+    Falls back to the historical default only when neither is available (an
+    in-memory connection), which keeps existing callers working.
+    """
+    if state_dir:
+        base = Path(state_dir)
+    else:
+        db_path = database_path(conn) if conn is not None else None
+        base = db_path.parent if db_path is not None else DEFAULT_DB.expanduser().parent
     return {"pending": base / "compare-pending.jsonl",
             "results": base / "compare-results.jsonl",
             "cache": base / "compare-cache.json"}
@@ -742,7 +788,7 @@ def record_compare(conn, query, limit=10, space="default", state_dir=None):
     the divergence record are produced by `drain_compare`.
     """
     payload = compare_shadow(conn, query, limit=limit, space=space)
-    paths = compare_paths(state_dir)
+    paths = compare_paths(state_dir, conn=conn)
     paths["pending"].parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     stamp = time.time()
     row = {"ts": stamp, "query": query, "limit": limit, "space": space,

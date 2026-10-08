@@ -1,4 +1,5 @@
 import json
+import time
 import urllib.error
 
 import pytest
@@ -67,6 +68,97 @@ def test_manifest_absence_requires_canonical_confirmation(conn):
     assert sync(conn, source)["missing"] == 1
     assert get(conn, "alpha") is None
     assert conn.execute("SELECT count(*) FROM revisions").fetchone()[0] == 1
+
+
+def test_tombstones_are_not_reprobed_every_rotation(conn):
+    """A 404'd record must not be re-fetched on every rotation.
+
+    Regression: the candidate set was `manifest | every record`, so the 12
+    inactive rows in the live mirror were re-probed continuously and each 404
+    incremented `missing` — producing the 0 -> 33 -> 116 counts in the daily
+    report that read like a wave of deletions.
+    """
+    from memory_tool import shadow
+
+    class Source:
+        def __init__(self):
+            self.gone = False
+            self.fetches = []
+
+        def ids(self, space):
+            return {"alpha"}
+
+        def get(self, source_id, space):
+            self.fetches.append(source_id)
+            if self.gone:
+                raise urllib.error.HTTPError("redacted", 404, "not found", {}, None)
+            return record()
+
+    source = Source()
+    sync(conn, source)
+    source.gone = True
+    assert sync(conn, source)["missing"] == 1
+    assert shadow.get(conn, "alpha") is None
+
+    # The manifest still lists it, so it is retried while the source still says it
+    # exists; once it leaves the manifest it must stop being probed every rotation.
+    source.fetches.clear()
+    report = sync(conn, source)
+    assert report["missing"] == 1, "a record still in the manifest is still live"
+
+    class EmptyManifest(Source):
+        def ids(self, space):
+            return set()
+
+    quiet = EmptyManifest()
+    quiet.gone = True
+    report = sync(conn, quiet)
+    assert report["missing"] == 0
+    assert quiet.fetches == [], "a tombstone was re-probed inside the recheck window"
+    assert report["tombstones_deferred"] == 1
+
+
+def test_tombstone_is_rechecked_after_the_interval(conn):
+    from memory_tool import shadow
+
+    class Source:
+        def __init__(self):
+            self.gone = False
+
+        def ids(self, space):
+            return {"alpha"}
+
+        def get(self, source_id, space):
+            if self.gone:
+                raise urllib.error.HTTPError("redacted", 404, "not found", {}, None)
+            return record()
+
+    source = Source()
+    sync(conn, source)
+    source.gone = True
+    sync(conn, source)
+    assert shadow.get(conn, "alpha") is None
+
+    # Age the last attempt past the recheck window: the tombstone becomes eligible.
+    conn.execute("UPDATE attempts SET attempted_at = ? WHERE source_id = 'alpha'",
+                 (time.time() - shadow.TOMBSTONE_RECHECK_SECONDS - 60,))
+    conn.commit()
+
+    class EmptyManifest(Source):
+        def ids(self, space):
+            return set()
+
+    fresh = EmptyManifest()
+    fresh.gone = True
+    assert sync(conn, fresh)["missing"] == 1, "an aged tombstone must be re-checked"
+
+    # And a source that has restored the record brings it back.
+    restored = EmptyManifest()
+    sync(conn, restored)
+    conn.execute("UPDATE attempts SET attempted_at = 0 WHERE source_id = 'alpha'")
+    conn.commit()
+    sync(conn, restored)
+    assert shadow.get(conn, "alpha") is not None, "a restored record must reactivate"
 
 
 def test_sync_prioritizes_unhydrated_and_validates_identity(conn):
@@ -502,6 +594,72 @@ def test_mcp_compare_queues_and_says_answer_from_the_primary(conn):
     assert payload["comparison"]["queued"] is True
     assert "answer from the primary" in payload["comparison"]["note"]
     assert payload["results"][0]["source_id"] == "a"
+
+
+def test_mcp_compare_queues_beside_the_served_database(conn, tmp_path):
+    """The queue must land next to the mirror it describes, not in the operator's
+    default state directory.
+
+    Regression: the MCP path called ``record_compare`` without ``state_dir``, so
+    every run of this test appended an entry to
+    ``~/.local/share/los-memory-shadow/compare-pending.jsonl`` — the production
+    directory of whatever machine ran pytest. Ten such entries were found
+    stranded there, matching the ten times this test had run, each carrying the
+    fixture's ``source_id == "a"``.
+    """
+    from memory_tool import shadow
+    from memory_tool.shadow_mcp import dispatch
+    put(conn, "default", indexed_record("a", "冷层 与热数据", "冻结副本迁移"))
+
+    dispatch(conn, {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "shadow_compare", "arguments": {"query": "冷层 热数据"}}})
+
+    expected = tmp_path / "private" / "compare-pending.jsonl"
+    assert expected.exists(), "the queue did not land beside the served database"
+    assert shadow.compare_paths(conn=conn)["pending"] == expected
+    entries = [json.loads(line) for line in expected.read_text().splitlines() if line.strip()]
+    assert entries[-1]["shadow_ids"] == ["a"]
+
+
+def test_compare_paths_follows_the_connection_not_the_process_default(conn, tmp_path, monkeypatch):
+    from memory_tool import shadow
+    sentinel = tmp_path / "sentinel"
+    sentinel.mkdir()
+    monkeypatch.setattr(shadow, "DEFAULT_DB", sentinel / "shadow.sqlite3")
+
+    paths = shadow.compare_paths(conn=conn)
+    assert paths["pending"] == tmp_path / "private" / "compare-pending.jsonl"
+
+    shadow.record_compare(conn, "冷层 热数据", limit=5)
+    assert paths["pending"].exists()
+    assert not (sentinel / "compare-pending.jsonl").exists(), (
+        "a run against a fixture database wrote into the default state directory")
+
+
+def test_compare_paths_explicit_state_dir_still_wins(conn, tmp_path):
+    from memory_tool.shadow import compare_paths
+    explicit = tmp_path / "elsewhere"
+    assert compare_paths(explicit, conn=conn)["pending"] == explicit / "compare-pending.jsonl"
+    assert compare_paths(explicit)["pending"] == explicit / "compare-pending.jsonl"
+
+
+def test_compare_paths_falls_back_to_default_for_in_memory(monkeypatch, tmp_path):
+    """``PRAGMA database_list`` reports no file for :memory:, so the historical
+    default is the only answer available — keep it working rather than crash."""
+    import sqlite3
+    from memory_tool import shadow
+    fallback = tmp_path / "fallback"
+    monkeypatch.setattr(shadow, "DEFAULT_DB", fallback / "shadow.sqlite3")
+    memory_conn = sqlite3.connect(":memory:")
+
+    assert shadow.database_path(memory_conn) is None
+    assert shadow.compare_paths(conn=memory_conn)["pending"] == fallback / "compare-pending.jsonl"
+    memory_conn.close()
+
+
+def test_database_path_reports_the_open_file(conn, tmp_path):
+    from memory_tool.shadow import database_path
+    assert database_path(conn) == tmp_path / "private" / "shadow.db"
 
 
 def test_drain_writes_divergence_and_is_idempotent(conn, tmp_path, monkeypatch):
