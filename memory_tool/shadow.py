@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from .shadow_registry import MULTI, UNASSIGNED, labels_for, project_for
+from .utils import like_pattern
 
 
 DEFAULT_DB = Path.home() / ".local/share/los-memory-shadow/shadow.sqlite3"
@@ -827,16 +828,26 @@ def _resolve_command(command):
 
 
 def _nowledge_ids(query, limit, command, timeout):
-    """Run the primary's own search CLI. Measured at ~13 s, hence the queue."""
+    """Run the primary's own search CLI. Measured at ~13 s, hence the queue.
+
+    Never raises: a missing binary, a timeout and unparseable output all come back
+    through the third element. Callers get one error channel instead of two, which
+    is what a scheduled job needs — an exception here would take down the whole run
+    rather than record one failed lookup.
+    """
     started = time.perf_counter()
-    result = subprocess.run([command, "memories", "search", query, "-n", str(limit), "-j"],
-                            capture_output=True, text=True, timeout=timeout)
-    elapsed = time.perf_counter() - started
-    if result.returncode != 0:
-        return None, elapsed, (result.stderr or "").strip()[:200]
-    payload = json.loads(result.stdout)
-    items = payload.get("memories", payload) if isinstance(payload, dict) else payload
-    return [item["id"] for item in items if isinstance(item, dict) and item.get("id")], elapsed, None
+    try:
+        result = subprocess.run([command, "memories", "search", query, "-n", str(limit), "-j"],
+                                capture_output=True, text=True, timeout=timeout)
+        elapsed = time.perf_counter() - started
+        if result.returncode != 0:
+            return None, elapsed, (result.stderr or "").strip()[:200]
+        payload = json.loads(result.stdout)
+        items = payload.get("memories", payload) if isinstance(payload, dict) else payload
+        return ([item["id"] for item in items if isinstance(item, dict) and item.get("id")],
+                elapsed, None)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return None, time.perf_counter() - started, type(error).__name__
 
 
 def drain_compare(state_dir=None, max_queries=10, cache_ttl_hours=COMPARE_CACHE_TTL_HOURS,
@@ -965,6 +976,236 @@ def compare_report(state_dir=None):
                        "is the risk side — raise the limit before drawing conclusions."}
 
 
+# ---------------------------------------------------------------------------
+# Primary recall probe
+#
+# The primary can report `Search Index: Ready` while everything written after some
+# point is not retrievable at all. That is exactly what happened on 2026-09-24: the
+# projection writer stalled, `nmem models status` kept answering Ready, and the only
+# reason we know is a matched-pair probe run by hand two weeks later. The alert we
+# have (`index_not_ready`) keys off `search_index.state`, so it structurally cannot
+# fire for this failure mode.
+#
+# The mirror is the only read-only source of "records the primary ought to be able
+# to find". So: take anchors that exist in the mirror, ask the primary for them, and
+# report which ones come back. The probes are grouped by job — `recent` is the
+# signal, `control` (oldest records) proves the primary answers at all, and `span`
+# locates the boundary. A bare "recent records are missing" reading cannot tell a
+# stale projection apart from an unreachable primary; the control group is what
+# separates them. Neither side is written to.
+# ---------------------------------------------------------------------------
+
+# An anchor shared by many records proves nothing about retrieval, so only anchors
+# that appear in at most this many mirror records are used.
+RECALL_PROBE_MAX_MIRROR_HITS = 2
+# A retrieval rate at or above this, on the control set, means the primary answers
+# at all — which is what makes a low recent rate evidence of a stale projection.
+RECALL_PROBE_CONTROL_FLOOR = 0.5
+RECALL_PROBE_CJK_WINDOW = 4
+
+# Identifiers with a separator are the most distinctive anchors in this corpus
+# (filenames, `snake_case`, `mcp-los-memory-shadow`, `sha256:…`).
+_ANCHOR_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[_./:-][A-Za-z0-9]+)+")
+
+
+def _anchor_candidates(record):
+    """Distinctive literal anchors for a mirrored snapshot, best first.
+
+    Title before body: a token in the title is both more likely to be unique and
+    more likely to be what a real query would use.
+    """
+    title = record.get("title") or ""
+    body = record.get("content") or ""
+    candidates = []
+    for text in (title, body):
+        candidates.extend(match.group(0) for match in _ANCHOR_TOKEN.finditer(text))
+    for text in (title, body):
+        window = RECALL_PROBE_CJK_WINDOW
+        for index in range(max(0, len(text) - window + 1)):
+            chunk = text[index:index + window]
+            if all(CJK_CHAR.match(char) for char in chunk):
+                candidates.append(chunk)
+                break
+    seen = set()
+    ordered = []
+    for candidate in candidates:
+        if len(candidate) >= 3 and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return ordered
+
+
+def _mirror_hits(conn, space, anchor):
+    """How many mirrored records contain this anchor (rarity, checked on the mirror)."""
+    return conn.execute(
+        "SELECT count(*) FROM records WHERE space=? AND snapshot LIKE ? ESCAPE '\\'",
+        (space, like_pattern(anchor))).fetchone()[0]
+
+
+def select_recall_probes(conn, space="default", recent=6, control=3, span=3,
+                         max_mirror_hits=RECALL_PROBE_MAX_MIRROR_HITS):
+    """Choose probe records in three groups, each with one job.
+
+    ``recent`` (newest N) is the signal: "can the primary still retrieve what was
+    written lately".
+
+    ``control`` (oldest N) is the calibration: records from a region we already
+    trust, so that "the primary lost my recent content" cannot be confused with "the
+    primary cannot answer at all". They must *not* be drawn from near the recent
+    bucket — a same-day record is exactly what is under suspicion, and letting it
+    into the control rate would let a stale index masquerade as a dead primary.
+
+    ``span`` (evenly spaced over the middle) locates the boundary. Without it the
+    bracket is "somewhere between the oldest record and today": measured three
+    months wide on the live mirror, which answers nothing. Evenly spaced probes cost
+    the same per lookup and narrow it a lot.
+
+    Only ``recent`` and ``control`` feed the verdict; all three feed the bracket.
+    """
+    rows = conn.execute("SELECT source_id, snapshot FROM records WHERE space=? AND active=1",
+                        (space,)).fetchall()
+    entries = []
+    for row in rows:
+        try:
+            record = json.loads(row["snapshot"])
+        except (TypeError, ValueError):
+            continue
+        entries.append((record.get("created_at") or "", row["source_id"], record))
+    entries.sort(key=lambda item: (item[0], item[1]))
+    if len(entries) < 2:
+        return {"probes": [], "recent": 0, "control": 0, "span": 0,
+                "reason": "the mirror holds too few records to probe"}
+
+    recent_bucket = entries[-recent:] if recent > 0 else []
+    remainder = entries[:len(entries) - len(recent_bucket)]
+    control_bucket = remainder[:control] if control > 0 else []
+    middle = remainder[len(control_bucket):]
+
+    if span <= 0 or not middle:
+        span_bucket = []
+    elif len(middle) <= span:
+        span_bucket = middle
+    else:
+        step = (len(middle) - 1) / (span - 1) if span > 1 else 0
+        span_bucket = [middle[min(len(middle) - 1, round(index * step))]
+                       for index in range(span)]
+
+    wanted = ([("recent", created_at, source_id, record)
+               for created_at, source_id, record in recent_bucket]
+              + [("control", created_at, source_id, record)
+                 for created_at, source_id, record in control_bucket]
+              + [("span", created_at, source_id, record)
+                 for created_at, source_id, record in span_bucket])
+
+    probes = []
+    for label, created_at, source_id, record in wanted:
+        for anchor in _anchor_candidates(record):
+            hits = _mirror_hits(conn, space, anchor)
+            if hits <= max_mirror_hits:
+                probes.append({"group": label, "source_id": source_id,
+                               "created_at": created_at, "anchor": anchor,
+                               "mirror_hits": hits})
+                break
+    counts = {label: sum(1 for probe in probes if probe["group"] == label)
+              for label in ("recent", "control", "span")}
+    return {"probes": probes, **counts, "candidates": len(entries)}
+
+
+def _recall_verdict(recent_rate, control_rate, recent_count, control_count):
+    """Turn the two hit rates into a bounded set of named outcomes.
+
+    Naming them matters: "the primary is down" and "the primary's projection is
+    stale" need opposite responses, and an operator reading a bare percentage
+    would treat them the same.
+    """
+    if not recent_count:
+        return "no_recent_probes"
+    if not control_count:
+        return "inconclusive_no_control"
+    if control_rate < RECALL_PROBE_CONTROL_FLOOR:
+        return "primary_not_answering"
+    if recent_rate < RECALL_PROBE_CONTROL_FLOOR:
+        return "stale_projection_suspected"
+    return "ok"
+
+
+def probe_primary_recall(conn, command=None, timeout=180, limit=10, space="default",
+                         recent=6, control=3, span=3, probes=None):
+    """Ask the primary to retrieve anchors the mirror says it holds.
+
+    Each lookup costs the primary a measured ~13 s, so the probe count is bounded
+    (the defaults are 12 probes, ~3 minutes) and this belongs on a schedule, never
+    in a read path. Pass `probes` to run a pre-selected set instead.
+
+    Read-only on both sides: the mirror is only SELECTed, and the primary is only
+    asked the same `memories search` the compare drain already uses.
+    """
+    command = command or _resolve_command("nmem")
+    selection = probes if probes is not None else select_recall_probes(
+        conn, space=space, recent=recent, control=control, span=span)["probes"]
+    if not selection:
+        return {"verdict": "no_probes", "probes": [],
+                "reading": "the mirror held no record with a rare enough anchor"}
+
+    results = []
+    for probe in selection:
+        ids, elapsed, error = _nowledge_ids(probe["anchor"], limit, command, timeout)
+        results.append({**probe,
+                        "retrieved": bool(ids) and probe["source_id"] in ids,
+                        "primary_latency_s": round(elapsed, 2),
+                        "error": error})
+
+    def rate(group):
+        bucket = [item for item in results if item["group"] == group]
+        if not bucket:
+            return 0.0, 0
+        return sum(1 for item in bucket if item["retrieved"]) / len(bucket), len(bucket)
+
+    recent_rate, recent_count = rate("recent")
+    control_rate, control_count = rate("control")
+    retrieved_dates = [item["created_at"] for item in results if item["retrieved"] and item["created_at"]]
+    missed_dates = [item["created_at"] for item in results if not item["retrieved"] and item["created_at"]]
+    newest_retrievable = max(retrieved_dates) if retrieved_dates else None
+    # Only misses *after* the newest retrievable record can bound the boundary. A
+    # control probe that missed sits before it and is an anchor-style caveat, not a
+    # bracket — taking the raw minimum would report a boundary interval running
+    # backwards.
+    after_boundary = [date for date in missed_dates
+                      if newest_retrievable is None or date > newest_retrievable]
+    oldest_unretrievable = min(after_boundary) if after_boundary else None
+    control_misses = [item["anchor"] for item in results
+                      if item["group"] == "control" and not item["retrieved"]]
+    return {"verdict": _recall_verdict(recent_rate, control_rate, recent_count, control_count),
+            "recent_rate": round(recent_rate, 4), "recent_probes": recent_count,
+            "control_rate": round(control_rate, 4), "control_probes": control_count,
+            "control_misses": control_misses,
+            # These two bracket the freeze boundary *within the probed set*. They are
+            # not a solved boundary: with the recent bucket fully stale, the newest
+            # retrievable record is simply the newest control probe, so anything
+            # between the two dates is unmeasured. Closing it would need a bisection
+            # and each step costs the primary ~13 s.
+            "newest_retrievable_created_at": newest_retrievable,
+            "oldest_unretrievable_created_at": oldest_unretrievable,
+            "oldest_probe_created_at": min((item["created_at"] for item in results if item["created_at"]),
+                                           default=None),
+            "errors": [{"anchor": item["anchor"], "error": item["error"]}
+                       for item in results if item["error"]],
+            "probes": results,
+            "reading": "recent_rate low with control_rate healthy means the primary "
+                       "answers but cannot retrieve newer content (a stale projection); "
+                       "both low means the primary is unreachable or changed shape. "
+                       "The verdict compares two populations, so it is robust to the "
+                       "caveats that follow. The two *_created_at fields are indicative "
+                       "only: they bracket the boundary within the probed set, only "
+                       "misses after the newest retrievable record count towards them, "
+                       "and `created_at` is not the order the index ingested records "
+                       "(bulk imports share timestamps), so a split inside one timestamp "
+                       "means the boundary is not purely temporal. A control probe that "
+                       "misses may be an anchor-style artefact rather than proof, so read "
+                       "control_misses alongside control_rate, and treat no single run as "
+                       "proof."}
+
+
 def summary(conn, space="default"):
     """Identity summary for backup/restore comparison.
     Compares content, not row counts: a restore is only proven when every
@@ -984,7 +1225,8 @@ def summary(conn, space="default"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["sync", "status", "reindex", "summary", "rotatelog",
-                                           "compare", "compare-drain", "compare-report"])
+                                           "compare", "compare-drain", "compare-report",
+                                           "recall-probe"])
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--config", default=str(Path.home() / ".nowledge-mem/config.json"))
     parser.add_argument("--batch", type=int, default=100)
@@ -993,6 +1235,16 @@ def main():
     parser.add_argument("--max-queries", type=int, default=10,
                         help="compare-drain: cap on uncached Nowledge lookups per run "
                              "(each costs the primary ~13 s)")
+    parser.add_argument("--recent", type=int, default=6,
+                        help="recall-probe: newest mirror records to probe (each costs the "
+                             "primary ~13 s)")
+    parser.add_argument("--control", type=int, default=3,
+                        help="recall-probe: oldest mirror records used as the control set, "
+                             "so a dead primary is not mistaken for a stale projection")
+    parser.add_argument("--span", type=int, default=3,
+                        help="recall-probe: probes evenly spaced over the middle of the "
+                             "timeline; they locate the retrieval boundary without "
+                             "affecting the verdict")
     parser.add_argument("--nowledge-cmd", default=os.environ.get("SHADOW_NMEM_BIN", "nmem"))
     parser.add_argument("--max-bytes", type=int, default=8 * 1024 * 1024)
     parser.add_argument("--keep", type=int, default=5)
@@ -1003,6 +1255,12 @@ def main():
     os.umask(0o077)
     if not 1 <= args.batch <= 5000:
         parser.error("batch must be 1..5000")
+    for name in ("recent", "control", "span"):
+        if getattr(args, name) < 0:
+            parser.error(f"--{name} must not be negative")
+    if args.recent + args.control + args.span > 40:
+        parser.error("a recall probe costs the primary ~13 s per lookup; keep the "
+                     "total probe count at 40 or below")
     with contextlib.closing(connect(args.db)) as conn:
         if args.action == "status":
             result = status(conn)
@@ -1023,6 +1281,10 @@ def main():
                                    max_queries=args.max_queries, command=args.nowledge_cmd)
         elif args.action == "compare-report":
             result = compare_report(state_dir=Path(args.db).expanduser().parent)
+        elif args.action == "recall-probe":
+            result = probe_primary_recall(conn, command=args.nowledge_cmd,
+                                          limit=args.limit, recent=args.recent,
+                                          control=args.control, span=args.span)
         elif args.action == "reindex":
             # Same single-writer lock as sync: rebuilding while a sync writes
             # would interleave index rows with record writes.
