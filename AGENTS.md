@@ -1,9 +1,9 @@
 # los-memory AGENTS
 
-> **Workspace**: Part of `los-workspace` (`~/projects/los-workspace`).
-> Cross-project rules: `~/projects/los-workspace/AGENTS.md`
-> Current workspace boundary: `~/projects/los-workspace/WORKSPACE.md`
-> Historical boundary context only: `~/projects/los-workspace/docs/archive/seven-project-boundary-spec.md`
+> **Workspace**: Part of `los-workspace` (`~/syncfolder/project/los-workspace`).
+> Cross-project rules: `~/syncfolder/project/los-workspace/AGENTS.md`
+> Current workspace boundary: `~/syncfolder/project/los-workspace/WORKSPACE.md`
+> Historical boundary context only: `~/syncfolder/project/los-workspace/docs/archive/seven-project-boundary-spec.md`
 
 ## Scope
 
