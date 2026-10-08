@@ -50,6 +50,10 @@ from memory_tool.operations import run_search, run_semantic_search  # noqa: E402
 from memory_tool.utils import like_pattern  # noqa: E402
 
 CJK = re.compile(r"[\u4e00-\u9fa5]")
+# Identifier shape: a leading letter plus at least one separator-joined part.
+IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[_./:-][A-Za-z0-9]+)+")
+# Timestamps match the identifier shape but are not identifiers.
+TIMESTAMP_LIKE = re.compile(r"^T?\d{2}:\d{2}:\d{2}")
 DEFAULT_DB = Path.home() / ".local/share/llm-memory/memory.db"
 MODES = ("auto", "semantic")
 
@@ -91,6 +95,37 @@ def build_cases(conn, samples: int, max_corpus_hits: int, seed: int):
     return len(rows), len(rich), cases
 
 
+def build_identifier_cases(conn, samples: int, seed: int):
+    """Cases whose query is an identifier occurring in exactly one record.
+
+    A second family, because the CJK-window family cannot see this one: identifier
+    queries are single terms carrying `_`, `-`, `/`, `.` or `:`, and those characters
+    change how FTS5 parses the query — `-`/`/`/`.`/`:` are operators and raised a
+    syntax error, while `_` is a token separator. A change to FTS handling is
+    invisible to the CJK family and must be measured here.
+
+    Uniqueness is checked against the whole table rather than sampled: a query sharing
+    its answer with another record measures the corpus, not the ranker.
+    """
+    random.seed(seed)
+    rows = conn.execute("SELECT id, title, summary, raw FROM observations").fetchall()
+    counts = {}
+    per_record = {}
+    for row in rows:
+        text = " ".join(filter(None, [row["title"], row["summary"], row["raw"]]))
+        found = {token for token in IDENTIFIER.findall(text)
+                 if not TIMESTAMP_LIKE.match(token) and 6 <= len(token) <= 60}
+        per_record[row["id"]] = found
+        for token in found:
+            counts[token] = counts.get(token, 0) + 1
+    unique = [(row, token) for row in rows
+              for token in per_record.get(row["id"], ()) if counts[token] == 1]
+    if not unique:
+        return []
+    random.shuffle(unique)
+    return [(row, token, 1) for row, token in unique[:samples]]
+
+
 def measure(conn, cases, limit: int) -> dict:
     report = {}
     for mode in MODES:
@@ -124,8 +159,9 @@ def time_now() -> float:
     return time.perf_counter()
 
 
-def render(cases_total: int, report: dict, limit: int) -> str:
-    lines = [f"# core search measurement ({cases_total} rarity-controlled cases, limit={limit})", "",
+def render(cases_total: int, report: dict, limit: int, family: str = "cjk") -> str:
+    lines = [f"# core search measurement — {family} family "
+             f"({cases_total} rarity-controlled cases, limit={limit})", "",
              f"| {'path':<10} | {'Hit@1':>6} | {'Hit@5':>6} | {'Hit@' + str(limit):>6} "
              f"| {'p50 ms':>8} | {'p95 ms':>8} |",
              f"|{'-' * 12}|{'-' * 8}|{'-' * 8}|{'-' * 8}|{'-' * 10}|{'-' * 10}|"]
@@ -198,7 +234,11 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", default=str(DEFAULT_DB),
                         help=f"SQLite database to measure (opened read-only). Default: {DEFAULT_DB}")
-    parser.add_argument("--samples", type=int, default=30, help="cases to build (default 30)")
+    parser.add_argument("--samples", type=int, default=30, help="cases to build per family (default 30)")
+    parser.add_argument("--family", choices=["cjk", "identifier", "both"], default="cjk",
+                        help="cjk: 4-character windows of a record's own summary; "
+                             "identifier: a separator-bearing token unique to one record "
+                             "(these exercise FTS query parsing, which the cjk family cannot see)")
     parser.add_argument("--limit", type=int, default=10, help="results per query (default 10)")
     parser.add_argument("--max-corpus-hits", type=int, default=2,
                         help="keep only windows appearing in at most this many records (default 2)")
@@ -217,30 +257,50 @@ def main() -> int:
 
     conn = connect_read_only(args.db)
     try:
-        total, rich, cases = build_cases(conn, args.samples, args.max_corpus_hits, args.seed)
-        if not cases:
+        families = {}
+        if args.family in ("cjk", "both"):
+            total, rich, cases = build_cases(conn, args.samples, args.max_corpus_hits, args.seed)
+            if cases:
+                families["cjk"] = {"cases": cases, "report": measure(conn, cases, args.limit),
+                                   "candidates": total, "rich": rich}
+        if args.family in ("identifier", "both"):
+            cases = build_identifier_cases(conn, args.samples, args.seed)
+            if cases:
+                families["identifier"] = {"cases": cases,
+                                          "report": measure(conn, cases, args.limit)}
+        if not families:
             raise SystemExit("no rarity-controlled cases could be built; "
                              "raise --max-corpus-hits or point --db at a populated ledger")
-        report = measure(conn, cases, args.limit)
     finally:
         conn.close()
 
     if args.json:
-        print(json.dumps({"db": args.db, "candidates": total, "cjk_rich": rich,
-                          "cases": len(cases), "limit": args.limit, "report": report},
+        print(json.dumps({"db": args.db, "limit": args.limit,
+                          "families": {name: {"cases": len(data["cases"]),
+                                              **{k: v for k, v in data.items()
+                                                 if k in ("candidates", "rich")},
+                                              "report": data["report"]}
+                                       for name, data in families.items()}},
                          ensure_ascii=False, indent=2))
     else:
-        print(f"observations: {total} (CJK-rich summaries: {rich}); "
-              f"cases: {len(cases)}")
-        print()
-        print(render(len(cases), report, args.limit))
+        for name, data in families.items():
+            extra = ""
+            if "rich" in data:
+                extra = f" (observations {data['candidates']}, CJK-rich {data['rich']})"
+            print(f"cases: {len(data['cases'])}{extra}")
+            print()
+            print(render(len(data["cases"]), data["report"], args.limit, name))
+            print()
 
     failures = []
-    auto = report["auto"]
-    if args.min_hit1 is not None and auto["hit@1"] < args.min_hit1:
-        failures.append(f"Hit@1 {auto['hit@1']} < --min-hit1 {args.min_hit1}")
-    if args.min_hit5 is not None and auto["hit@5"] < args.min_hit5:
-        failures.append(f"Hit@5 {auto['hit@5']} < --min-hit5 {args.min_hit5}")
+    # The gate applies to the `auto` path of each family: it is the default and the
+    # one a regression would hit.
+    for name, data in families.items():
+        auto = data["report"]["auto"]
+        if args.min_hit1 is not None and auto["hit@1"] < args.min_hit1:
+            failures.append(f"[{name}] Hit@1 {auto['hit@1']} < --min-hit1 {args.min_hit1}")
+        if args.min_hit5 is not None and auto["hit@5"] < args.min_hit5:
+            failures.append(f"[{name}] Hit@5 {auto['hit@5']} < --min-hit5 {args.min_hit5}")
     for failure in failures:
         print(f"GATE FAILED: {failure}", file=sys.stderr)
     return 1 if failures else 0
