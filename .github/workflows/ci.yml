@@ -43,6 +43,7 @@ jobs:
             scripts/validate_ledger_boundary.py \
             scripts/verify_los_memory_adapter.py \
             scripts/check_docs_cli_commands.py \
+            scripts/measure_core_search.py \
             tests/cli/test_cli_contract.py \
             tests/cli/test_cli_basic.py \
             tests/unit/test_doctor.py \
@@ -55,7 +56,10 @@ jobs:
             tests/unit/test_docs_current_state.py \
             tests/unit/test_docs_layout.py \
             tests/unit/test_config.py \
-            tests/unit/test_core_compat.py
+            tests/unit/test_core_compat.py \
+            tests/unit/test_core_search_quality.py \
+            tests/unit/test_embedding_tokenize.py \
+            tests/unit/test_search_like_escaping.py
 
   docs-command-lint:
     runs-on: ubuntu-latest
@@ -96,6 +100,13 @@ jobs:
       - name: Run unit tests
         run: |
           pytest tests/unit -m "not e2e" -q
+      - name: Validate the core search measurement instrument
+        # The instrument is checked before its numbers are trusted: it must score
+        # a ranker that finds known answers at Hit@1 = 1.0 and a broken one at 0.0.
+        # The real quality measurement runs against the private ledger, not in CI
+        # (see scripts/measure_core_search.py and tests/unit/test_core_search_quality.py).
+        run: |
+          python scripts/measure_core_search.py --self-check
       - name: Run lsclaw integration smoke
         if: matrix.python-version == '3.11'
         run: |
