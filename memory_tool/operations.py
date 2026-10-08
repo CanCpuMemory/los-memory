@@ -170,6 +170,44 @@ def _slice_filtered_results(results: List[Any], limit: int, offset: int) -> List
     return results[offset:offset + limit]
 
 
+def _fts_query_candidates(query: str) -> List[str]:
+    """FTS query forms to try, in order.
+
+    FTS5's query syntax gives `-`, `/`, `.` and `:` operator meaning, so a
+    path/filename/identifier query raises `sqlite3.OperationalError`. Before this,
+    such a query fell straight through to a full-table LIKE scan, and under an
+    explicit `--mode fts` it surfaced a raw SQLite error to the user ("no such
+    column: memory").
+
+    A quoted phrase is matched as a sequence of tokens, so it stays indexed and is
+    separator-agnostic (`foo/bar` also matches `foo-bar`). Measured on the shared
+    ledger with a within-snapshot A/B over 80 identifier queries per group:
+
+    | group | Hit@1 before -> after | mean rows | p95 latency |
+    | --- | --- | --- | --- |
+    | underscore | 0.775 -> 0.812 | 2.6 -> 2.3 | 7.7 ms -> 0.5 ms |
+    | other separators | 0.887 -> 0.863 | 1.9 -> 1.6 | 9.1 ms -> 0.4 ms |
+
+    So the honest read is: a large, structural latency win and less noise, but the
+    ranking effect is **mixed and inside noise** at that sample size — one group
+    gained, one lost. Do not describe this as a ranking improvement. Making a
+    literal containment outrank a separator-variant match is a separate question and
+    needs a larger frozen set than 80 queries.
+
+    Only a single-term query gets the quoted form. Quoting a multi-word query would
+    turn FTS5's implicit AND into an adjacency requirement, which is a different
+    question from "make this syntax error go away" and not one to answer implicitly.
+    """
+    forms = [query]
+    stripped = query.strip()
+    already_quoted = len(stripped) > 1 and stripped.startswith('"') and stripped.endswith('"')
+    if stripped and not already_quoted and not any(ch.isspace() for ch in stripped):
+        quoted = '"' + stripped.replace('"', '""') + '"'
+        if quoted != query:
+            forms.append(quoted)
+    return forms
+
+
 def run_search(
     conn: sqlite3.Connection,
     query: str,
@@ -190,23 +228,31 @@ def run_search(
     use_post_filters = bool(required or metadata_filter_map)
     fts_query = quote_fts_query(query) if quote else query
     if mode != "like":
-        try:
-            fts_results = _run_search_fts(
-                conn=conn,
-                fts_query=fts_query,
-                limit=None if use_post_filters or mode == "auto" else limit,
-                offset=0 if use_post_filters or mode == "auto" else offset,
-                parse_tags_json=parse_tags_json,
-                parse_metadata_json=parse_metadata_json,
-            )
+        first_error = None
+        for candidate in _fts_query_candidates(fts_query):
+            try:
+                fts_results = _run_search_fts(
+                    conn=conn,
+                    fts_query=candidate,
+                    limit=None if use_post_filters or mode == "auto" else limit,
+                    offset=0 if use_post_filters or mode == "auto" else offset,
+                    parse_tags_json=parse_tags_json,
+                    parse_metadata_json=parse_metadata_json,
+                )
+            except sqlite3.OperationalError as error:
+                # Keep the first failure: if every form fails, `mode="fts"` must
+                # still raise the error the caller would have seen before.
+                first_error = first_error or error
+                continue
             filtered_results = _filter_results(fts_results, required, metadata_filter_map)
             if filtered_results or mode == "fts":
                 if use_post_filters or mode == "auto":
                     return _slice_filtered_results(filtered_results, limit, offset)
                 return filtered_results
-        except sqlite3.OperationalError:
-            if mode == "fts":
-                raise
+            # FTS ran and matched nothing: the LIKE fallback still applies.
+            break
+        if first_error is not None and mode == "fts":
+            raise first_error
 
     like_results = _run_search_like(
         conn=conn,
