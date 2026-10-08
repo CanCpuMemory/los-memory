@@ -74,6 +74,44 @@
 
 `nmem` 的路径由 `_resolve_command` 解析（launchd 的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，裸 `nmem` 会 FileNotFoundError）；plist 另外显式传了 `--nowledge-cmd` 绝对路径与 `PATH`，双保险。
 
+## 主库召回探测（`shadow recall-probe`）
+
+**为什么需要**：主库可以一边报 `Search Index: Ready`、一边让某时点之后写入的内容完全检索不到。2026-09-24 起就是如此，而现有告警 `index_not_ready` 只看 `search_index.state`，**结构上无法**触发——所以它能静默两周以上。镜像按定义持有"主库本应能检索到"的记录，于是用它做只读锚点。
+
+```sh
+python3 -m memory_tool.shadow recall-probe --recent 5 --control 3 --span 3
+```
+
+每次探针 = 一次 `nmem memories search`（实测约 13 s），所以默认 **12 个探针（recent 6 + control 3 + span 3）≈ 2.6 分钟**，属定时任务，**绝不进读取路径**；`--recent/--control/--span` 不允许负值，总数上限 40。两侧都只读：镜像只 SELECT，主库只被问同一个 `memories search`。
+
+三组各有单一职责，**只有 recent 与 control 参与判决**：
+
+| 组 | 取样 | 职责 |
+| --- | --- | --- |
+| `recent` | 最新 N 条 | 信号：主库还能不能取回近期内容 |
+| `control` | 最老 N 条 | 校准：证明主库"还能应答"，避免把"索引陈旧"误判成"主库挂了" |
+| `span` | 时间线中部等距 | 定界：把边界从"最老记录到今天"收紧 |
+
+`control` 必须留在可信区（不能取当天记录，那正是被怀疑的对象，否则陈旧索引会伪装成主库不可用）。判决由两组的命中率给出：
+
+- `stale_projection_suspected` — control 健康、recent 低：主库能答，但取不回新内容
+- `primary_not_answering` — 两组都低：主库不可达或形态变了，**不是**新鲜度问题
+- `ok` / `no_recent_probes` / `inconclusive_no_control` / `no_probes`
+
+输出字段：`recent_rate`、`control_rate`、`control_misses`、`newest_retrievable_created_at`、`oldest_unretrievable_created_at`、`errors`、逐条 `probes`。
+
+**读数纪律（都写进了 `reading` 字段）**：
+
+- 判决比的是两个**总体**，对这些前提稳健；两个 `*_created_at` 字段只是**指示性**的。
+- 边界只在被探集合内成立；只有位于"最新可取回"之后的未命中才计入区间。
+- `created_at` **不是**索引摄入顺序（批量导入共享时间戳），所以同一时间戳内既有命中又有未命中，说明边界不是纯时间性的。
+- `control` 里的一条未命中可能是锚点形态造成的假阴性，所以要看 `control_misses` 与 `control_rate` 一起读。
+- 单次运行不构成证明。
+
+**2026-10-08 实测**（镜像 2121 条候选）：`recent_rate 0.0`（5 条 10-08 记录全部不可取回）、`control_rate 0.667`（3 条 07-03 记录 2 条可取回）、`control_misses ["los/los.git"]`、边界 `2026-07-03T07:44:25Z` → `2026-07-03T07:53:34Z`（同日 9 分钟，说明边界非纯时间性）。
+
+**接入建议（尚未安装）**：这是只读仪器，可按 `co.los.memory-shadow-compare-drain` 的先例做成 M3 上的独立 launchd 作业（建议每 6–12 h 一次，避开 300 s 同步节奏），**不要**挂进每小时运行的操作报告，因为它要打真实主库且耗时约 2.5 分钟。安装属现网变更，需单独确认。
+
 ## 部署与验证
 
 在本仓执行：

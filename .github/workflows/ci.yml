@@ -59,7 +59,8 @@ jobs:
             tests/unit/test_core_compat.py \
             tests/unit/test_core_search_quality.py \
             tests/unit/test_embedding_tokenize.py \
-            tests/unit/test_search_like_escaping.py
+            tests/unit/test_search_like_escaping.py \
+            tests/unit/test_shadow_recall_probe.py
 
   docs-command-lint:
     runs-on: ubuntu-latest
