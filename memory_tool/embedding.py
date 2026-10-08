@@ -1,5 +1,5 @@
 """
-Deterministic embedding for semantic search.
+Deterministic embedding for search re-ranking.
 
 Mirrors lsclaw's `memory/embedding.mjs` algorithm:
   - SHA-256 based token hashing → 32-dim vectors
@@ -7,6 +7,13 @@ Mirrors lsclaw's `memory/embedding.mjs` algorithm:
   - Keyword (Jaccard-style) scoring
 
 No external API dependencies — entirely deterministic and reproducible.
+
+This is a hashed bag-of-words, NOT a learned embedding: it can only reward shared
+tokens, never a paraphrase. Measured on 5,355 real records with a rarity-controlled
+instrument (`scripts/measure_core_search.py`), the best configuration it can reach
+ties the default FTS/LIKE path on Hit@1 and loses on Hit@5 while costing roughly
+100x the latency. Treat `--semantic` as a lexical-overlap re-ranker, and re-run that
+instrument before making any claim about it.
 """
 
 import hashlib
@@ -17,10 +24,30 @@ from typing import List
 # Match lsclaw's tokenizer: /[^a-z0-9_\u4e00-\u9fa5]+/
 _TOKEN_RE = re.compile(r"[^a-z0-9_\u4e00-\u9fa5]+", re.IGNORECASE)
 
+# CJK runs are not whitespace-separated, so this tokenizer keeps a whole run
+# ("记忆双轨格局确立") as a single token. A query for a 4-character window of that
+# run then shares no token with it at all, and the score collapses to noise:
+# `--semantic` scored Hit@1 = 0.033 against the default path's 0.733 on the real
+# ledger. Emitting 2-character windows ("bigrams") as extra tokens gives Chinese
+# the same partial-overlap behaviour the tokenizer already gives ASCII words,
+# which lifted Hit@1 to 0.700 in the same measurement. Dimensionality was also
+# tested and rejected: raising 32 → 256 bought +0.033 Hit@1 for 4x the cost.
+_CJK_ONLY = re.compile(r"^[\u4e00-\u9fa5]+$")
+
 
 def tokenize(text: str) -> List[str]:
-    """Split text into normalized tokens (mirrors lsclaw tokenize)."""
-    return [t.strip() for t in _TOKEN_RE.split(str(text or "").lower()) if t.strip()]
+    """Split text into normalized tokens, with CJK bigrams for partial overlap.
+
+    ASCII is already whitespace/punctuation separated, so its words overlap by
+    token. CJK runs are not, so each run of two or more Han characters also
+    contributes its 2-character windows. Deterministic and reproducible.
+    """
+    tokens = [t.strip() for t in _TOKEN_RE.split(str(text or "").lower()) if t.strip()]
+    bigrams = []
+    for token in tokens:
+        if len(token) > 1 and _CJK_ONLY.match(token):
+            bigrams.extend(token[index:index + 2] for index in range(len(token) - 1))
+    return tokens + bigrams
 
 
 def compute_embedding(text: str, dim: int = 32) -> List[float]:
