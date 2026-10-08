@@ -113,9 +113,19 @@ Stage goals, dependencies, acceptance metrics and rollback are maintained in `do
 ## Local Remaining
 
 - [x] Repo currently has no immediate feature blocker.
+- [x] Cleanup pass (2026-10-08): escape LIKE wildcards in every user-input search path; `los_memory` matched 895 of 5,355 real records that do not contain it, and a bare `%` or `_` returned the whole table. See `docs/reports/2026-10-08-core-capability-fixes.md`.
+- [x] Cleanup pass (2026-10-08): resolve the shadow compare ledger from the served database instead of the process default, so a fixture or test run can no longer write into the operator's production state directory (10 such artifacts had accumulated).
+- [x] Cleanup pass (2026-10-08): emit CJK bigrams from the embedding tokenizer; `--semantic` scored Hit@1 0.033 on the real ledger because a whole CJK run was one token. Now at parity on rank 1 but still behind on Hit@5 at ~70x the latency, so `auto` stays the default.
+- [x] Cleanup pass (2026-10-08): stop re-probing deactivated records every rotation (24 h tombstone recheck), which had been inflating the report's `missing` count.
+- [x] Cleanup pass (2026-10-08): add `scripts/measure_core_search.py` plus a CI self-check and fixture-based quality gate; core retrieval previously had no quality measurement anywhere.
 - [ ] Keep legacy flat-command compatibility until downstream grouped-command migration is fully absorbed and verified across all integrators.
 - [ ] If a future integrator needs correction provenance beyond current fields, extend feedback metadata rather than introducing a second correction object model.
 - [ ] Continue non-blocking complexity cleanup opportunistically if new hotspots emerge.
+- [ ] Make `--semantic` a bounded re-ranker over literal candidates instead of an O(N) full scan (946 ms at 5,355 records), measured with `scripts/measure_core_search.py` before and after. Do not raise its dimensionality first: dim 32 → 256 measured +0.033 Hit@1 for 4-6x the cost.
+- [ ] Decide whether literal containment should outrank an FTS token match, so identifier queries like `los_memory` stop over-matching in `mode="auto"` (pinned as a documented limitation in `tests/unit/test_search_like_escaping.py`).
+- [ ] Give the shadow alert a delivery channel; it currently records to `alerts.jsonl` and exits 1 with nowhere to notify.
+- [ ] Define a retention policy for inactive `records` rows and `revisions`.
+- [ ] Build the primary recall canary: use the mirror's frozen-era records as read-only anchors to detect "index reports Ready but recent content is unsearchable". The existing `index_not_ready` alert keys off `search_index.state` and structurally cannot fire for that failure mode.
 - [x] Cleanup pass (2026-03-13): align Makefile shortcuts with the modern `los-memory` / `python -m memory_tool` CLI entrypoints while preserving local workflow compatibility.
 - [x] Cleanup pass (2026-03-13): align core README/manual command examples with the modern `python -m memory_tool` / `python -m memory_tool.viewer` / `python -m memory_tool.ingest` entrypoints while keeping the legacy script path documented as compatibility-only.
 - [x] Cleanup pass (2026-03-13): align remaining active lsclaw integration manuals to the modern `python -m memory_tool` review-apply entrypoint while keeping compatibility notes explicit elsewhere.
