@@ -71,6 +71,8 @@ def _build_share_query(
     limit: int,
     normalize_tags_list,
 ) -> tuple[str, list[object]]:
+    from .utils import like_pattern
+
     query = "SELECT * FROM observations WHERE 1=1"
     params: list[object] = []
     if project:
@@ -88,8 +90,8 @@ def _build_share_query(
     if tag:
         tag_values = normalize_tags_list(tag)
         if tag_values:
-            query += " AND tags_text LIKE ?"
-            params.append(f"%{tag_values[0]}%")
+            query += " AND tags_text LIKE ? ESCAPE '\\'"
+            params.append(like_pattern(tag_values[0]))
     query += " ORDER BY timestamp DESC LIMIT ?"
     params.append(limit)
     return query, params

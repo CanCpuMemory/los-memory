@@ -264,13 +264,16 @@ def _run_search_like(
     parse_tags_json,
     parse_metadata_json,
 ) -> List[dict]:
+    from .utils import like_pattern
+
     sql = """
         SELECT id, timestamp, project, kind, title, summary, tags, raw, session_id, metadata
         FROM observations
-        WHERE title LIKE ? OR summary LIKE ? OR tags_text LIKE ? OR raw LIKE ?
+        WHERE title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'
+           OR tags_text LIKE ? ESCAPE '\\' OR raw LIKE ? ESCAPE '\\'
         ORDER BY id DESC
     """
-    params: list[Any] = [f"%{query}%"] * 4
+    params: list[Any] = [like_pattern(query)] * 4
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"
         params.extend([limit, offset])
@@ -897,7 +900,7 @@ def _append_clean_tag_filters(
     params: List[object],
     tag: Optional[str],
 ) -> None:
-    from .utils import normalize_tags_list
+    from .utils import like_pattern, normalize_tags_list
 
     tag_values = normalize_tags_list(tag) if tag else []
     if not tag_values:
@@ -905,8 +908,8 @@ def _append_clean_tag_filters(
 
     tag_filters: List[str] = []
     for item in tag_values:
-        tag_filters.append("tags_text LIKE ?")
-        params.append(f"%{item}%")
+        tag_filters.append("tags_text LIKE ? ESCAPE '\\'")
+        params.append(like_pattern(item))
     filters.append(f"({' OR '.join(tag_filters)})")
 
 

@@ -397,3 +397,29 @@ def quote_fts_query(query: str) -> str:
     # Multi-word - escape quotes and wrap in quotes
     escaped = query.replace('"', '""')
     return f'"{escaped}"'
+
+
+# SQLite's LIKE treats `%` and `_` as wildcards. User text is full of both
+# (filenames, identifiers, `snake_case`), so an unescaped pattern silently
+# over-matches: `los_memory` matched 895 of 5,355 records that do not contain it.
+# Every LIKE that takes user input must use `like_pattern()` for the parameter and
+# carry an explicit `ESCAPE '\'` clause in the statement.
+
+
+def escape_like(value: str) -> str:
+    """Escape LIKE wildcards so the value matches literally.
+
+    Backslash must be escaped first, or it would double-escape the wildcards
+    escaped after it.
+    """
+    text = str(value if value is not None else "")
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def like_pattern(value: str) -> str:
+    """Build a substring LIKE pattern from user input, matching it literally.
+
+    Always pair the resulting parameter with an ``ESCAPE '\\'`` clause in the
+    statement, e.g. ``WHERE title LIKE ? ESCAPE '\\'``.
+    """
+    return f"%{escape_like(value)}%"

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from .utils import utc_now
+from .utils import like_pattern, utc_now
 
 
 @dataclass
@@ -501,11 +501,11 @@ class KnowledgeBase:
         return entry_ids, fts_scores
 
     def _search_rows_by_like(self, query: str, limit: int):
-        pattern = f"%{query}%"
+        pattern = like_pattern(query)
         return self.conn.execute(
             """
             SELECT * FROM knowledge_entries
-            WHERE symptoms_pattern LIKE ? OR root_cause_summary LIKE ?
+            WHERE symptoms_pattern LIKE ? ESCAPE '\\' OR root_cause_summary LIKE ? ESCAPE '\\'
             ORDER BY success_count DESC
             LIMIT ?
             """,
@@ -627,8 +627,8 @@ class KnowledgeBase:
             params.append(incident_type)
 
         if tag:
-            conditions.append("tags LIKE ?")
-            params.append(f"%{tag}%")
+            conditions.append("tags LIKE ? ESCAPE '\\'")
+            params.append(like_pattern(tag))
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
