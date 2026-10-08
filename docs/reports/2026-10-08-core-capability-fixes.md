@@ -46,11 +46,12 @@ wildcard escapes are not double-escaped. All five user-input LIKE sites now use
 `_append_clean_tag_filters`, `share._build_share_query`, and
 `knowledge_base._search_rows_by_like` / the knowledge tag filter.
 
-**Not fixed, deliberately.** In `mode="auto"`, FTS runs first and the FTS5 tokenizer
-splits `los_memory` into `los` + `memory`, so an identifier query still over-matches
-there. Changing that means deciding that literal containment should outrank a token
-match — a ranking change that needs the §4 instrument before it lands. Pinned as a
-documented limitation in `tests/unit/test_search_like_escaping.py`.
+**Not fixed here, because the actual magnitude was unknown.** In `mode="auto"`, FTS runs
+first and the FTS5 tokenizer splits `los_memory` into `los` + `memory`, so an identifier
+query can over-match. That was carried as a "documented limitation". See the follow-up
+section at the end of this report: sampling the real ledger showed the over-match is far
+smaller than that one example suggested, and that the real defect in this area is
+different.
 
 ## 2. `--semantic` was worse than useless on Chinese (`memory_tool/embedding.py`)
 
@@ -198,3 +199,62 @@ python3 scripts/measure_core_search.py --samples 30 --json
 # the LIKE regression, end to end
 python3 -m memory_tool --profile shared memory search "los_memory" --mode like --limit 500
 ```
+
+---
+
+## 9. Follow-up (2026-10-08, later): the identifier claim was overstated; a different defect was real
+
+§1 left "identifier queries over-match in `mode="auto"`" as a known limitation, on the
+strength of `memory search "los_memory"` returning 500 rows. Sampling the real ledger
+showed that example is a **tail case**, not the norm. Queries were built from
+**identifiers that occur in exactly one record** (1,695 available), so the answer is
+unambiguous, and grouped by which separator they carry — because the separator is what
+decides how FTS5 parses the query.
+
+Within-snapshot A/B, 80 queries per group (the ledger is live, so cross-run comparison is
+not valid — an earlier attempt produced two different `like` baselines for an unmodified
+path and was discarded):
+
+| group | path | Hit@1 | mean rows | p50 | p95 |
+| --- | --- | --- | --- | --- | --- |
+| underscore | before | 0.775 | 2.6 | 0.2 ms | **7.7 ms** |
+| underscore | after | 0.812 | 2.3 | 0.2 ms | **0.5 ms** |
+| other separators | before | 0.887 | 1.9 | **7.6 ms** | 9.1 ms |
+| other separators | after | 0.863 | 1.6 | **0.1 ms** | **0.4 ms** |
+
+**The real defect.** FTS5's query syntax gives `-`, `/`, `.` and `:` operator meaning, so
+those queries raised `sqlite3.OperationalError`. `mode="auto"` swallowed it and silently
+fell through to a **full-table LIKE scan** — 100% of identifier queries in that group, at
+~20x the indexed latency. Under an explicit `--mode fts` the same query surfaced a raw
+SQLite error to the user:
+
+```
+$ los-memory memory search "los-memory" --mode fts
+{"ok": false, "error": "SQLite error: no such column: memory",
+ "suggestion": "Run 'los-memory admin diagnose' ..."}
+```
+
+**Fix.** `_fts_query_candidates()` retries a single-term query as a quoted phrase, which
+FTS5 matches as adjacent tokens: it stays indexed and is separator-agnostic (`foo/bar`
+also finds `foo-bar` — verified). Multi-word queries are deliberately **not** quoted,
+because that would turn FTS5's implicit AND into an adjacency requirement — a different
+decision, not one to make implicitly. `mode="fts"` still raises when *every* form fails
+(`a AND`), preserving the old contract. 12 tests in
+`tests/unit/test_fts_query_fallback.py`.
+
+**What is not claimed.** The ranking effect is **mixed and inside noise** at n=80: one
+group gained 3.7 points of Hit@1, the other lost 2.4. Do not read this as a ranking
+improvement. It is a latency and error-handling fix; the ranking question — should literal
+containment outrank a separator-variant token match — is still open and needs a larger
+frozen set.
+
+**Instrument.** `scripts/measure_core_search.py` gained an `identifier` family
+(`--family cjk|identifier|both`) precisely because the existing CJK-window family cannot
+see FTS-parsing changes. Measured on the shared ledger (30 cases each):
+
+| family | path | Hit@1 | Hit@5 | p50 |
+| --- | --- | --- | --- | --- |
+| cjk | auto | 0.733 | 1.000 | 13.4 ms |
+| cjk | semantic | 0.767 | 1.000 | 933.9 ms |
+| identifier | auto | 0.767 | 0.900 | **0.4 ms** |
+| identifier | semantic | 0.233 | 0.367 | 950.1 ms |

@@ -104,18 +104,23 @@ def test_tag_filter_escapes_wildcards(tmp_path):
     assert titles == ["tagged with underscore"]
 
 
-# --- documented limitation, not a guarantee --------------------------------
+# --- documented behaviour, measured ----------------------------------------
 #
 # `mode="auto"` tries FTS first and only falls back to LIKE when FTS returns
-# nothing. The FTS5 tokenizer splits `los_memory` into `los` + `memory`, so an
-# identifier query still over-matches there even though the LIKE path is now
-# literal. This test records the current behaviour so the gap stays visible and
-# any change to it is deliberate; it is NOT a statement that the behaviour is
-# desirable. Fixing it means deciding that a literal-containment match should
-# outrank a token match, which is a ranking change and needs the measurement in
-# `scripts/measure_core_search.py` before it lands.
+# nothing. FTS5's tokenizer splits `los_memory` into `los` + `memory`, so a query
+# whose literal appears nowhere can still return token matches. This test records
+# that so the behaviour stays visible and any change to it is deliberate; it is NOT
+# a claim that the behaviour is desirable, nor that it is a large problem.
+#
+# Magnitude, from sampling 80 unique-identifier queries per separator group on the
+# shared ledger: the ranking difference against the literal path was mixed and
+# within noise (Hit@1 0.775 → 0.812 for underscore identifiers, 0.887 → 0.863 for
+# other separators). The original `los_memory` example that motivated this was a
+# tail case — its tokens are individually very common in this corpus. Deciding that
+# literal containment should outrank a separator-variant match needs a larger frozen
+# set than that; measure with `scripts/measure_core_search.py --family identifier`.
 
-def test_known_limitation_auto_mode_still_tokenizes_underscore_identifiers(tmp_path):
+def test_auto_mode_still_matches_the_tokenized_form_of_an_underscore_identifier(tmp_path):
     conn = make_conn(tmp_path)
     add(conn, "los-memory writeback contract", "hyphenated identifier")
     add(conn, "los_memory literal", "the real one")
@@ -123,5 +128,9 @@ def test_known_limitation_auto_mode_still_tokenizes_underscore_identifiers(tmp_p
     auto_titles = [row["title"] for row in run_search(conn, "los_memory", limit=50)]
     assert "los-memory writeback contract" in auto_titles, (
         "auto mode stopped matching the tokenized form; if that is intentional, "
-        "update this documented limitation and the measurement baseline")
+        "update this documented behaviour and the measurement baseline")
+
+    # The LIKE path stays literal, which is the contrast this documents.
+    literal = [row["title"] for row in run_search(conn, "los_memory", limit=50, mode="like")]
+    assert literal == ["los_memory literal"]
 
