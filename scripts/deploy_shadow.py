@@ -33,7 +33,26 @@ agent.chmod(0o600)
 domain='gui/'+str(os.getuid())
 subprocess.run(['launchctl','bootout',domain+'/co.los.memory-shadow'],capture_output=True)
 subprocess.run(['launchctl','bootstrap',domain,str(agent)],check=True)
-print(json.dumps({'release':digest,'launcher':str(launcher),'job':job['Label']}))
+# Sibling jobs (compare-drain, maintenance, recall-probe) run the same code out
+# of the same release, but they own their own ProgramArguments and schedules, so
+# only their WorkingDirectory is rewritten. Deploying used to touch just the
+# sync job: on 2026-10-10 the live host was running three different releases
+# across four jobs, which meant sync ran the tombstone fix while compare-drain
+# ran pre-fix code.
+realigned=[]
+for sibling in sorted(agent.parent.glob('co.los.memory-shadow*.plist')):
+    if sibling.name==agent.name: continue
+    sjob=plistlib.loads(sibling.read_bytes())
+    label=sjob.get('Label',sibling.stem)
+    if sjob.get('WorkingDirectory')==str(release):
+        realigned.append({'label':label,'changed':False}); continue
+    sjob['WorkingDirectory']=str(release)
+    sibling.write_bytes(plistlib.dumps(sjob))
+    sibling.chmod(0o600)
+    subprocess.run(['launchctl','bootout',domain+'/'+label],capture_output=True)
+    subprocess.run(['launchctl','bootstrap',domain,str(sibling)],check=True)
+    realigned.append({'label':label,'changed':True})
+print(json.dumps({'release':digest,'launcher':str(launcher),'job':job['Label'],'siblings':realigned}))
 '''
 
 

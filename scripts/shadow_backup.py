@@ -213,6 +213,30 @@ def ledger_last():
     return json.loads(lines[-1]) if lines else None
 
 
+def ledger_entry_for(name):
+    """The ledger row written when `name` was backed up.
+
+    The drill's reference must be this row, not the newest one and not the live
+    mirror: `name` is the artifact being restored, and a mirror that kept
+    writing after the backup was taken will (correctly) no longer match it. For
+    any backup that is not the newest, `ledger_last()` is simply the wrong row.
+    """
+    if not LEDGER.exists():
+        return None
+    wanted = os.path.basename(name)
+    found = None
+    for line in LEDGER.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if os.path.basename(entry.get("name", "")) == wanted:
+            found = entry
+    return found
+
+
 def cmd_backup(args):
     started = time.time()
     key = ensure_key()
@@ -296,17 +320,33 @@ def cmd_restore_drill(args):
         restored = local_summary(local_db)
         verified_at = time.time()
 
+        # Reference selection decides whether a healthy drill reads as a
+        # success. The artifact being restored is `name`, so the authoritative
+        # expectation is that backup's own ledger row; the live mirror is
+        # reported only as advisory, because a mirror that kept writing after
+        # the snapshot was taken will legitimately differ (2026-10-10: the
+        # drill restored 2329 records against a live mirror of 2419 and printed
+        # `digest_match: false` even though the identity digest was byte-for-byte
+        # identical to the ledger row).
+        ledger_row = ledger_entry_for(remote)
         reference = None
         try:
             reference = remote_summary(m3_release())
         except SystemExit:
             reference = None
-        expected = (reference or {}).get("identity_digest") or (ledger_last() or {}).get("identity_digest")
+        expected = (ledger_row or ledger_last() or {}).get("identity_digest")
         matched = expected is None or restored["identity_digest"] == expected
         return {"name": os.path.basename(remote), "integrity": integrity,
-                "records_restored": counts, "records_expected": (reference or {}).get("records"),
+                "records_restored": counts,
+                "records_expected": (ledger_row or {}).get("records"),
                 "identity_digest": restored["identity_digest"],
                 "reference_digest": expected, "digest_match": matched,
+                "reference_source": ("ledger" if ledger_row else
+                                     "ledger_last_fallback" if expected else "none"),
+                "live_digest": (reference or {}).get("identity_digest"),
+                "live_records": (reference or {}).get("records"),
+                "live_matches_snapshot": bool(
+                    reference and reference.get("identity_digest") == restored["identity_digest"]),
                 "download_seconds": round(download_seconds, 2),
                 "decrypt_seconds": round(decrypt_seconds, 2),
                 "rto_seconds": round(verified_at - started, 2),

@@ -8,6 +8,8 @@ over-match cannot come back silently.
 """
 import sqlite3
 
+import pytest
+
 from memory_tool.database import ensure_schema
 from memory_tool.operations import run_search
 from memory_tool.utils import escape_like, like_pattern
@@ -18,6 +20,22 @@ def make_conn(tmp_path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     ensure_schema(conn)
     return conn
+
+
+@pytest.fixture
+def conn(tmp_path) -> sqlite3.Connection:
+    """A schema-initialised connection that is closed at teardown.
+
+    This used to be a bare `make_conn(tmp_path)` call at the top of each test,
+    so all seven of them leaked a connection and the suite emitted intermittent
+    `ResourceWarning: unclosed database` (surfaced as
+    `PytestUnraisableExceptionWarning`) whenever GC happened to run. That is why
+    the warnings moved around between test files instead of pointing at their
+    real owner.
+    """
+    connection = make_conn(tmp_path)
+    yield connection
+    connection.close()
 
 
 def add(conn, title, summary, tags="[]"):
@@ -48,8 +66,7 @@ def test_like_pattern_wraps_the_escaped_value():
 
 # --- the search path -------------------------------------------------------
 
-def test_underscore_is_literal_and_does_not_match_a_hyphen(tmp_path):
-    conn = make_conn(tmp_path)
+def test_underscore_is_literal_and_does_not_match_a_hyphen(conn):
     add(conn, "los-memory writeback contract", "hyphenated identifier")
     add(conn, "los memory notes", "space separated")
     add(conn, "los_memory literal", "the real one")
@@ -58,8 +75,7 @@ def test_underscore_is_literal_and_does_not_match_a_hyphen(tmp_path):
     assert titles == ["los_memory literal"]
 
 
-def test_bare_wildcards_do_not_return_the_whole_table(tmp_path):
-    conn = make_conn(tmp_path)
+def test_bare_wildcards_do_not_return_the_whole_table(conn):
     add(conn, "alpha", "first")
     add(conn, "beta", "second")
 
@@ -67,8 +83,7 @@ def test_bare_wildcards_do_not_return_the_whole_table(tmp_path):
     assert run_search(conn, "_", limit=50, mode="like") == []
 
 
-def test_percent_matches_only_a_literal_percent(tmp_path):
-    conn = make_conn(tmp_path)
+def test_percent_matches_only_a_literal_percent(conn):
     add(conn, "coverage 80% reached", "has a percent sign")
     add(conn, "coverage 80 reached", "no percent sign")
 
@@ -76,8 +91,7 @@ def test_percent_matches_only_a_literal_percent(tmp_path):
     assert titles == ["coverage 80% reached"]
 
 
-def test_backslash_in_query_is_literal(tmp_path):
-    conn = make_conn(tmp_path)
+def test_backslash_in_query_is_literal(conn):
     add(conn, "path C:\\tmp\\out", "windows path")
     add(conn, "path C:tmpout", "no separators")
 
@@ -85,17 +99,15 @@ def test_backslash_in_query_is_literal(tmp_path):
     assert titles == ["path C:\\tmp\\out"]
 
 
-def test_literal_substring_search_still_works(tmp_path):
+def test_literal_substring_search_still_works(conn):
     """The escaping must not break the ordinary case it was built for."""
-    conn = make_conn(tmp_path)
     add(conn, "记忆双轨格局确立", "memory evolve 项目工作记忆")
 
     titles = [row["title"] for row in run_search(conn, "记忆双轨", limit=50, mode="like")]
     assert titles == ["记忆双轨格局确立"]
 
 
-def test_tag_filter_escapes_wildcards(tmp_path):
-    conn = make_conn(tmp_path)
+def test_tag_filter_escapes_wildcards(conn):
     add(conn, "tagged with underscore", "body", tags='["los_memory"]')
     add(conn, "tagged with hyphen", "body", tags='["los-memory"]')
 
@@ -120,8 +132,7 @@ def test_tag_filter_escapes_wildcards(tmp_path):
 # literal containment should outrank a separator-variant match needs a larger frozen
 # set than that; measure with `scripts/measure_core_search.py --family identifier`.
 
-def test_auto_mode_still_matches_the_tokenized_form_of_an_underscore_identifier(tmp_path):
-    conn = make_conn(tmp_path)
+def test_auto_mode_still_matches_the_tokenized_form_of_an_underscore_identifier(conn):
     add(conn, "los-memory writeback contract", "hyphenated identifier")
     add(conn, "los_memory literal", "the real one")
 

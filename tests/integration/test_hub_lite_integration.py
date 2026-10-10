@@ -19,6 +19,26 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _require_local_artifact(path: Path, produced_by: str) -> Path:
+    """Skip when a gitignored, locally produced artifact is not present.
+
+    `logs/` and `control-plane/logs/` are in `.gitignore`, so a clean checkout —
+    which is what CI and every fresh clone has — cannot contain these files.
+    Asserting their existence reports "your clone is broken" for artifacts the
+    repository never shipped, and it reads as green on the operator's machine
+    only because they happen to still be there. They validate one historical
+    cross-repo run, not current behaviour, so absence means "nothing to
+    validate here", not "failure".
+    """
+    if not path.exists():
+        pytest.skip(
+            f"{path.relative_to(ROOT)} is a locally produced artifact that is not "
+            f"tracked (its directory is in .gitignore); produced by {produced_by}. "
+            f"A clean checkout has nothing to validate."
+        )
+    return path
+
+
 def _run_cli(db_path: Path, *args: str) -> dict:
     """Run CLI command and return JSON output."""
     cmd = [
@@ -380,8 +400,9 @@ class TestHubLiteArtifactValidation:
 
     def test_dispatch_log_valid(self) -> None:
         """Test that the dispatch log is valid JSON."""
-        log_path = ROOT / "logs" / "hub-lite-parent-epic-dispatch-20260309000327.json"
-        assert log_path.exists(), f"Dispatch log not found: {log_path}"
+        log_path = _require_local_artifact(
+            ROOT / "logs" / "hub-lite-parent-epic-dispatch-20260309000327.json",
+            "the hub-lite parent-epic dispatch run")
         
         with open(log_path) as f:
             log = json.load(f)
@@ -393,8 +414,9 @@ class TestHubLiteArtifactValidation:
 
     def test_control_plane_log_exists(self) -> None:
         """Test that the control plane log exists."""
-        log_path = ROOT / "control-plane" / "logs" / "hub-lite-lsclaw-round1.md"
-        assert log_path.exists(), f"Control plane log not found: {log_path}"
+        log_path = _require_local_artifact(
+            ROOT / "control-plane" / "logs" / "hub-lite-lsclaw-round1.md",
+            "the lsclaw control-plane integration round")
         
         content = log_path.read_text()
         assert "trace-parent-epic-20260309000327" in content
