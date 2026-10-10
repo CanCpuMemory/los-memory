@@ -208,6 +208,36 @@ def cap_ledger(max_bytes=8 * 1024 * 1024, keep=5):
         return {"rotated": False, "reason": f"{type(error).__name__}: {error}"[:200]}
 
 
+def write_push_url(url, path=None):
+    """Store (or clear) the delivery URL, always at 0600.
+
+    The URL embeds a push token, so this directory is 0700 and the file is
+    created under `umask 077` plus an explicit chmod. This project already had
+    one incident where a webhook token ended up world-readable in a 644 plist
+    (see `kuma-webhook-bridge-wrapper.sh`), so the permission is set here rather
+    than left to whatever shell redirection the operator used.
+    """
+    target = Path(path or ALERT_PUSH_URL)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not url:
+        if target.exists():
+            target.unlink()
+            return {"state": "cleared", "path": str(target)}
+        return {"state": "absent", "path": str(target)}
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("push URL must start with http:// or https://")
+    previous = os.umask(0o077)
+    try:
+        target.write_text(url)
+    finally:
+        os.umask(previous)
+    os.chmod(target, 0o600)
+    return {"state": "written", "path": str(target),
+            "mode": oct(target.stat().st_mode & 0o777),
+            "next": "run `shadow_report.py alert` to push the real status"}
+
+
 def notify(url, alerts, generated_at):
     """Best-effort delivery, recorded either way.
 
@@ -472,8 +502,21 @@ def main():
     report = subparsers.add_parser("report")
     report.add_argument("--out", default=None, help="write markdown here as well as stdout")
     subparsers.add_parser("alert")
+    push = subparsers.add_parser("set-push-url",
+                                 help="store the delivery URL (0600), or clear it")
+    push.add_argument("--url", default=None, help="omit to clear the stored URL")
     args = parser.parse_args()
     os.umask(0o077)
+
+    # Handled before any fetch: configuring delivery must not depend on M3 being
+    # reachable, and must not append to the ledger.
+    if args.action == "set-push-url":
+        try:
+            result = write_push_url(args.url)
+        except ValueError as error:
+            raise SystemExit(f"invalid push URL: {error}") from None
+        print(json.dumps(result, ensure_ascii=False))
+        return
 
     runs = fetch_log()
     status = fetch_status()

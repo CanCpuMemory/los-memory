@@ -414,3 +414,39 @@ def test_ledger_cap_works_the_way_launchd_runs_it(tmp_path):
     assert "'rotated': True" in result.stdout or '"rotated": True' in result.stdout, result.stdout
     assert ledger.stat().st_size == 0, "the child capped its own state dir"
     assert list(state.glob("alerts.jsonl.*")), "and archived what it removed"
+
+
+def test_storing_a_push_url_is_always_0600(report, tmp_path):
+    """The URL embeds a token; the file must not depend on the caller's umask.
+
+    This project already had one incident where a webhook token ended up
+    world-readable in a 644 plist, so the helper sets the mode itself instead of
+    leaving it to shell redirection.
+    """
+    import os
+
+    target = tmp_path / "state" / "alert-push-url"
+    old = os.umask(0o022)
+    try:
+        result = report.write_push_url("http://kuma/push/secret", path=target)
+    finally:
+        os.umask(old)
+
+    assert result["state"] == "written"
+    assert target.read_text() == "http://kuma/push/secret"
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert target.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_a_non_http_push_url_is_rejected(report, tmp_path):
+    with pytest.raises(ValueError):
+        report.write_push_url("ftp://kuma/push", path=tmp_path / "u")
+
+
+def test_clearing_a_push_url_removes_the_file(report, tmp_path):
+    target = tmp_path / "u"
+    report.write_push_url("http://kuma/push/x", path=target)
+
+    assert report.write_push_url(None, path=target)["state"] == "cleared"
+    assert not target.exists()
+    assert report.write_push_url(None, path=target)["state"] == "absent"
