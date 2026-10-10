@@ -123,3 +123,63 @@ def test_semantic_is_not_the_default_mode():
     assert mode.default == "auto", "the default search mode changed away from `auto`"
     assert semantic.default is False, "`--semantic` became the default"
 
+
+
+# --- the re-ranker must be bounded -------------------------------------------
+#
+# `--semantic` used to rank the whole table: O(N) per query, measured p50 994 ms
+# at 5,919 observations (~68x the literal path) and Hit@1 0.267 vs 0.867 on
+# identifiers. It is now a re-ranker over the literal candidate set. These tests
+# pin the two properties that make it bounded, plus the honest consequence.
+
+def test_semantic_scores_only_the_candidate_pool(quality_conn):
+    """A bounded pool must actually bound what gets scored."""
+    from memory_tool.operations import run_semantic_search
+
+    total = quality_conn.execute("SELECT count(*) FROM observations").fetchone()[0]
+    assert total > 3, "fixture too small to show a bound"
+
+    unbounded = run_semantic_search(quality_conn, "retry", limit=total)
+    bounded = run_semantic_search(quality_conn, "retry", limit=total, candidate_limit=2)
+
+    assert len(bounded) <= 2
+    assert len(bounded) < len(unbounded) or len(unbounded) <= 2
+
+
+def test_semantic_returns_nothing_when_no_literal_candidate_exists(quality_conn):
+    """The honest consequence of being a *re-ranker* rather than a retriever.
+
+    A token-hash embedding gives a record that shares no tokens with the query a
+    score of ~0, so the old full scan ranked 5,919 zeros and returned noise. An
+    empty candidate set returning empty is the truthful answer, and it is why
+    `auto` stays the default.
+    """
+    from memory_tool.operations import run_semantic_search
+
+    assert run_semantic_search(quality_conn, "zzzznonexistenttokenzzzz") == []
+
+
+def test_semantic_pool_always_covers_the_requested_window(quality_conn):
+    """`offset + limit` must fit inside the pool, or paging would silently drop rows."""
+    from memory_tool.operations import run_semantic_search
+
+    page1 = run_semantic_search(quality_conn, "retry", limit=2, offset=0)
+    page2 = run_semantic_search(quality_conn, "retry", limit=2, offset=2,
+                                candidate_limit=4)
+
+    assert page2 == run_semantic_search(quality_conn, "retry", limit=2, offset=2), (
+        "a pool smaller than the window would change what page 2 returns")
+    assert page1 != page2 or len(page1) < 2
+
+
+def test_semantic_payload_shape_is_unchanged(quality_conn):
+    """Only *which* rows are scored changed, not what a caller receives."""
+    from memory_tool.operations import run_semantic_search
+
+    results = run_semantic_search(quality_conn, "retry", limit=2)
+
+    for item in results:
+        assert set(item) >= {"id", "title", "summary", "tags",
+                             "vectorScore", "keywordScore", "combinedScore"}
+    scores = [item["combinedScore"] for item in results]
+    assert scores == sorted(scores, reverse=True)
