@@ -381,6 +381,7 @@ AES-CBC 不提供认证加密，篡改检出靠密文 sha256 回读 + 恢复后�
 ### 16.5 仍未关闭
 
 - **recall-probe 有记录但没被监视**：没有告警阈值读它的 `verdict`，所以发现要人去看 `recall-probe.out.log`。下一步是加第 8 条阈值（按项目标准需附"证明它会触发"的测试），但它与"告警投递通道"是同一件事的两半。
-- **DSH 影子 MCP 掉线**（§5/§9）：配置已改（`maxAttempts` 10 → 1000000 + SSH keepalive），但本机 `[INFO:hmr] watching []` 说明 HMR 没有在监视任何 root，**配置未生效**，需要重启 DSH 宿主或 reload 该插件。未生效前门槛 6 仍然卡住。
+- ~~**DSH 影子 MCP 掉线**（§5/§9）~~ —— **已修并验证**。配置改动（`reconnect.maxAttempts` 10 → 1000000、SSH `ServerAliveInterval=15`/`ServerAliveCountMax=3`）在宿主重启后生效：ssh 进程带上 keepalive 参数，强制断连后日志为 `reconnecting in 500ms (attempt 1/1000000)` 并 `re-synced tools`——分母从 `/10` 变成 `/1000000`，"10 次耗尽即注销工具、只能靠重启恢复"这条路实际不可达。
+  **但门槛 6 仍未通过**：插件与传输已健康，剩余缺口是"已有会话的工具 schema 快照不含该 MCP 工具"（注入时序，见 §9），需要在**刷新后的新会话**里真正调一次才算取证。另注：本机 HMR 的 `watching []` 为空，所以配置类改动今后都需重启宿主才能生效。
 - **W-03 切换**、**inactive/revisions 保留策略**：未处理（决策项）。
 - **主库检索缺口本身**：未处理，属上游/用户决策。

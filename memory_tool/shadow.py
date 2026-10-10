@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .shadow_registry import MULTI, UNASSIGNED, labels_for, project_for
+from .shadow_registry import UNASSIGNED, labels_for, project_for
 from .utils import like_pattern
 
 
@@ -225,6 +225,47 @@ def reindex(conn, space=None):
             record = json.loads(row["snapshot"])
             index_record(conn, row["space"], record)
     return len(rows)
+
+
+def page_stats(conn):
+    """File/page accounting, so "how much is reclaimable" is measured not guessed."""
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    return {"page_size": page_size, "page_count": page_count, "freelist_pages": freelist,
+            "file_bytes": page_count * page_size, "freelist_bytes": freelist * page_size}
+
+
+def compact(conn, vacuum=False):
+    """Reclaim space without deleting a single record.
+
+    Measured 2026-10-10 on the live mirror (174.7 MB file): **58.9 MiB was
+    freelist** — a third of the file, left behind by reindexes — while the 118
+    inactive records a "retention policy" is usually expected to delete live
+    inside the 9.1 MB `records` table. The reclaimable space is therefore an
+    order of magnitude larger than anything pruning tombstones or revisions
+    could return, and it costs nothing in auditability. Two levers, deliberately
+    not conflated:
+
+    - `records_fts` `'optimize'` merges the FTS5 segment b-tree. Safe and
+      idempotent; it changes no row.
+    - `VACUUM` rewrites the whole file. It needs a full spare copy on disk and an
+      exclusive lock, so it stays opt-in behind `--vacuum`.
+    """
+    before = page_stats(conn)
+    conn.execute("INSERT INTO records_fts(records_fts) VALUES('optimize')")
+    conn.commit()
+    after = page_stats(conn)
+    if vacuum:
+        # VACUUM refuses to run inside a transaction; the commit above closes it.
+        conn.execute("VACUUM")
+        after = page_stats(conn)
+    return {"file_bytes_before": before["file_bytes"],
+            "file_bytes_after": after["file_bytes"],
+            "freelist_bytes_before": before["freelist_bytes"],
+            "freelist_bytes_after": after["freelist_bytes"],
+            "vacuumed": bool(vacuum),
+            "reclaimed_bytes": before["file_bytes"] - after["file_bytes"]}
 
 
 def fts_docs(conn, space=None):
@@ -514,6 +555,7 @@ def status(conn, space="default"):
                                      if index_state == "not_built" else None},
             "contract": coverage(conn, space),
             "metering": metering(conn, space),
+            "storage": page_stats(conn),
             "error_ledger": {"size": conn.execute("SELECT count(*) FROM sync_errors WHERE space=?",
                                                   (space,)).fetchone()[0],
                              "recent": [{"source_id": item["source_id"],
@@ -1226,7 +1268,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["sync", "status", "reindex", "summary", "rotatelog",
                                            "compare", "compare-drain", "compare-report",
-                                           "recall-probe"])
+                                           "recall-probe", "compact"])
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--config", default=str(Path.home() / ".nowledge-mem/config.json"))
     parser.add_argument("--batch", type=int, default=100)
@@ -1248,6 +1290,9 @@ def main():
     parser.add_argument("--nowledge-cmd", default=os.environ.get("SHADOW_NMEM_BIN", "nmem"))
     parser.add_argument("--max-bytes", type=int, default=8 * 1024 * 1024)
     parser.add_argument("--keep", type=int, default=5)
+    parser.add_argument("--vacuum", action="store_true",
+                        help="compact: also rewrite the file (needs a full spare copy on disk "
+                             "and an exclusive lock). Without it only the FTS segments merge.")
     parser.add_argument("--log", action="append", default=None,
                         help="rotatelog: the log file to cap; repeatable. Defaults to the "
                              "sync log beside --db, which was the only log the job capped "
@@ -1294,6 +1339,16 @@ def main():
             result = probe_primary_recall(conn, command=args.nowledge_cmd,
                                           limit=args.limit, recent=args.recent,
                                           control=args.control, span=args.span)
+        elif args.action == "compact":
+            # Same single-writer lock as sync/reindex: VACUUM rewrites the file
+            # and cannot run while another process holds the database.
+            import fcntl
+            with open(str(Path(args.db).expanduser()) + ".lock", "a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise SystemExit("Another shadow sync is running") from None
+                result = compact(conn, vacuum=args.vacuum)
         elif args.action == "reindex":
             # Same single-writer lock as sync: rebuilding while a sync writes
             # would interleave index rows with record writes.
@@ -1302,7 +1357,7 @@ def main():
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
-                    raise SystemExit("Another shadow sync is running")
+                    raise SystemExit("Another shadow sync is running") from None
                 count = reindex(conn)
             result = {"reindexed": count, "search_index": status(conn)["search_index"],
                       "contract": status(conn)["contract"]}
@@ -1312,7 +1367,7 @@ def main():
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
-                    raise SystemExit("Another shadow sync is running")
+                    raise SystemExit("Another shadow sync is running") from None
                 result = sync(conn, Nowledge(args.config), args.batch,
                               manifest_cache_seconds=args.manifest_cache_seconds)
         print(json.dumps(result, ensure_ascii=False))
