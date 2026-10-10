@@ -2,9 +2,14 @@
 
 Tests cover knowledge extraction, storage, search, and statistics.
 """
+import time
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from memory_tool.knowledge_base import KnowledgeBase, KnowledgeEntry, ResolutionExtractor
+from memory_tool.utils import ISO_FORMAT
 
 
 class TestKnowledgeEntry:
@@ -244,13 +249,60 @@ class TestKnowledgeBase:
         assert "type_distribution" in stats
 
     def test_get_unused_entries(self, kb, sample_entry):
-        """Test getting unused entries."""
-        entry_id = kb.add_entry(sample_entry)
+        """An entry whose last use predates the cutoff is returned."""
+        # `add_entry` stamps `last_used_at` with `utc_now()` (second resolution),
+        # so a just-added entry sits exactly on a `days=0` cutoff and is not
+        # strictly older than it. Drive the stored value through the public
+        # `KnowledgeEntry.last_used_at` field instead of racing that boundary.
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).strftime(ISO_FORMAT)
+        entry_id = kb.add_entry(replace(sample_entry, last_used_at=old))
 
-        # Don't update last_used_at, so it's unused
-        unused = kb.get_unused_entries(days=0)
+        unused = kb.get_unused_entries(days=7)
 
-        assert len(unused) >= 1
+        assert [entry.id for entry in unused] == [entry_id]
+
+    def test_get_unused_entries_excludes_recently_used(self, kb, sample_entry):
+        """An entry used inside the window is not returned."""
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(ISO_FORMAT)
+        kb.add_entry(replace(sample_entry, last_used_at=recent))
+
+        assert kb.get_unused_entries(days=7) == []
+
+    def test_get_unused_entries_is_timezone_independent(self, db_connection, monkeypatch):
+        """The cutoff must be UTC, matching how `last_used_at` is written.
+
+        Regression guard: the cutoff used to be a naive local
+        `datetime.now().isoformat()`. Compared against the stored `...Z` values
+        the result flipped with the host timezone — on a UTC host the trailing
+        `Z` sorts after `.`, so nothing was ever "older than the cutoff" and this
+        query returned an empty list regardless of `days`.
+        """
+        if not hasattr(time, "tzset"):
+            pytest.skip("changing TZ at runtime requires time.tzset() (POSIX only)")
+
+        kb = KnowledgeBase(db_connection)
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).strftime(ISO_FORMAT)
+        entry_id = kb.add_entry(KnowledgeEntry(
+            incident_type="error",
+            severity="p1",
+            symptoms_pattern="tz guard",
+            root_cause_summary="timezone-dependent cutoff",
+            solution_steps=["pin the cutoff to UTC"],
+            tags=["tz"],
+            last_used_at=old,
+        ))
+
+        results = {}
+        for tz in ("UTC", "Asia/Shanghai", "America/Los_Angeles"):
+            monkeypatch.setenv("TZ", tz)
+            time.tzset()
+            results[tz] = [entry.id for entry in kb.get_unused_entries(days=7)]
+        monkeypatch.delenv("TZ", raising=False)
+        time.tzset()
+
+        assert results == {tz: [entry_id] for tz in results}, (
+            f"cutoff depends on the host timezone: {results}"
+        )
 
     def test_delete_entry(self, kb, sample_entry):
         """Test deleting entry."""

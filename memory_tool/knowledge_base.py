@@ -12,10 +12,10 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from .utils import like_pattern, utc_now
+from .utils import ISO_FORMAT, like_pattern, utc_now
 
 
 @dataclass
@@ -701,7 +701,13 @@ class KnowledgeBase:
         limit: int = 20,
     ) -> List[KnowledgeEntry]:
         """Get entries not used recently (for cleanup)."""
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        # `last_used_at` is written by `utc_now()` in "%Y-%m-%dT%H:%M:%SZ" (UTC).
+        # The cutoff must come from the same generator and format. A naive
+        # `datetime.now().isoformat()` only compared correctly by accident of the
+        # host timezone: on a UTC host the trailing `Z` sorts after `.`, so
+        # `last_used_at < cutoff` was false for every entry and this query
+        # returned nothing at all.
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(ISO_FORMAT)
 
         rows = self.conn.execute(
             """

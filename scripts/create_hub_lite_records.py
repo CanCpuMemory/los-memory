@@ -6,6 +6,7 @@ for the los-memory child session in the hub-lite parent epic.
 """
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +65,13 @@ def main() -> int:
     
     # Check 1: Repository structure
     try:
-        required_dirs = ["memory_tool", "tests", "docs", "logs"]
+        # `logs/` is deliberately absent from this list: it is a gitignored
+        # output directory that this script writes its report into (via
+        # `session.write_report`, which creates parents). Requiring it as an
+        # input made the check FAIL on any clean checkout — which is exactly
+        # what CI is — and turned a healthy run into "Acceptance state:
+        # BLOCKED" with a non-zero exit code.
+        required_dirs = ["memory_tool", "tests", "docs"]
         for dir_name in required_dirs:
             dir_path = ROOT / dir_name
             if not dir_path.exists():
@@ -145,10 +152,13 @@ def main() -> int:
     print("4. Generating report...")
     session.generate_report()
     
-    # Write JSON log file
+    # Write JSON log file. `HUB_LITE_LOG_DIR` redirects the artifact away from
+    # the repo's gitignored `logs/` so that callers (notably tests) neither
+    # depend on previously accumulated artifacts nor add to them.
+    log_dir = Path(os.environ.get("HUB_LITE_LOG_DIR", str(ROOT / "logs")))
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     log_filename = f"hub-lite-child-{child_task_id}-implementation-{timestamp}.json"
-    log_path = ROOT / "logs" / log_filename
+    log_path = log_dir / log_filename
     
     session.write_report(log_path)
     print(f"   Report written to: {log_path}")
