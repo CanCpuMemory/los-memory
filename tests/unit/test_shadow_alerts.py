@@ -33,8 +33,35 @@ def load_report_module():
 
 
 @pytest.fixture(scope="module")
-def report():
-    return load_report_module()
+def report(tmp_path_factory):
+    """The module under test, with **every production path redirected**.
+
+    On 2026-10-10 a test in this file truncated the operator's real
+    `alerts.jsonl` to zero bytes: it loaded the script with `runpy` and tried to
+    override `ALERTS` through the returned namespace, but that mapping is not the
+    functions' `__globals__`, so the override silently did nothing and
+    `cap_ledger` rotated the production file. The content survived only because
+    `rotate_log` archives before truncating.
+
+    Rebinding the constants on the loaded module makes that mistake
+    unreachable: no test in this file can address the live state directory even
+    if it forgets to monkeypatch something.
+    """
+    module = load_report_module()
+    safe = tmp_path_factory.mktemp("shadow-report-state")
+    module.STATE_DIR = safe
+    module.ALERTS = safe / "alerts.jsonl"
+    module.LEDGER = safe / "backup-ledger.jsonl"
+    module.ALERT_PUSH_URL = safe / "alert-push-url"
+    return module
+
+
+def test_fixture_redirects_every_production_path(report):
+    """Guard: a test must not be able to address the live state directory."""
+    live = Path.home() / ".local/share/los-memory-shadow"
+
+    for value in (report.STATE_DIR, report.ALERTS, report.LEDGER, report.ALERT_PUSH_URL):
+        assert live not in Path(value).parents, f"{value} still points into {live}"
 
 
 def healthy():
@@ -310,3 +337,80 @@ def test_a_broken_channel_is_recorded_not_raised(report, monkeypatch):
 
     assert delivery["state"] == "failed"
     assert "connection refused" in delivery["detail"]
+
+
+def test_ledger_is_capped_by_its_own_writer(report, monkeypatch, tmp_path):
+    """`alerts.jsonl` lives on M1, so the M3 rotation job can never reach it.
+
+    Measured 2026-10-10: adding it to the M3 maintenance list only ever reported
+    `missing`. The writer caps its own file instead.
+    """
+    ledger = tmp_path / "alerts.jsonl"
+    ledger.write_bytes(b"x" * 500)
+    monkeypatch.setattr(report, "ALERTS", ledger)
+
+    result = report.cap_ledger(max_bytes=100, keep=2)
+
+    assert result["rotated"] is True
+    assert ledger.stat().st_size == 0, "the live file is emptied in place"
+    assert list(tmp_path.glob("alerts.jsonl.*")), "an archive is kept"
+
+
+def test_ledger_below_the_cap_is_left_alone(report, monkeypatch, tmp_path):
+    ledger = tmp_path / "alerts.jsonl"
+    ledger.write_bytes(b"x" * 50)
+    monkeypatch.setattr(report, "ALERTS", ledger)
+
+    result = report.cap_ledger(max_bytes=100, keep=2)
+
+    assert result["rotated"] is False and result["bytes"] == 50
+    assert not list(tmp_path.glob("alerts.jsonl.*"))
+
+
+def test_a_missing_ledger_is_not_an_error(report, monkeypatch, tmp_path):
+    """First run on a fresh host has no ledger yet."""
+    monkeypatch.setattr(report, "ALERTS", tmp_path / "absent.jsonl")
+
+    result = report.cap_ledger()
+
+    assert result["rotated"] is False
+    assert result.get("reason") == "missing"
+
+
+def test_ledger_cap_works_the_way_launchd_runs_it(tmp_path):
+    """Run the script as launchd does: by path, from an unrelated cwd.
+
+    `pytest` inserts the repository root into `sys.path`, so an in-process test
+    cannot see that `python3 scripts/shadow_report.py` puts only `scripts/` on the
+    path. The first live run reported `rotate unavailable: ModuleNotFoundError`
+    for exactly that reason, with the unit tests green the whole time.
+
+    `SHADOW_STATE_DIR` is what makes this hermetic: the child derives every path
+    from it, so its own state directory is outside the repository and outside the
+    operator's.
+    """
+    import os
+    import subprocess
+    import sys
+
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    ledger = state / "alerts.jsonl"
+    ledger.write_bytes(b"x" * 500)
+    script = REPO_ROOT / "scripts" / "shadow_report.py"
+    program = (
+        "import runpy;"
+        f"ns = runpy.run_path({str(script)!r}, run_name='not_main');"
+        "print('cap', ns['cap_ledger'](max_bytes=100, keep=2))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        capture_output=True, text=True, cwd="/",
+        env={**os.environ, "SHADOW_STATE_DIR": str(state), "PYTHONPATH": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "'rotated': True" in result.stdout or '"rotated": True' in result.stdout, result.stdout
+    assert ledger.stat().st_size == 0, "the child capped its own state dir"
+    assert list(state.glob("alerts.jsonl.*")), "and archived what it removed"

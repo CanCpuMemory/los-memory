@@ -179,6 +179,35 @@ def alert_push_url():
     return None
 
 
+def cap_ledger(max_bytes=8 * 1024 * 1024, keep=5):
+    """Cap `alerts.jsonl`, which is written by this script on M1.
+
+    It was first added to the *M3* maintenance job's rotation list — but the
+    ledger lives on M1, where the alert job runs, so that entry only ever
+    reported `missing`. Rather than add a fourth launchd job on the other host,
+    the writer caps its own file, reusing the tested `rotate_log`.
+
+    The import is lazy and the outcome is returned, never raised: this runs on
+    the alert path, and a rotation problem must not stop an alert from being
+    recorded.
+    """
+    # launchd runs this as `python3 /path/to/scripts/shadow_report.py`, which puts
+    # `scripts/` on sys.path -- not the repository root -- so the package is not
+    # importable by default. Pytest hides that (it inserts the rootdir), which is
+    # why this was caught by the live run rather than by the unit tests.
+    root = str(Path(__file__).resolve().parents[1])
+    try:
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from memory_tool.shadow import rotate_log
+    except Exception as error:  # noqa: BLE001 - any import failure is reported, not fatal
+        return {"rotated": False, "reason": f"rotate unavailable: {type(error).__name__}"}
+    try:
+        return rotate_log(ALERTS, max_bytes, keep)
+    except OSError as error:
+        return {"rotated": False, "reason": f"{type(error).__name__}: {error}"[:200]}
+
+
 def notify(url, alerts, generated_at):
     """Best-effort delivery, recorded either way.
 
@@ -456,9 +485,10 @@ def main():
 
     if args.action == "alert":
         STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        rotation = cap_ledger()
         delivery = notify(alert_push_url(), alerts, generated_at)
         record = {"ts": datetime.datetime.now().timestamp(), "generated_at": generated_at,
-                  "alerts": alerts, "delivery": delivery}
+                  "alerts": alerts, "delivery": delivery, "ledger_cap": rotation}
         with open(ALERTS, "a") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         os.chmod(ALERTS, 0o600)
