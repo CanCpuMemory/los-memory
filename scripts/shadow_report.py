@@ -24,6 +24,8 @@ import sys
 M3_HOST = os.environ.get("SHADOW_M3_HOST", "m3-t")
 M3_LOG = os.environ.get("SHADOW_M3_LOG", "~/.local/share/los-memory-shadow/sync.out.log")
 M3_DB = os.environ.get("SHADOW_M3_DB", "~/.local/share/los-memory-shadow/shadow.sqlite3")
+M3_PROBE_LOG = os.environ.get(
+    "SHADOW_M3_PROBE_LOG", "~/.local/share/los-memory-shadow/recall-probe.out.log")
 STATE_DIR = Path(os.environ.get("SHADOW_STATE_DIR",
                                 Path.home() / ".local/share/los-memory-shadow"))
 LEDGER = STATE_DIR / "backup-ledger.jsonl"
@@ -34,6 +36,7 @@ MAX_OLDEST_VERIFY_HOURS = 24      # migration gate 1
 MAX_SILENCE_MINUTES = 30          # 300 s cadence + slack before "job died"
 MAX_BACKUP_AGE_HOURS = 24         # RPO gate
 MANIFEST_DROP_RATIO = 0.95        # a listing that suddenly shrinks is suspicious
+MAX_RECALL_PROBE_AGE_HOURS = 12   # probe runs every 6 h; two missed runs is silence
 
 
 def ssh(host, command):
@@ -119,6 +122,45 @@ def backup_state():
                                                      - last["ts"]) / 3600, 2)}
 
 
+def recall_probe_state():
+    """The newest `shadow recall-probe` verdict, or why there isn't one.
+
+    The probe is the only instrument that can see a primary which reports
+    `Search Index: available` while content written after some point is
+    unretrievable — every other threshold in this file reads the mirror's own
+    health and is structurally blind to that. Reporting it without alarming on
+    it would leave the blind spot *recorded* rather than *watched*.
+
+    The file itself carries the run time (the probe payload has none), so age
+    comes from the log's mtime.
+    """
+    result = ssh(M3_HOST, f"stat -f '%m' {M3_PROBE_LOG} 2>/dev/null; "
+                          f"tail -n 1 {M3_PROBE_LOG} 2>/dev/null || true")
+    if result.returncode != 0:
+        return {"state": "unreadable", "detail": result.stderr.decode()[:200]}
+    lines = [line for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
+    if not lines:
+        return {"state": "absent", "detail": "no recall-probe output yet"}
+    try:
+        modified = float(lines[0])
+    except ValueError:
+        return {"state": "unreadable", "detail": "cannot read the probe log mtime"}
+    if len(lines) < 2:
+        return {"state": "absent", "detail": "probe log exists but holds no result"}
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return {"state": "unreadable", "detail": "newest probe line is not JSON"}
+    return {"state": "ok",
+            "verdict": payload.get("verdict"),
+            "recent_rate": payload.get("recent_rate"),
+            "control_rate": payload.get("control_rate"),
+            "recent_probes": payload.get("recent_probes"),
+            "control_probes": payload.get("control_probes"),
+            "errors": payload.get("errors"),
+            "age_hours": round((datetime.datetime.now().timestamp() - modified) / 3600, 2)}
+
+
 def analyse(runs, now=None):
     now = now or datetime.datetime.now().timestamp()
     starts = [run.get("started_at") for run in runs if run.get("started_at")]
@@ -158,7 +200,17 @@ def analyse(runs, now=None):
     }
 
 
-def evaluate_alerts(status, stats, backups, runs):
+def evaluate_alerts(status, stats, backups, runs, probe):
+    """Every threshold, including the probe state, which is required.
+
+    `probe` has no default on purpose: it feeds the only threshold that looks
+    outside the mirror, and a default would let a future caller silently skip
+    it — which is the exact failure mode (a blind spot nobody watches) this
+    threshold exists to remove.
+    """
+    if probe is None:
+        raise ValueError("probe state is required; omitting it would silently skip the "
+                         "only threshold that looks outside the mirror")
     alerts = []
     oldest = status.get("oldest_verified_at")
     if oldest:
@@ -198,6 +250,37 @@ def evaluate_alerts(status, stats, backups, runs):
         alerts.append({"code": "backup_stale", "severity": "high",
                        "detail": f"newest off-host backup is {age}h old "
                                  f"(budget {MAX_BACKUP_AGE_HOURS}h)"})
+
+    # The one threshold that looks outside the mirror. This condition is
+    # expected to keep firing until the primary's index is repaired; that is the
+    # point — it is an external defect, and silencing it would restore exactly
+    # the blindness the probe was built to remove. Tracked in TODO.md.
+    state = probe.get("state")
+    if state == "absent":
+        alerts.append({"code": "recall_probe_absent", "severity": "medium",
+                       "detail": "no recall-probe result: the primary-retrieval blind spot "
+                                 "is not being watched"})
+    elif state == "unreadable":
+        alerts.append({"code": "recall_probe_unreadable", "severity": "medium",
+                       "detail": f"cannot read the recall-probe result: {probe.get('detail')}"})
+    elif state == "ok":
+        probe_age = probe.get("age_hours")
+        if probe_age is not None and probe_age > MAX_RECALL_PROBE_AGE_HOURS:
+            alerts.append({"code": "recall_probe_stale", "severity": "high",
+                           "detail": f"newest recall probe is {probe_age}h old "
+                                     f"(budget {MAX_RECALL_PROBE_AGE_HOURS}h, 6 h job) — "
+                                     f"the blind spot is unwatched again"})
+        # `primary_not_answering` is deliberately not alerted here: the mirror's
+        # own `sync_errors`/`stale_verification` thresholds already cover a dead
+        # primary, and double-reporting one outage as two codes trains the reader
+        # to ignore both.
+        if probe.get("verdict") == "stale_projection_suspected":
+            alerts.append({"code": "primary_stale_projection", "severity": "high",
+                           "detail": "primary answers control probes "
+                                     f"({probe.get('control_rate')}) but not recent ones "
+                                     f"(recent_rate {probe.get('recent_rate')}, "
+                                     f"{probe.get('recent_probes')} probes) while still "
+                                     "reporting search_index available"})
     return alerts
 
 
@@ -205,7 +288,8 @@ def _mb(value):
     return "n/a" if not value else f"{value / 1048576:.1f} MiB"
 
 
-def render_markdown(stats, status, backups, alerts, generated_at, disk=None, handshake=None):
+def render_markdown(stats, status, backups, alerts, generated_at, disk=None, handshake=None,
+                    probe=None):
     lines = ["# 影子服务运行报告", "",
              f"生成时间：{generated_at}。数据来源：M3 `sync.out.log`、M3 影子库 `shadow status`、"
              "本机异机备份台账。只读采集。", ""]
@@ -274,6 +358,24 @@ def render_markdown(stats, status, backups, alerts, generated_at, disk=None, han
                   f"| MCP 握手 | {'OK' if handshake.get('ok') else 'FAILED'} |",
                   f"| serverInfo.name | {handshake.get('server')} |",
                   f"| 工具面 | {handshake.get('tools')} |"]
+    if probe is not None:
+        lines += ["", "## 6d. 主库召回探测（唯一看向主库的指标）", "",
+                  "| 指标 | 实测 |", "| --- | --- |"]
+        if probe.get("state") == "ok":
+            lines += [f"| 判定 | **{probe.get('verdict')}** |",
+                      f"| recent_rate | {probe.get('recent_rate')} "
+                      f"（{probe.get('recent_probes')} 个探针） |",
+                      f"| control_rate | {probe.get('control_rate')} "
+                      f"（{probe.get('control_probes')} 个探针） |",
+                      f"| 距离最近一次探测 | {probe.get('age_hours')} h "
+                      f"（预算 {MAX_RECALL_PROBE_AGE_HOURS} h） |",
+                      f"| 探测自身错误 | {probe.get('errors')} |",
+                      "",
+                      "`stale_projection_suspected` 表示主库**在应答**（control 健康）但取不回近期内容，"
+                      "而它同时报 `search_index available`。该条会持续告警直到主库修复——这是刻意的，"
+                      "静音它就等于恢复它当初能静默两周的盲区。"]
+        else:
+            lines += [f"| 状态 | {probe.get('state')}（{probe.get('detail')}） |"]
     lines += ["", "## 7. 未达标项与口径说明", "",
               "- 14 天窗口的**正式**判定必须在窗口满 14 天后重跑本脚本；本报告若早于该时点，"
               "只作为滚动观察，不能当作门槛已通过。",
@@ -294,8 +396,9 @@ def main():
     runs = fetch_log()
     status = fetch_status()
     backups = backup_state()
+    probe = recall_probe_state()
     stats = analyse(runs)
-    alerts = evaluate_alerts(status, stats, backups, runs)
+    alerts = evaluate_alerts(status, stats, backups, runs, probe)
     generated_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
     if args.action == "alert":
@@ -309,14 +412,15 @@ def main():
         raise SystemExit(1 if alerts else 0)
 
     disk, handshake = disk_state(), handshake_state()
-    markdown = render_markdown(stats, status, backups, alerts, generated_at, disk, handshake)
+    markdown = render_markdown(stats, status, backups, alerts, generated_at, disk, handshake,
+                               probe)
     if args.out:
         Path(args.out).write_text(markdown)
     print(markdown)
     print(json.dumps({"stats": stats, "alerts": alerts,
                       "metering": status.get("metering"),
                       "contract": status.get("contract"),
-                      "disk": disk, "handshake": handshake},
+                      "disk": disk, "handshake": handshake, "recall_probe": probe},
                      ensure_ascii=False, default=str),
           file=sys.stderr)
 
