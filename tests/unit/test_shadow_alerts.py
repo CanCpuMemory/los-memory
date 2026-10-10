@@ -217,3 +217,96 @@ def test_healthy_fixture_is_not_mutated_by_evaluation(report):
     report.evaluate_alerts(status, stats, backups, runs, probe)
 
     assert (status, stats, backups, runs, probe) == before
+
+
+# --- delivery -----------------------------------------------------------------
+#
+# The project already has one notification chain (Uptime Kuma webhook ->
+# kuma-webhook-bridge -> feishu-push.sh -> Feishu), so delivery reuses it. These
+# tests pin the three properties that matter: unconfigured is a *reported* state
+# rather than silent success, a broken channel is recorded instead of raised, and
+# a broken channel makes the job exit non-zero.
+
+class FakeResponse:
+    def __init__(self, status=200, body=b"ok"):
+        self.status = status
+        self._body = body
+
+    def read(self, _limit=None):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def test_push_url_prefers_the_environment(report, monkeypatch):
+    monkeypatch.setenv("SHADOW_ALERT_PUSH_URL", "http://kuma/push/abc")
+    assert report.alert_push_url() == "http://kuma/push/abc"
+
+
+def test_push_url_falls_back_to_a_0600_file(report, monkeypatch, tmp_path):
+    monkeypatch.delenv("SHADOW_ALERT_PUSH_URL", raising=False)
+    path = tmp_path / "alert-push-url"
+    path.write_text("http://kuma/push/file\n")
+    monkeypatch.setattr(report, "ALERT_PUSH_URL", path)
+
+    assert report.alert_push_url() == "http://kuma/push/file"
+
+
+def test_push_url_is_none_when_unset_everywhere(report, monkeypatch, tmp_path):
+    monkeypatch.delenv("SHADOW_ALERT_PUSH_URL", raising=False)
+    monkeypatch.setattr(report, "ALERT_PUSH_URL", tmp_path / "absent")
+
+    assert report.alert_push_url() is None
+
+
+def test_unconfigured_delivery_is_reported_not_silent(report):
+    """The pre-existing behaviour must stay visible rather than look like success."""
+    delivery = report.notify(None, [], "2026-10-10T00:00:00+08:00")
+
+    assert delivery["state"] == "unconfigured"
+    assert "nothing is notified" in delivery["detail"]
+
+
+def test_alerts_are_pushed_as_down_with_their_codes(report, monkeypatch):
+    seen = {}
+
+    def fake_urlopen(url, timeout=None):
+        seen["url"] = url
+        return FakeResponse(body=b"OK")
+
+    monkeypatch.setattr(report.urllib.request, "urlopen", fake_urlopen)
+    alerts = [{"code": "primary_stale_projection", "severity": "high", "detail": "x"}]
+
+    delivery = report.notify("http://kuma/push/abc", alerts, "t")
+
+    assert delivery["state"] == "pushed" and delivery["status"] == "down"
+    assert "status=down" in seen["url"]
+    assert "primary_stale_projection" in seen["url"]
+
+
+def test_a_healthy_host_pushes_up(report, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(report.urllib.request, "urlopen",
+                        lambda url, timeout=None: (seen.setdefault("url", url), FakeResponse())[1])
+
+    delivery = report.notify("http://kuma/push/abc?token=xyz", [], "t")
+
+    assert delivery["state"] == "pushed" and delivery["status"] == "up"
+    assert "status=up" in seen["url"]
+    assert "?token=xyz&" in seen["url"], "an existing query string must be preserved"
+
+
+def test_a_broken_channel_is_recorded_not_raised(report, monkeypatch):
+    def boom(url, timeout=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(report.urllib.request, "urlopen", boom)
+
+    delivery = report.notify("http://kuma/push/abc", [{"code": "x", "severity": "high"}], "t")
+
+    assert delivery["state"] == "failed"
+    assert "connection refused" in delivery["detail"]

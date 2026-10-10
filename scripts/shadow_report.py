@@ -20,6 +20,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 
 M3_HOST = os.environ.get("SHADOW_M3_HOST", "m3-t")
 M3_LOG = os.environ.get("SHADOW_M3_LOG", "~/.local/share/los-memory-shadow/sync.out.log")
@@ -30,6 +32,9 @@ STATE_DIR = Path(os.environ.get("SHADOW_STATE_DIR",
                                 Path.home() / ".local/share/los-memory-shadow"))
 LEDGER = STATE_DIR / "backup-ledger.jsonl"
 ALERTS = STATE_DIR / "alerts.jsonl"
+# A Uptime Kuma *push* URL (or any endpoint accepting ?status=up|down&msg=).
+# Unset keeps the pre-existing behaviour: the ledger plus a non-zero exit.
+ALERT_PUSH_URL = STATE_DIR / "alert-push-url"
 
 # Thresholds. Each is a stated budget from the design docs, not a tuned guess.
 MAX_OLDEST_VERIFY_HOURS = 24      # migration gate 1
@@ -159,6 +164,54 @@ def recall_probe_state():
             "control_probes": payload.get("control_probes"),
             "errors": payload.get("errors"),
             "age_hours": round((datetime.datetime.now().timestamp() - modified) / 3600, 2)}
+
+
+def alert_push_url():
+    """Where to deliver, if anywhere: env wins, then a 0600 file, else nothing."""
+    from_env = os.environ.get("SHADOW_ALERT_PUSH_URL")
+    if from_env:
+        return from_env.strip()
+    try:
+        if ALERT_PUSH_URL.exists():
+            return ALERT_PUSH_URL.read_text().strip() or None
+    except OSError:
+        return None
+    return None
+
+
+def notify(url, alerts, generated_at):
+    """Best-effort delivery, recorded either way.
+
+    The project already has exactly one notification chain — Uptime Kuma
+    webhook -> kuma-webhook-bridge -> `feishu-push.sh` -> Feishu — so this
+    reuses it rather than adding a second one. A *push* monitor is preferred
+    over a plain webhook because it also detects a watcher that stopped
+    running: on 2026-10-10 the alert job silently missed four hourly runs while
+    M1 slept, and an alert-only channel cannot see that.
+
+    Delivery failure is recorded and makes the job exit non-zero. A channel that
+    can break without saying so would reproduce the blindness the thresholds
+    were added to remove.
+    """
+    if not url:
+        return {"state": "unconfigured",
+                "detail": "no push URL; alerts are recorded to alerts.jsonl and the job "
+                          "exits 1, but nothing is notified"}
+    status = "down" if alerts else "up"
+    if alerts:
+        summary = "; ".join(f"{alert['code']}({alert['severity']})" for alert in alerts)
+        message = f"los-memory shadow: {len(alerts)} alert(s) - {summary}"
+    else:
+        message = "los-memory shadow: all thresholds satisfied"
+    separator = "&" if "?" in url else "?"
+    target = f"{url}{separator}status={status}&msg={urllib.parse.quote(message)}"
+    try:
+        with urllib.request.urlopen(target, timeout=10) as response:
+            code, body = response.status, response.read(200).decode(errors="replace").strip()
+        return {"state": "pushed", "status": status, "http_status": code, "detail": body[:200]}
+    except Exception as error:  # noqa: BLE001 - any transport failure is a delivery failure
+        return {"state": "failed", "status": status,
+                "detail": f"{type(error).__name__}: {error}"[:200]}
 
 
 def analyse(runs, now=None):
@@ -403,13 +456,16 @@ def main():
 
     if args.action == "alert":
         STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        delivery = notify(alert_push_url(), alerts, generated_at)
         record = {"ts": datetime.datetime.now().timestamp(), "generated_at": generated_at,
-                  "alerts": alerts}
+                  "alerts": alerts, "delivery": delivery}
         with open(ALERTS, "a") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         os.chmod(ALERTS, 0o600)
         print(json.dumps(record, ensure_ascii=False))
-        raise SystemExit(1 if alerts else 0)
+        # Exit non-zero for a broken channel too: a delivery path that fails
+        # quietly is the failure this whole exercise is about.
+        raise SystemExit(1 if (alerts or delivery["state"] == "failed") else 0)
 
     disk, handshake = disk_state(), handshake_state()
     markdown = render_markdown(stats, status, backups, alerts, generated_at, disk, handshake,
