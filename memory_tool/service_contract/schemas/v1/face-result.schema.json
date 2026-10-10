@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.invalid/service-contract/v1/face-result.schema.json",
+  "title": "FaceResult",
+  "description": "The answer to one read face, carrying the scope it was served under, what was dropped and any named degradation. Every face is enumerated so isolation can be counted per face.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "face",
+    "items",
+    "effective_scope",
+    "denied",
+    "stale",
+    "served_from_cache",
+    "degradations"
+  ],
+  "properties": {
+    "face": {
+      "type": "string",
+      "enum": ["search", "get", "graph", "cache", "bundle", "export", "history"]
+    },
+    "items": {"type": "array", "items": {"$ref": "#/definitions/face_item"}, "maxItems": 500},
+    "effective_scope": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["owner_id", "spaces", "projects", "actions", "denied"],
+      "properties": {
+        "owner_id": {"type": "string", "minLength": 1},
+        "spaces": {"type": "array", "items": {"type": "string"}},
+        "projects": {"type": "array", "items": {"type": "string"}},
+        "actions": {"type": "array", "items": {"type": "string"}},
+        "denied": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "denied": {"type": "array", "items": {"type": "string"}},
+    "stale": {"type": "boolean"},
+    "served_from_cache": {"type": "boolean"},
+    "degradations": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/degradation"},
+      "maxItems": 16
+    }
+  },
+  "definitions": {
+    "degradation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "detail"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "detail": {"type": "string"}
+      }
+    },
+    "face_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memory_id",
+        "revision_id",
+        "kind",
+        "content",
+        "claim_status",
+        "lifecycle",
+        "unit_lifecycle",
+        "project_id",
+        "space_id",
+        "visibility",
+        "actor_agent_id"
+      ],
+      "properties": {
+        "memory_id": {"type": "string", "minLength": 1},
+        "revision_id": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "content": {"type": "string"},
+        "claim_status": {
+          "type": "string",
+          "enum": ["proposed", "asserted", "unverified", "undeclared"]
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": ["proposed", "asserted", "superseded", "rejected", "retracted", "erased"]
+        },
+        "unit_lifecycle": {
+          "type": "string",
+          "enum": ["proposed", "asserted", "superseded", "rejected", "retracted", "erased"]
+        },
+        "project_id": {"type": "string", "minLength": 1},
+        "space_id": {"type": "string", "minLength": 1},
+        "visibility": {
+          "type": "string",
+          "enum": ["agent_private", "project_shared", "owner_shared"]
+        },
+        "actor_agent_id": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

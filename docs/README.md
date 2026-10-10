@@ -15,6 +15,7 @@ This repository separates documentation by usage instead of keeping every note a
 - [Phased optimization roadmap](design/memory-roadmap.md): P0–P6 goals, quality/resource gates and rollback
 - [Nowledge replacement readiness review (2026-10-07)](design/nowledge-replacement-readiness.md): executed-state evidence, gap list G1–G12, work packages W-00–W-11
 - [P2 write-path minimal design review](design/p2-write-path-minimal-loop.md): identity/event/revision/retraction/outbox contracts and the negative test list (design only)
+- [P2-01 contract layer](design/p2-01-contract-layer.md): delivered versioned schema, receipt semantics, identity/authorization model and the N1-N11 negative tests (contract layer only, no runtime, zero blast radius)
 - [Upstream memory tool research](reports/2026-09-26-memory-landscape.md): verified source links and adoption boundaries
 
 - [Dual-track memory and migration gates](design/dual-track-memory.md)

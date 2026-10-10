@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.invalid/service-contract/v1/error.schema.json",
+  "title": "ContractError",
+  "description": "A typed refusal. Clients branch on error.code, never on the message. Details never carry credentials and never carry content the caller may not read.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "error"],
+  "properties": {
+    "ok": {"const": false},
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "details"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "evidence_required_for_assertion",
+            "erased_record_not_readable",
+            "face_not_granted",
+            "idempotency_conflict",
+            "identity_field_rejected",
+            "missing_contract_version",
+            "offline_write_not_accepted",
+            "record_not_found",
+            "retracted_record_not_readable",
+            "revision_conflict",
+            "scope_not_granted",
+            "unauthenticated",
+            "unsupported_contract_version",
+            "unsupported_schema_keyword",
+            "wire_schema_violation"
+          ]
+        },
+        "message": {"type": "string", "minLength": 1},
+        "details": {"type": "object"}
+      }
+    }
+  }
+}

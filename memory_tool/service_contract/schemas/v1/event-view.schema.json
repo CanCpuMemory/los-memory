@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.invalid/service-contract/v1/event-view.schema.json",
+  "title": "EventView",
+  "description": "A scope-checked read of one committed source event. Reading the canonical log says nothing about whether the event is in a search projection - the receipt's stage flags say that.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "client_event_id",
+    "server_seq",
+    "content",
+    "source_instance",
+    "source_seq",
+    "observed_at",
+    "received_at",
+    "source_app",
+    "owner_id",
+    "space_id",
+    "project_id",
+    "device_id",
+    "actor_agent_id",
+    "payload_hash"
+  ],
+  "properties": {
+    "client_event_id": {"type": "string", "minLength": 1},
+    "server_seq": {"type": "integer", "minimum": 1},
+    "content": {"type": "string"},
+    "source_instance": {"type": "string"},
+    "source_seq": {"type": "integer", "minimum": 0},
+    "observed_at": {"type": "string"},
+    "received_at": {"type": "string", "minLength": 1},
+    "source_app": {"type": "string", "minLength": 1},
+    "owner_id": {"type": "string", "minLength": 1},
+    "space_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "device_id": {"type": "string", "minLength": 1},
+    "actor_agent_id": {"type": "string", "minLength": 1},
+    "payload_hash": {"type": "string", "minLength": 1}
+  }
+}

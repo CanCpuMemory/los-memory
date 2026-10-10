@@ -58,6 +58,14 @@ This document records the current, implemented state of `los-memory`.
 - CI includes targeted Ruff checks on maintained surfaces, docs command lint, CLI contract tests, unit tests, selected integration smoke, one approval migration E2E path, hub-lite integration coverage, and a BDD smoke run
 - Always treat live `pytest` and CI results as the source of truth for pass/fail counts
 
+## P2-01 service contract layer (added 2026-10-11)
+
+- `memory_tool/service_contract/` holds the **P2-01 contract layer** for the future write path: a versioned application contract (`CONTRACT_VERSION`), five versioned wire schemas with a dependency-free validator, receipt/outbox semantics, the identity and authorization model, and an in-process reference adapter. It is a contract, not a runtime.
+- Nothing in the running tool reaches it: `memory_tool` and `memory_tool.cli` do not import the package, no CLI command exists, no database file is created, and the package imports no `argparse`/`socket`/`http`/`urllib`/`sqlite3`. `service.sqlite3` is **declared** (tables, columns, migration version, DDL) but never created here.
+- The N1-N11 negative tests were written before the implementation: the first run failed at collection (`ModuleNotFoundError: No module named 'memory_tool.service_contract'`), and the file's 44 cases are green now. Deferred parts are named per test: real multi-device outbox replay and real Kimi/Codex/Grok writes remain P2-03; the isolated SQLite runtime, projections and cache expiry remain P2-02, which still waits on the P0 exit condition.
+- Semantics worth knowing before reading any future write-path code: `accepted` means only that the original payload is durably stored (`lexical_ready`/`semantic_ready` stay false and are reported as the named degradation `projections_pending`); replaying the same `(principal, client_event_id)` returns the same receipt, while a different payload under the same key is refused as a conflict; server-owned identity fields are refused rather than stripped; `effective_scope = requested ∩ granted`; only an evidence-bearing approval can reach `asserted` and `claim_status` otherwise stays `undeclared`.
+- Evidence: `docs/design/p2-01-contract-layer.md`, `tests/unit/test_service_contract_negative.py`, `tests/unit/test_service_contract_contract.py`.
+
 ## Current Documentation Rule
 
 - The proposed cross-device service is described in `docs/design/memory-service-architecture.md`, `memory-retrieval-pipeline.md`, and `memory-roadmap.md`. These do not mean authenticated HTTP writes, learned vector search, graph extraction, or NAS34 deployment are implemented.

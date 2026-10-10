@@ -66,10 +66,12 @@ packages = [
     "memory_tool.migrate_out.approval",
     "memory_tool.migrate_out.approval.sse_proxy",
     "memory_tool.schema",
+    "memory_tool.service_contract",
 ]
 
 [tool.setuptools.package-data]
 memory_tool = ["schema/*.json"]
+"memory_tool.service_contract" = ["schemas/v1/*.schema.json"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

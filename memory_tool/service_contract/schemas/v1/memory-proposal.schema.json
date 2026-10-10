@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.invalid/service-contract/v1/memory-proposal.schema.json",
+  "title": "MemoryProposal",
+  "description": "A memory revision proposal. claim_status is optional and, when absent or null, means undeclared - never asserted. An asserted proposal must carry at least one evidence span.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "content"],
+  "properties": {
+    "contract_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "kind": {"type": "string", "minLength": 1, "maxLength": 64},
+    "content": {"type": "string", "minLength": 1},
+    "claim_status": {
+      "type": ["string", "null"],
+      "enum": ["proposed", "asserted", "unverified", "undeclared", null]
+    },
+    "memory_id": {"type": ["string", "null"], "minLength": 1},
+    "base_revision": {"type": ["string", "null"], "minLength": 1},
+    "valid_from": {"type": ["string", "null"], "minLength": 1},
+    "valid_to": {"type": ["string", "null"], "minLength": 1},
+    "evidence": {"type": "array", "items": {"$ref": "#/definitions/evidence_link"}},
+    "project_id": {"type": ["string", "null"], "minLength": 1},
+    "requested_scope": {"$ref": "#/definitions/requested_scope"}
+  },
+  "definitions": {
+    "requested_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "projects": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 64},
+        "spaces": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 64},
+        "owner_shared": {"type": "boolean"}
+      }
+    },
+    "evidence_link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "revision", "span"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "span": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

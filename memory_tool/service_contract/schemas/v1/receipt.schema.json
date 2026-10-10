@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://los-memory.invalid/service-contract/v1/receipt.schema.json",
+  "title": "Receipt",
+  "description": "The server's answer to a write. accepted means the original payload is durably stored - the stage flags say separately whether anything is indexed. queued is the only state a client may produce for itself.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_id",
+    "state",
+    "operation",
+    "contract_version",
+    "principal_key_id",
+    "owner_id",
+    "client_event_id",
+    "payload_hash",
+    "server_seq",
+    "observed_at",
+    "received_at",
+    "source_app",
+    "replayed",
+    "stages",
+    "degradations",
+    "effective_scope",
+    "denied",
+    "erasure_pending",
+    "derived_pending",
+    "resnapshot_required",
+    "cursor",
+    "memory_id",
+    "revision_id",
+    "lifecycle"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string", "minLength": 1},
+    "state": {"type": "string", "enum": ["accepted", "queued"]},
+    "operation": {"type": "string", "minLength": 1},
+    "contract_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "principal_key_id": {"type": "string", "minLength": 1},
+    "owner_id": {"type": "string", "minLength": 1},
+    "client_event_id": {"type": "string", "minLength": 1},
+    "payload_hash": {"type": "string", "minLength": 1},
+    "server_seq": {"type": ["integer", "null"], "minimum": 1},
+    "observed_at": {"type": ["string", "null"]},
+    "received_at": {"type": "string", "minLength": 1},
+    "source_app": {"type": ["string", "null"]},
+    "replayed": {"type": "boolean"},
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_committed", "lexical_ready", "semantic_ready", "graph_ready"],
+      "properties": {
+        "canonical_committed": {"type": "boolean"},
+        "lexical_ready": {"type": "boolean"},
+        "semantic_ready": {"type": "boolean"},
+        "graph_ready": {"type": "boolean"}
+      }
+    },
+    "degradations": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/degradation"},
+      "maxItems": 16
+    },
+    "effective_scope": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["owner_id", "spaces", "projects", "actions", "denied"],
+      "properties": {
+        "owner_id": {"type": "string", "minLength": 1},
+        "spaces": {"type": "array", "items": {"type": "string"}},
+        "projects": {"type": "array", "items": {"type": "string"}},
+        "actions": {"type": "array", "items": {"type": "string"}},
+        "denied": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "denied": {"type": "array", "items": {"type": "string"}},
+    "erasure_pending": {"type": "array", "items": {"type": "string"}},
+    "derived_pending": {"type": "array", "items": {"type": "string"}},
+    "resnapshot_required": {"type": "boolean"},
+    "cursor": {"type": ["string", "null"]},
+    "memory_id": {"type": ["string", "null"]},
+    "revision_id": {"type": ["string", "null"]},
+    "lifecycle": {"type": ["string", "null"]}
+  },
+  "definitions": {
+    "degradation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "detail"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "detail": {"type": "string"}
+      }
+    }
+  }
+}
