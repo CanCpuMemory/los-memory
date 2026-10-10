@@ -87,6 +87,14 @@ FAILED tests/unit/test_hub_lite_record_script.py::TestHubLiteRecordScriptArtifac
 
 ---
 
+### 3.1 发布摘要的粒度问题（2026-10-10 核验时发现，已处置）
+
+`deploy_shadow.py` 的发布名是**整个 `memory_tool` 包**的内容摘要。这比"正在运行的影子是不是我审过的那份代码"这个问题**更粗**：任何核心侧改动（检索、CLI、知识库）都会翻转摘要，即使影子根本到不了那些文件。
+
+实测例：本轮把 `--semantic` 改成有界重排器（只动 `memory_tool/operations.py`）后，现网发布 `80da24bde45b1711ed8b` 与 HEAD 树摘要 `49c60c318b40fc2fbca1` 不一致。逐文件核对显示**只差 `operations.py` 一个文件**（`cdc4f126…` vs `9572041f…`），而 `shadow.py` / `shadow_mcp.py` / `shadow_registry.py` 的依赖闭包只有 `.shadow_registry` 与 `.utils`，**不含 `operations.py`** —— 即对影子行为无影响。
+
+处置：重新部署恢复精确对齐（四个 job 由脚本自动对齐）。记下这一点是因为它是个**信任仪器**问题：一个经常因无关原因报不一致的指纹，会被读的人学会忽略，这与本轮刻意避免的告警噪声是同一类失败。若要收窄，正确方向是同时记录**影子相关文件的传递闭包摘要**（`shadow*.py` + `utils.py`），让"对齐"回答的是"能在这里跑的那部分代码是否一致"。
+
 ## 4. P1-4　主库检索：挂起已止，但没有回填
 
 ### 4.1 主库当前状态（实测）
