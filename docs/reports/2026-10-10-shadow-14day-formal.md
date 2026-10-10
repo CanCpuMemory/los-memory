@@ -365,8 +365,22 @@ AES-CBC 不提供认证加密，篡改检出靠密文 sha256 回读 + 恢复后�
 
 同时把 maintenance job 的 `rotatelog` 改为一次覆盖三个日志（`sync.out.log`、`compare-drain.out.log`、`recall-probe.out.log`），并已 kickstart 验证新 payload（`{"logs": [...]}`，三个目标都报告 `rotated: false`，因均未到 8 MiB 上限）。
 
-### 16.4 仍未关闭
+### 16.4 第二批修复（提交 `b2b9009`）
+
+四处都属同一类：**只在操作者机器的残留状态上成立**。本节记录处置后的状态。
+
+| 项 | 处置前 | 处置后 |
+| --- | --- | --- |
+| `deploy_shadow.py` 只对齐一个 job | 四个 job 指向三个发布；sync 跑新代码而 compare-drain 跑旧代码 | 部署时扫描 `co.los.memory-shadow*.plist`，只重写各 job 的 `WorkingDirectory` 并重新 bootstrap，输出报告哪些被改。实测：先把 `compare-drain` 临时指回旧发布，再部署 → `changed: true` 且被拉回同一发布 |
+| `restore-drill` 比对基线（§7.2） | `digest_match: false`（restored 2329 vs live 2419） | `ledger_entry_for(name)` 取该份备份**自己的**台账行；复跑 `digest_match: true`、`reference_source: ledger`，在线镜像另列为 advisory（`live_records: 2427`、`live_matches_snapshot: false`），RTO 144.75 s 仍在门槛内 |
+| 测试连接泄漏 | 7 个用例各自 `make_conn()` 且从不关闭 | 改成带 teardown 的 fixture；全套 **791 passed / 0 warnings**（会话开始时是 781 passed / 11 warnings） |
+| 依赖本地产物的集成用例 | 断言 `logs/`、`control-plane/logs/`（都在 `.gitignore`）→ 干净检出必失败、本机假绿 | 缺产物时 `pytest.skip` 并说明产物来源；模拟干净检出 **789 passed / 2 skipped / 0 failed**（原为 4–5 failed） |
+
+> **口径修正**：§11 引用的 RTO 现在是 144.75 s（本节复跑），不是 132.97 s；同时 `records_restored` 的期望值改为台账值 2329，不再拿在线库当参考。
+
+### 16.5 仍未关闭
 
 - **recall-probe 有记录但没被监视**：没有告警阈值读它的 `verdict`，所以发现要人去看 `recall-probe.out.log`。下一步是加第 8 条阈值（按项目标准需附"证明它会触发"的测试），但它与"告警投递通道"是同一件事的两半。
-- **DSH 影子 MCP 掉线**（§5/§9）：未处理，仍卡着门槛 6。
-- **`restore-drill` 比对基线**（§7.2）、**W-03 切换**、**inactive/revisions 保留策略**、**`deploy_shadow.py` 的三 job 对齐**：未处理。
+- **DSH 影子 MCP 掉线**（§5/§9）：配置已改（`maxAttempts` 10 → 1000000 + SSH keepalive），但本机 `[INFO:hmr] watching []` 说明 HMR 没有在监视任何 root，**配置未生效**，需要重启 DSH 宿主或 reload 该插件。未生效前门槛 6 仍然卡住。
+- **W-03 切换**、**inactive/revisions 保留策略**：未处理（决策项）。
+- **主库检索缺口本身**：未处理，属上游/用户决策。

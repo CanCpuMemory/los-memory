@@ -59,7 +59,7 @@ FAILED tests/unit/test_hub_lite_record_script.py::TestHubLiteRecordScriptArtifac
 
 > **处置结果（2026-10-10，采集之后）**：现网已升到 `9cf8fbc8755ad65173ec` = 提交 `03c15ab` 的 `memory_tool` 树摘要；四个 launchd job 与 `serve` 同源。升级后首个 sync 轮次报 `tombstones_deferred: 118`、`missing: 0`（升级前一轮 `missing: 2`、无该字段），灌水机制停止。步骤与验收见 `docs/reports/2026-10-10-shadow-14day-formal.md` §16.2。以下为修复前的取证记录。
 >
-> **留下的脚本缺口**：`deploy_shadow.py` 只重写 `co.los.memory-shadow.plist` 与 `serve`，另外两个 job 必须手工对齐——本次"三个 job 指向两个发布"就是这么来的。
+> **脚本缺口已修（提交 `b2b9009`）**：`deploy_shadow.py` 现在部署时扫描 `co.los.memory-shadow*.plist`，只重写各 job 自己的 `WorkingDirectory` 并重新 bootstrap，输出报告哪些被改。此前它只重写 `co.los.memory-shadow.plist` 与 `serve`，另外两个 job 必须手工对齐——"四个 job 指向三个发布"就是这么来的。
 
 **实测映射**：`scripts/deploy_shadow.py` 用 `memory_tool/**/*.py` 排序后 `(路径 \0 内容)` 的 SHA-256 前 20 位作为发布名。
 
@@ -201,8 +201,9 @@ FAILED tests/unit/test_hub_lite_record_script.py::TestHubLiteRecordScriptArtifac
 - `--semantic` 改成有界重排器（当前 946 ms / 5,355 条全扫）；**不要先提维度**（32→256 只换 +0.033 Hit@1、4–6 倍开销）。
 - 字面包含是否应压过 FTS token 匹配：n=80 采样为**混合、在噪声内**，需更大冻结集再动。
 - 保留 legacy flat-command 兼容，直到下游分组命令迁移吸收完。
-- 2 条 shadow 测试的 sqlite `ResourceWarning`（10-08 之前是"警告清零"状态，属回退）。
-- `co.los.memory-shadow-maintenance` 的发布指向与其余 job 对齐（见 §3）。
+- ~~2 条 shadow 测试的 sqlite `ResourceWarning`~~ —— **已修（`b2b9009`）**：真实来源是 `tests/unit/test_search_like_escaping.py` 的 7 个用例各自 `make_conn()` 且从不关闭；回溯栈指向 `memory_tool/shadow.py` 只是因为 GC 恰好在那个生成器里跑。改成带 teardown 的 fixture 后，全套 791 passed / 0 warnings。
+- ~~`co.los.memory-shadow-maintenance` 的发布指向与其余 job 对齐~~ —— **已修**（四个 job 同源，且 `deploy_shadow.py` 以后会维持它）。
+- `tests/integration/test_hub_lite_integration.py` 有 2 个用例断言的是 gitignore 掉的 `logs/`、`control-plane/logs/` 产物 —— **已改为缺产物时 `pytest.skip` 并说明来源**（`b2b9009`）；模拟干净检出从 4–5 failed 变为 789 passed / 2 skipped / 0 failed。
 
 ---
 
