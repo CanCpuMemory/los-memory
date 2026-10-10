@@ -55,7 +55,11 @@ FAILED tests/unit/test_hub_lite_record_script.py::TestHubLiteRecordScriptArtifac
 
 ---
 
-## 3. P0-3　M3 现网发布落后仓库 11 个提交（344 行 shadow.py）
+## 3. P0-3　M3 现网发布落后仓库 11 个提交（344 行 shadow.py）—— **同日已修复**
+
+> **处置结果（2026-10-10，采集之后）**：现网已升到 `9cf8fbc8755ad65173ec` = 提交 `03c15ab` 的 `memory_tool` 树摘要；四个 launchd job 与 `serve` 同源。升级后首个 sync 轮次报 `tombstones_deferred: 118`、`missing: 0`（升级前一轮 `missing: 2`、无该字段），灌水机制停止。步骤与验收见 `docs/reports/2026-10-10-shadow-14day-formal.md` §16.2。以下为修复前的取证记录。
+>
+> **留下的脚本缺口**：`deploy_shadow.py` 只重写 `co.los.memory-shadow.plist` 与 `serve`，另外两个 job 必须手工对齐——本次"三个 job 指向两个发布"就是这么来的。
 
 **实测映射**：`scripts/deploy_shadow.py` 用 `memory_tool/**/*.py` 排序后 `(路径 \0 内容)` 的 SHA-256 前 20 位作为发布名。
 
@@ -115,10 +119,27 @@ FAILED tests/unit/test_hub_lite_record_script.py::TestHubLiteRecordScriptArtifac
 
 `recall-probe` 正是为此而建（`fe31391`，手册见 `docs/manuals/SHADOW_MEMORY.md`），但：
 
-1. 它不在 M3 现网发布里（见 §3）；
+1. 它不在当时那条 M3 现网发布里（见 §3）；
 2. 它没有装成任何定时任务。
 
 **盲区可检测，但没人看。** 已知代价：每个探针花主库 ≈13 s，所以只能做定时任务，不能进读路径。
+
+### 4.4 探测器上线后的定论（2026-10-10，采集之后）
+
+现网升级后 `recall-probe` 可用，已手动跑一次并 kickstart 定时任务一次，**两次结论一致**：
+
+| 字段 | 值 |
+| --- | --- |
+| `verdict` | **`stale_projection_suspected`** |
+| `recent_rate` | **0.00**（5 个探针全灭） |
+| `control_rate` | 0.667（3 个最老探针，2 中） |
+| `errors` | `[]` |
+
+即：**主库在应答，但取不回近期内容**——而它全程报 `Search Index: available`。独立交叉验证也做了：2026-10-10T14:25 的一条记录按 ID 可读、用其标题辨识短语查不到；同一天 09:45 的另一条却能稳定排到第 1（复跑 2/2）。
+
+**因此 §4.2 的"疑似空洞"升级为"覆盖部分且不可预测"**（不是整齐的"某日之后全丢"，probe 的 `newest_retrievable_created_at=2026-07-03T07:44:25Z` 只是被探集合的边界）。probe 自身 `reading` 警告 anchor 可能失真、单次运行不构成证明——本轮有两次一致运行加独立单点验证，但仍应把"边界与趋势"交给调度出的时间序列。
+
+已装成 M3 job `co.los.memory-shadow-recall-probe`（每 6 h）。**仍未做的是"被看见"**：没有告警阈值读它的 verdict。
 
 ---
 

@@ -30,11 +30,11 @@
 | `main` = `origin/main` = `feature/nowledge-readiness` | `2260788`（工作树 0 未提交） |
 | 交付 tag | `shadow-readiness-2026-10-07` = `ac6664b` |
 | 14 天窗口 | 2026-09-26T13:14:02 → 2026-10-10T22:18:17（14.38 天） |
-| **M3 现网运行发布** | `7aaac3fcd55fffe2a143` |
+| **M3 现网运行发布（本报告采集时）** | `7aaac3fcd55fffe2a143` |
 | 该发布对应的提交 | **`545f0e7`**（不是交付 tag 所指提交） |
-| 仓库 HEAD 树摘要 | `3448c702dcd8892283da`（差 11 个提交 / 344 行 `shadow.py`） |
+| 采集时仓库 HEAD 树摘要 | `3448c702dcd8892283da`（差 11 个提交 / 344 行 `shadow.py`） |
 
-> **必须声明的偏差**：现网运行的不是本次交付 tag 的代码。§3 的 `missing` 异常、§8 的探针不可用，都是这条偏差的直接后果。详见 `docs/reports/2026-10-10-status-audit-and-todo-map.md` §3。
+> **采集时存在的偏差（已于同日修复）**：本报告 §3.2 的 `missing` 异常与"recall-probe 不可用"都是"现网跑的不是交付 tag 的代码"的直接后果。修复见 §16：现网已升到 `9cf8fbc8755ad65173ec` = 提交 `03c15ab` 的 `memory_tool` 树摘要，四个 launchd job 与 `serve` 同源。§1–§15 描述的是**修复前**的现场，保留原样以作为问题证据；结论已在 §12/§16 更新。
 
 ---
 
@@ -82,6 +82,8 @@
 仓库 HEAD 的代码已经诊断并修掉了这一点（`memory_tool/shadow.py:602-609` 的注释直接写了 "the 12 inactive records in the live mirror produced the 0 -> 33 -> 116 `missing` counts"）。**但该修复不在现网发布里**：现网发布 grep 不到 `TOMBSTONE_RECHECK_SECONDS`，也没有 `tombstones_deferred`。
 
 **因此本报告的 §3 `missing` 列必须读作"重探次数"，不能读作删除量。** 修法见 §13。
+
+**同日已修复（§16）**：现网升级后首个 sync 轮次报 `tombstones_deferred: 118`、`missing: 0`（升级前一轮是 `missing: 2`、无 `tombstones_deferred` 字段），证实灌水机制已停止。
 
 ---
 
@@ -206,25 +208,42 @@ AES-CBC 不提供认证加密，篡改检出靠密文 sha256 回读 + 恢复后�
 
 10-07 草案 §8 记录的 12.78 天 Lance `ReplaceFresh` 挂起，已在 **2026-10-07 15:42** 用 systemd drop-in `NMEM_BOOT_AUTO_REINDEX=0` 打断（处置本身在主库有记录）。**"打断挂起"不等于"重建索引"**：`active: false` 说明此后没有任何重建在跑，也就是说冻结期缺的内容没有被回填。
 
-### 8.3 受控探针（本轮新做，只读，主库侧每次 ≈12.8 s）
+### 8.3 受控探针与召回探测器（本轮完成，只读）
+
+**先做的单点探针**（主库侧每次 ≈12.8 s）：
 
 | 目标记录创建时间 | 按 ID 读 | 主库检索 top-10 |
 | --- | --- | --- |
-| 2026-10-10T09:45（含 `applied_bytes`） | ✅ | ✅ **排名 1**，score 0.99 |
+| 2026-10-10T09:45（含 `applied_bytes`） | ✅ | ✅ **排名 1**，score 0.99（复跑 2/2 稳定） |
 | 2026-10-10T14:03（当日最新） | ✅ | ⚠️ 未出现 |
+| 2026-10-10T14:25（`控制平面真源修复 … phaseTracking`） | ✅ | ❌ 用其标题辨识短语查不到 |
 | 2026-10-05 / 10-06（稀有词 `launcherExecutePlan`） | ✅ | ❌ 未出现 |
 | 2026-10-09T23:08 | ✅ | ❌ 未出现 |
 
-**置信度必须写清**：主库检索是 semantic+BM25 混合，**top-10 缺席是强提示，不等于索引缺席**。反向对照也做了——同一个 10-10 记录用裸词 `applied_bytes` 查同样进不了 top-10，说明召回对查询形态敏感，单次缺席不足以定论。
+**再跑的 `shadow recall-probe`**（现网发布升级后才可用；默认 12 探针 ≈2.6 分钟）。两次独立运行（手动一次 + launchd kickstart 一次）结论一致：
 
-能确定的只有两条：
+| 字段 | 值 |
+| --- | --- |
+| `verdict` | **`stale_projection_suspected`** |
+| `recent_rate` | **0.00**（5 个探针全部取不回） |
+| `control_rate` | 0.667（3 个最老探针，2 中；`los/los.git` 未中） |
+| `errors` | `[]` |
+| 单探针主库延迟 | 12.65–15.02 s |
 
-1. 主库已恢复收录**新写入**（10-10 的记录能排到第 1）；
-2. 10-05～10-09 的锚点即使拿稀有词也捞不出来，**该窗口很可能仍是空洞，且没有回填计划**。
+判读：`control` 健康说明**主库在应答**，不是挂了；`recent` 全灭说明**它取不回新内容**。两次运行一致，排除了单次抖动。
 
-**要定论只有 recall-probe**——而那正是为这个盲区造的仪器。它现在既不在这条现网发布里，也没有任何定时任务（§9、§13）。
+**结论（按置信度分层）**：
+
+1. **高置信**：主库对自己报 `Search Index: available`、控制组正常，却取不回最近写入的内容。这是静默陈旧投影，不是主库宕机。
+2. **高置信**：覆盖是**部分且不可预测**的，不是整齐的"某日之后全丢"。同一天的两条记录，一条能稳定排到第 1、另一条用标题辨识短语也查不到；probe 的 `newest_retrievable_created_at`（2026-07-03T07:44:25Z）只是**被探集合的边界**，不能读成"索引止于 7 月"。
+3. **中置信**：probe 自己的 `reading` 明确警告——anchor 是自动抽取的，控制组未中也可能是 anchor 形态问题，**单次运行不构成证明**。本报告有两次一致运行 + 独立单点交叉验证，仍应把"边界在哪、是否持续恶化"留给后续调度出来的时间序列。
+4. **不可判定**：是否所有 post-freeze 内容都不可检索、是否随时间恶化、是否需要重建索引。
+
+本节结论与 §8.2 的主库处置一致：**打断挂起后没有重建，因此没有回填**；而 `available: true` 让这个缺口结构上无法被现有告警发现（§7）。
 
 **对本报告的影响**：任何"主库基线"都必须标注为**冻结时点快照**，否则会把主库的静默缺失记成影子的得分。
+
+**操作结论**：`recall-probe` 已于同日装成 M3 定时任务（每 6 h，见 §16）。主库索引的重建**不在本报告授权范围内**——上游维护者的指示是不要反复重建（重建会在同一个 Lance 提交处再次挂死）。
 
 ---
 
@@ -275,7 +294,7 @@ AES-CBC 不提供认证加密，篡改检出靠密文 sha256 回读 + 恢复后�
 - **门槛 1（14 天观察）**：**通过**。14.38 天、97.0% 到位率、0 持续故障、新鲜度远优于 24 h 门槛。
 - **门槛 2–5**：通过（覆盖、流量、备份、恢复演练）。两处口径已修正：`missing` 列是重探次数（§3.2），`digest_match` 应与台账比对（§7.2）。
 - **门槛 6（真实任务采纳）**：**未通过**，阻塞在 DSH MCP 掉线这一机械问题。
-- **主库侧**：挂起已止、新写入可检索，但 10-05～10-09 窗口疑似空洞且无回填计划；**未定论**，需 recall-probe。
+- **主库侧**：挂起已止，但**没有回填**；召回探测器两次运行都判定 `stale_projection_suspected`（recent 0/5、control 2/3），且拿独立单点交叉验证过——**主库对近期内容的检索覆盖是部分且不可预测的，而它一直报 `available: true`**。这是本轮发现的最严重问题，也是"影子可用"最有力的证据（§8.3、§16）。
 - **可回退性**：影子侧全部为只读派生结构（`records_fts` / `cjk_bigrams` / `record_facets` / `record_labels` / 计量表），可由 `records` 用 `shadow reindex` 重建；DSH 接入是一行配置，删除即回退；W-03 是单个 plist 参数，改回 `0` 即回退；发布回退 = 把 launchd `WorkingDirectory` 指回上一个发布目录。**主库侧不可平滑回退**（影子无写入路径）。
 
 ---
@@ -283,12 +302,13 @@ AES-CBC 不提供认证加密，篡改检出靠密文 sha256 回读 + 恢复后�
 ## 13. 本报告暴露的待处理项（按优先级）
 
 1. **CI 在主分支长期为红** —— 干净检出上 `tests/unit/test_hub_lite_record_script.py` 三连失败，根因是脚本把 gitignore 的 `logs/` 当 `required_dirs`。这是仓库唯一的机械质量门。
-2. **M3 现网发布落后 11 个提交** —— 直接造成 §3.2 的 `missing` 自伤与 §8.3 的探针不可用。
-3. **接上 recall-probe 并调度** —— 主库盲区目前"可检测但没人看"；每个探针花主库 ≈13 s，只能做定时任务（建议 6–12 h，避开 300 s 同步节奏）。
+2. ~~**M3 现网发布落后 11 个提交**~~ —— **同日已修**（§16）；它直接造成过 §3.2 的 `missing` 自伤与 §8.3 的探针不可用。
+3. ~~**接上 recall-probe 并调度**~~ —— **同日已装**（每 6 h，§16）。**仍未做的是"被看见"**：没有任何告警阈值读它的 verdict，所以缺口现在是"有记录"而不是"被监视"。
 4. **修 DSH 影子 MCP 掉线** —— 否则 §9 的采纳证据永远不会累积，阶段 2 的"每形态 ≥30 条"无法达成。
 5. **给告警加投递通道** —— 现在只写 `alerts.jsonl` 并 `exit 1`；另外该 job 在 M1 睡眠期间漏跑（实测漏 4 次）。
 6. **修 `restore-drill` 的比对基线**（§7.2）。
 7. **决定 W-03 切换**（§4，决策项）与 **inactive/revisions 保留策略**（当前 inactive 118 条）。
+8. **主库索引缺口本身**：属上游/用户决策，本报告不授权重建（反复重建会再次挂死）。
 
 完整证据与只读取证方式见 `docs/reports/2026-10-10-status-audit-and-todo-map.md`。
 
@@ -306,3 +326,47 @@ AES-CBC 不提供认证加密，篡改检出靠密文 sha256 回读 + 恢复后�
 | 6 | 客户端可达性 + **至少一次真实任务检索** | 可达性 OK；**真实任务检索未达成**（§9） |
 | 7 | 本轮只读命令原始输出留档 | 见 §1、§6、§7.2、§8.3、§11 引用值与取证路径 |
 | 8 | §8 主库冻结状态更新为当时值 | 已更新：挂起止于 10-07 15:42，`active=false`、无回填；探针证据见 §8.3 |
+
+---
+
+## 16. 同日修复记录（2026-10-10，本报告采集之后）
+
+本节记录本报告暴露问题的**实际处置**，与 §1–§15 的"修复前现场"分开读。
+
+### 16.1 代码提交
+
+| 提交 | 内容 |
+| --- | --- |
+| `a8b3835` | 本报告 + `docs/reports/2026-10-10-status-audit-and-todo-map.md`（记录与 TODO/CURRENT_STATE 对齐） |
+| `151b607` | CI 修复：`logs/` 不再是 `create_hub_lite_records.py` 的前置条件；产物用例改为密闭（原用例在干净检出上必失败、本地假绿）；顺带修掉 `KnowledgeBase.get_unused_entries` 的时区相关 cutoff |
+| `03c15ab` | `rotatelog` 支持可重复 `--log`，补齐 launchd 日志轮转覆盖（此前只有 `sync.out.log` 被轮转，`compare-drain.out.log` 无上限增长） |
+
+验证：干净树 + `TZ=UTC` 跑 `pytest tests/unit -m "not e2e"` = **655 passed**；8 个 CI job 本地逐条通过；全套 **786 passed**；ruff（CI 文件清单）0 findings；`MEMORY_DISABLE_EXTENSIONS=knowledge` 仍能干净禁用。
+
+### 16.2 M3 发布升级（解决 §3.2 与 §8.3 的根因）
+
+| 项 | 修复前 | 修复后 |
+| --- | --- | --- |
+| sync / compare-drain / serve | `7aaac3fcd55fffe2a143`（= `545f0e7`） | `9cf8fbc8755ad65173ec` |
+| maintenance | `b7fb36d5b326a9c0ace5`（更旧，第三份代码） | `9cf8fbc8755ad65173ec` |
+| 对应提交 | — | **`03c15ab`**（树摘要逐字核对一致） |
+
+处置步骤：`scripts/deploy_shadow.py --host m3-t`，然后手工把 `compare-drain` 与 `maintenance` 两个 job 的 `WorkingDirectory` 对齐到同一发布。
+
+> **脚本缺口（待办）**：`deploy_shadow.py` 只重写 `co.los.memory-shadow.plist` 和 `serve`，**不会**更新另外两个 job，所以每次部署都必须补一次手工对齐。本次的不一致正是这么来的（三个 job 曾指向两个不同发布）。
+
+**效果验证**：升级后首个 sync 轮次 `{"checked":100,"changed":0,"missing":0,"tombstones_deferred":118,"unhydrated":0,"errors":[]}` —— `missing` 从升级前一轮的 2 归零，`tombstones_deferred` 字段出现，§3.2 的灌水机制确已停止。回退 = 把 plist 指回旧发布目录（旧目录保留）并 `bootout`/`bootstrap`。
+
+### 16.3 recall-probe 上线为定时任务（解决 §8.3 的"不可用"）
+
+新增 M3 job `co.los.memory-shadow-recall-probe`：`StartInterval=21600`（6 h，避开 300 s 同步节奏），指向同一发布，输出 `recall-probe.out.log`，只读。
+
+**实跑验收（不是只写 plist）**：`launchctl kickstart` 后跑到完成，`recall-probe.err.log` 为空，输出 `verdict: stale_projection_suspected`、`recent_rate 0.0`、`control_rate 0.6667`、`errors: []`，单探针延迟 12.65–15.02 s——与 §8.3 的手动运行结论一致。
+
+同时把 maintenance job 的 `rotatelog` 改为一次覆盖三个日志（`sync.out.log`、`compare-drain.out.log`、`recall-probe.out.log`），并已 kickstart 验证新 payload（`{"logs": [...]}`，三个目标都报告 `rotated: false`，因均未到 8 MiB 上限）。
+
+### 16.4 仍未关闭
+
+- **recall-probe 有记录但没被监视**：没有告警阈值读它的 `verdict`，所以发现要人去看 `recall-probe.out.log`。下一步是加第 8 条阈值（按项目标准需附"证明它会触发"的测试），但它与"告警投递通道"是同一件事的两半。
+- **DSH 影子 MCP 掉线**（§5/§9）：未处理，仍卡着门槛 6。
+- **`restore-drill` 比对基线**（§7.2）、**W-03 切换**、**inactive/revisions 保留策略**、**`deploy_shadow.py` 的三 job 对齐**：未处理。
