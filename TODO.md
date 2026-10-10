@@ -8,7 +8,7 @@
 - [x] Document proposed cross-device/provider/agent/model/project architecture, retrieval pipeline and upstream research.
 - [ ] P0 — Freeze canonical evidence and 40 real retrieval cases; expand to 120 before hybrid tuning.
 - [ ] P1 — Measure and reduce sync traffic, collect 14 days of operation, prove off-host restore.
-- [ ] P2 — Implement authenticated identity/event/revision contracts in isolation; validate real multi-client workflows.
+- [ ] P2 — Implement authenticated identity/event/revision contracts in isolation; validate real multi-client workflows. **分段门禁已定（2026-10-10）**：P2-01 契约层现在可做；P2-02 运行时以 P0 退出条件为前提；P2-03 跨设备以 P1 的恢复证据为前提（不含流量目标）。见 `docs/design/p2-write-path-minimal-loop.md` §7.4 与 `docs/design/memory-roadmap.md` §10。
 - [ ] P3 — Evaluate Chinese full-text + learned vectors, RRF, version-safe generation switching and degradation.
 - [ ] P4 — Evaluate evidence-backed temporal relations; retain only graph features with measured benefit.
 - [ ] P5 — Implement scoped Working Memory, handoffs, thread evidence and revocation propagation.
@@ -27,7 +27,7 @@ Work packages (2026-10-07):
 - [x] W-05 off-host encrypted backup + timed restore drill (RTO 12.92 s, identity digest identical); daily launchd job.
 - [x] W-06 client access: Codex/Kimi/Grok real agent-driven calls (Grok re-registered); DSH plugin active. Residual: DSH new-session call.
 - [x] W-07 operation report generator + 7 alert thresholds (each proven to fire) + M1 hourly alert job + M3 daily log rotation.
-- [x] W-09 P2 write-path minimal design review (design only; 5 open questions need a user decision before implementation).
+- [x] W-09 P2 write-path minimal design review (design only). **5 个开放问题已于 2026-10-10 决策**：试点空间=隔离空间 + 真实只读切片且不迁写入权；身份=客户端本地生成对称凭据（服务端只存哈希）+ 手工登记，SSH/Tailscale 只作传输；冲突=可观测状态 + 一次普通写入（不复活 approval、不建队列）；排期=契约现在做 / 运行时以 P0 退出条件为前提；传输=首期不上 HTTP 但契约传输无关，并写明 HTTPS 触发条件。每条都带依据、四轴影响与反证条件，见 `docs/design/p2-write-path-minimal-loop.md` §7。
 - [x] W-10 sync metering: `sync_runs` + bounded `sync_errors` ledger, rolling 24h traffic in `status.metering`.
 - [x] W-11 thread coverage probe: 49/49 deepseek-harness threads map to the DSH session index; codex/grok do not (254/742 records total).
 - [x] W-01 P0 evaluation: 40-case private corpus + dual-backend harness + frozen Nowledge baseline (scope=native: shadow Hit@5 0.771, isolation violations 0; Nowledge default search 0.200). The `semantic_paraphrase` category scores 0.000 for **both** backends and must be redesigned before P3.
@@ -44,7 +44,8 @@ Work packages (2026-10-07):
 - [ ] **P1 — 主库检索覆盖部分且不可预测（2026-10-10 探测器定论）**: 主库挂起已由 `NMEM_BOOT_AUTO_REINDEX=0` drop-in 于 10-07 15:42 打断（`reindex/status` `active=false`、`errors=[]`），但挂起只是被取消、**没有回填**。`shadow recall-probe` 两次运行（手动 + launchd kickstart）结论一致：`verdict=stale_projection_suspected`、`recent_rate 0.0`（5 探针全灭）、`control_rate 0.667`（主库在应答）。独立交叉验证：2026-10-10T14:25 的记录按 ID 可读、按其标题辨识短语查不到；同日 09:45 的另一条能稳定排第 1（2/2）。**结论：不是整齐的"某日之后全丢"，而是覆盖部分且不可预测，而 `/search-index/status` 始终报 `available: true`**。probe 的 `newest_retrievable_created_at`(2026-07-03) 只是被探集合的边界，不可读成"索引止于 7 月"；probe 自身 `reading` 也警告 anchor 可能失真。索引重建属上游/用户决策，**不要反复重建**（会再次挂死）。
 - [x] **P0 — 出 14 天正式运行报告**: 已完成，见 [`docs/reports/2026-10-10-shadow-14day-formal.md`](docs/reports/2026-10-10-shadow-14day-formal.md)（14.38 天、4016 轮 / 6 带错、到位率 97.0%、中位间隔 307.1 s、24 h 1.63 GiB / 0 错、RTO 132.97 s），草案稿已标注取代。门槛 1–5 通过；门槛 6（真实任务采纳）**未通过**，阻塞在下方 DSH MCP 掉线项。报告同时修正两处口径：`missing` 列是墓碑重探次数、`restore-drill` 的 `digest_match` 应与台账摘要比对（工具缺陷，另列待修）。
 - **P1 cadence switch** — `--manifest-cache-seconds` is implemented and the 24 h baseline now exists in `sync_runs` (275 runs / 32,493 requests / 1.75 GiB / 0 errors per day). Per the approved plan the live 300 s cadence stays until a user decision switches it; the TODO suggestion is a 30-minute listing interval so new-record discovery keeps margin against the ≤1 h gate. Note the tradeoff: during the primary's suspected retrieval gap (see the P1 probe item) freshness is a functional parameter, not a cost parameter.
-- **P2 implementation** — design review only; the 5 open questions in `docs/design/p2-write-path-minimal-loop.md` §7 need a user decision first.
+- **P2 implementation** — §7 已决策（2026-10-10），可以开始的是 **P2-01 契约层**（版本化 schema + receipt 语义 + 身份模型 + N1–N11 负向测试先行），零运行风险。P2-02 运行时等 P0 退出条件。
+- **P2 仍归用户的两处边界**（§7.6，agent 未被授权评估）：真实只读切片**导入哪些项目 / 是否含敏感类别**；HTTPS 触发条件命中后的**部署位置与信任域**（由 P6 承接）。
 
 Stage goals, dependencies, acceptance metrics and rollback are maintained in `docs/design/memory-roadmap.md`; architecture and retrieval contracts are design proposals, not current runtime features.
 
