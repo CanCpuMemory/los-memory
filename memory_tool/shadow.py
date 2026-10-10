@@ -1248,6 +1248,11 @@ def main():
     parser.add_argument("--nowledge-cmd", default=os.environ.get("SHADOW_NMEM_BIN", "nmem"))
     parser.add_argument("--max-bytes", type=int, default=8 * 1024 * 1024)
     parser.add_argument("--keep", type=int, default=5)
+    parser.add_argument("--log", action="append", default=None,
+                        help="rotatelog: the log file to cap; repeatable. Defaults to the "
+                             "sync log beside --db, which was the only log the job capped "
+                             "before. Every other launchd-owned log (compare-drain, "
+                             "recall-probe) was unrotated.")
     parser.add_argument("--manifest-cache-seconds", type=int, default=0,
                         help="reuse the last active-ID listing for this many seconds "
                              "(0 = list every run, the current production behaviour)")
@@ -1267,8 +1272,12 @@ def main():
         elif args.action == "summary":
             result = summary(conn)
         elif args.action == "rotatelog":
-            result = rotate_log(Path(args.db).expanduser().with_name("sync.out.log"),
-                                args.max_bytes, args.keep)
+            # One target keeps the original single-dict payload shape; several
+            # targets are named so the caller can tell which log did what.
+            targets = ([Path(p).expanduser() for p in args.log] if args.log else
+                       [Path(args.db).expanduser().with_name("sync.out.log")])
+            results = [rotate_log(target, args.max_bytes, args.keep) for target in targets]
+            result = results[0] if len(results) == 1 else {"logs": results}
         elif args.action == "compare":
             if not args.query:
                 parser.error("compare requires --query")

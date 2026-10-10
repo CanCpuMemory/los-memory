@@ -1,6 +1,7 @@
 import json
 import time
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -749,3 +750,50 @@ def test_drain_finds_the_primary_cli_under_a_minimal_path(monkeypatch, tmp_path)
     assert shadow._resolve_command("nmem") == str(binary)
     # An explicit path is never second-guessed.
     assert shadow._resolve_command("/custom/nmem") == "/custom/nmem"
+
+
+def test_rotatelog_cli_caps_every_named_log(tmp_path, monkeypatch, capsys):
+    """`rotatelog --log` is repeatable so one scheduled job can cap every
+    launchd-owned log.
+
+    Only `sync.out.log` used to be capped, because the CLI hard-coded it beside
+    `--db`; `compare-drain.out.log` and the recall-probe log grew unbounded.
+    """
+    from memory_tool import shadow
+
+    sync_log = tmp_path / "sync.out.log"
+    drain_log = tmp_path / "compare-drain.out.log"
+    for path in (sync_log, drain_log):
+        path.write_bytes(b"x" * 200)
+
+    monkeypatch.setattr("sys.argv", [
+        "shadow", "rotatelog", "--db", str(tmp_path / "shadow.sqlite3"),
+        "--max-bytes", "100", "--keep", "2",
+        "--log", str(sync_log), "--log", str(drain_log),
+    ])
+    shadow.main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert [entry["rotated"] for entry in payload["logs"]] == [True, True]
+    assert {Path(entry["path"]).name for entry in payload["logs"]} == {
+        "sync.out.log", "compare-drain.out.log"}
+    assert sync_log.stat().st_size == 0 and drain_log.stat().st_size == 0
+
+
+def test_rotatelog_cli_defaults_to_the_sync_log_beside_db(tmp_path, monkeypatch, capsys):
+    """The pre-existing single-target call keeps its original payload shape."""
+    from memory_tool import shadow
+
+    sync_log = tmp_path / "sync.out.log"
+    sync_log.write_bytes(b"x" * 200)
+
+    monkeypatch.setattr("sys.argv", [
+        "shadow", "rotatelog", "--db", str(tmp_path / "shadow.sqlite3"),
+        "--max-bytes", "100", "--keep", "2",
+    ])
+    shadow.main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["rotated"] is True
+    assert Path(payload["path"]).name == "sync.out.log"
+    assert sync_log.stat().st_size == 0
