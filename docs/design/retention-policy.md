@@ -74,15 +74,19 @@
 - `shadow compact` 返回 `file_bytes_before/after`、`freelist_bytes_before/after`、`reclaimed_bytes`、`vacuumed`，可直接进报告。
 - 测试：`tests/unit/test_shadow_compact.py`（6 例）覆盖"回收空闲页且不丢记录""不带 `--vacuum` 就不重写文件""空库是 no-op""幂等（第二遍回收 0）""索引状态在重写前后一致"。
 
-## 6. 待确认的现网动作（未执行）
+## 6. 现网动作执行结果（2026-10-10，用户批准后执行）
 
-| # | 动作 | 影响 | 备注 |
-| --- | --- | --- | --- |
-| 1 | 把当前代码部署到 M3 | 现网多出 `compact` 与 `status.storage` | 与已批准的部署同一路径；四个 job 会自动对齐 |
-| 2 | `shadow compact --vacuum` | 回收约 **58.9 MiB**；需要一份完整副本的可用磁盘 + 排他锁 | **先做一次异机备份**；回退＝备份恢复（VACUUM 不改数据，只重写文件） |
-| 3 | `alerts.jsonl` 加进 maintenance 轮转 | 台账不再无限增长 | 一行 plist 改动 |
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | 部署当前代码到 M3 | 完成，发布 `80da24bde45b1711ed8b`。**本轮实现的"兄弟 job 自动对齐"当场生效**：`compare-drain` / `maintenance` / `recall-probe` 三个 job 全部 `changed: true`，一次部署到位（此前这条漂移需要手工对齐三次）。 |
+| 2 | `shadow compact --vacuum` | **执行完成，且优于预测**：file 174,710,784 B（166.6 MiB）→ **73,039,872 B（69.7 MiB）**；freelist 59,912,192 B → **0**；**回收 101,670,912 B = 97.0 MiB**。执行前先做了一次异机加密备份（`shadow-20261010T151752Z.sqlite3.enc`，2432 条，`integrity ok` / `readback_ok true`）。 |
+| 3 | `alerts.jsonl` 轮转 | **位置修正**：该台账在 M1（告警 job 所在机），不在 M3，所以加进 M3 maintenance 轮转只会永远报 `missing`。已从 M3 撤回，改为**写它的脚本自己封顶**（`cap_ledger()` 复用 `rotate_log`，惰性导入、失败只记录不上抛），不新增第四个 launchd job。 |
 
-三项都是现网状态变更，按项目纪律先取确认再执行。**本文档本身不授权执行。**
+**预测偏差（如实记录）**：§2 预测可回收 58.9 MiB（freelist 实测值），实际回收 **97.0 MiB**。多出的约 38 MiB 来自 FTS5 `optimize` 合并段 b-tree 与整库碎片整理——只数 freelist 会**低估**收益。
+
+**执行后验证**：`PRAGMA integrity_check = ok`；records 2432 / active 2314 **未变**；revisions 4219 **未变**；索引 `ready` 2432；`shadow`/`applied_bytes` 走 trigram、`记忆` 走 bigram，均正常命中；sync 下一轮 23:14:48 `checked=100 / missing=0 / errors=[]` 正常。
+
+三项均已于 2026-10-10 获用户批准后执行完毕。回退见 §7。
 
 ## 7. 回退
 
