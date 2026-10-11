@@ -54,6 +54,17 @@ pytest -q
 - Do not move transient runtime scratch data into durable memory semantics.
 - For deprecated approval-related behavior, prefer migration or compatibility containment rather than new feature growth.
 
+## Git Workflow
+
+Personal repo: manage it as a **single branch**. `main` is the only long-lived branch; a branch exists only while it carries commits that are not in `main` yet, and only when it has a stated reason to exist.
+
+- Commit by topic with a `type(scope): 描述` subject, as the existing history does. Do not commit unrelated scratch.
+- Merge back into `main` and push it (`git push origin main`). Prefer `git merge --ff-only` when `main` is an ancestor of the branch, so history stays linear.
+- Clean up immediately after merging: delete the branch locally (`git branch -d`; use `-D` only after printing `git merge-base --is-ancestor <tip> main`) and on the remote (`git push origin --delete <branch>`), then `git fetch --prune origin`. Target state: local and remote keep `main` plus any branch with a retention reason (e.g. an upstream fork line).
+- Tags are evidence markers, not branches: keep a tag while a `TODO.md` or report entry cites it (e.g. `shadow-readiness-2026-10-07`).
+- Not junk, do not delete: `logs/` (shadow operational ledgers), `control-plane/logs/` (execution and verification records), `.venv/`, `los_memory.egg-info/`, `uv.lock`. Junk: `build/`, `dist/`, `.tmp/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.DS_Store`.
+- Verify the finished state: `git status --short` empty, `git fsck --no-progress --no-dangling` clean, and a cache-free test smoke (`PYTHONDONTWRITEBYTECODE=1 pytest <scope> -q -p no:cacheprovider`).
+
 ## Validation
 
 - CLI changes: run the narrowest matching command and at least one dry-run contract path.
