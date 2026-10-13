@@ -3,9 +3,14 @@
 
 This script creates the required execution/progress and result/artifact records
 for the los-memory child session in the hub-lite parent epic.
+
+Records are written to the database `HubLiteSession` resolves: `--db`, then
+`MEMORY_DB_PATH`, then the `shared` profile. Callers that must not touch the
+operator's real ledger (notably the unit tests) set one of the first two.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from datetime import datetime, timezone
@@ -18,8 +23,20 @@ sys.path.insert(0, str(ROOT))
 from memory_tool.hub_lite import HubLiteSession
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="database to write the records into (default: MEMORY_DB_PATH, else the "
+             "shared profile). Pass a scratch path to keep a run out of production.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
     """Create Hub-Lite records for the current child session."""
+    args = parse_args(argv)
     trace_id = "trace-parent-epic-20260308235637"
     parent_task_id = "epic-20260308235637"
     child_task_id = "los-memory-20260308235637"
@@ -33,6 +50,7 @@ def main() -> int:
         session_id=session_id,
         repo_name="los-memory",
         repo_path=str(ROOT),
+        db_path=args.db,
         agent="kimi-k2p5",
         role="writer",
     )
@@ -40,6 +58,7 @@ def main() -> int:
     print(f"Creating Hub-Lite records for {child_task_id}...")
     print(f"Trace ID: {trace_id}")
     print(f"Repository: {ROOT}")
+    print(f"Database: {session.db_path}")
     print()
     
     # 1. Create execution/progress record

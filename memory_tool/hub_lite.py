@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,33 @@ from typing import Any
 
 from .database import connect_db, ensure_schema
 from .utils import resolve_db_path, tags_to_json, utc_now
+
+
+def _resolve_db_path(explicit: str | None) -> str:
+    """Resolve where hub-lite records are written.
+
+    Priority: an explicit ``db_path``, then ``MEMORY_DB_PATH`` (the same override
+    the CLI already honours, see ``memory_tool/config.py``), then the ``shared``
+    profile.
+
+    2026-10-14: the env override is what makes callers hermetic. Without it the
+    process default is the operator's real ``shared`` database, and every run of
+    ``tests/unit/test_hub_lite_record_script.py`` appended records to production
+    memory — measured +18 rows per full suite run (6 invocations x 3 records),
+    on top of ~1,551 ``[los-memory] Implementation*`` rows accumulated since
+    March. The earlier hermeticity fix covered only the *log* artifact
+    (``HUB_LITE_LOG_DIR``); the write target was missed.
+
+    The profile fallback stays literally ``shared`` on purpose: this is a
+    cross-repo control-plane ledger, so it deliberately does not follow
+    ``MEMORY_PROFILE``.
+    """
+    if explicit:
+        return os.path.expanduser(explicit)
+    override = os.environ.get("MEMORY_DB_PATH")
+    if override:
+        return os.path.expanduser(override)
+    return resolve_db_path("shared", None)
 
 
 @dataclass
@@ -139,7 +167,7 @@ class HubLiteSession:
             repo_name=repo_name,
             repo_path=repo_path,
         )
-        self.db_path = db_path or resolve_db_path("shared", None)
+        self.db_path = _resolve_db_path(db_path)
         self.agent = agent
         self.role = role
         self.records: list[ExecutionRecord] = []
