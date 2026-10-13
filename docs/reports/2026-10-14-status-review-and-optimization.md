@@ -125,9 +125,13 @@ VACUUM 之后 13 小时（10-11 04:30）就已经回到 112.9 MiB —— **增�
 | # | 动作 | 结果 |
 | --- | --- | --- |
 | 1 | 异机加密备份（回退点） | `shadow-20261013T234504Z.sqlite3.enc`，2457 条，`integrity ok` / `readback_ok true`，65.0 s |
-| 2 | 部署当前树到 M3 | 发布 **`9934bc20a2cca2b86e43`**，等于本地 HEAD 的 `memory_tool/**` 树摘要；四个既有 job 全部 `changed: true` 一次对齐；再跑一次同树部署为幂等（同一摘要、四个 job `changed: false`） |
+| 2 | 部署当前树到 M3 | 发布 **`9934bc20a2cca2b86e43`**，等于当时的 HEAD 树摘要；四个既有 job 全部 `changed: true` 一次对齐；再跑一次同树部署为幂等（同一摘要、四个 job `changed: false`） |
 | 3 | `compact --vacuum` | **`file 204,210,176 → 73,908,224 B`（194.8 → 70.5 MiB），`reclaimed_bytes = 130,301,952 = 124.3 MiB`**，freelist `28,844,032 → 0`。**与预测的 124.3 MiB 完全一致。** 新仪器直接显示了死段：`fts_index_bytes 112,099,675 → 21,092,183`（106.9 → 20.1 MiB） |
 | 4 | 新增周更 `compact` job | `co.los.memory-shadow-compact`（`StartInterval=604800`，只 optimize、不带 `--vacuum`——VACUUM 仍按策略"被请求才做"）。已 `kickstart` **实证运行**，输出 `reclaimed_bytes: 0`（刚 VACUUM 过，幂等）。同时把 `compact.out.log` 加进 maintenance 的 `--log` 列表，否则新 job 会重造"无界台账"这类问题 |
+| 5 | **发现并修掉 `--vacuum` 的半个承诺** | 上面的 124.3 MiB 只是**主库文件**的回收：VACUUM 把每一页都推过 WAL，WAL 会**保持与整库同量级的已分配空间**——实测 `shadow.sqlite3` 73.9 MiB 旁边躺着 **74.3 MiB 的 `-wal`**，只有显式 checkpoint 才释放。手工 `PRAGMA wal_checkpoint(TRUNCATE)` 归零后，把该步骤**写进 `compact()`**（`--vacuum` 路径末尾），使"回收空间"这条承诺在磁盘上成立 |
+| 6 | 部署修正后的树 | 发布 **`b366080b3d4aa630ab19`**（五个 job 全部 `changed: true` 一次对齐），并**实测**：再跑一次 `compact --vacuum` 回收了 sync 重新分配的 1,388,544 B（1.32 MiB），结束后 **`-wal` = 0**；周更 job `kickstart` 仍正常（`reclaimed_bytes: 0`） |
+
+**端到端磁盘效果**：`194.8 MiB 主库 + ~15 MiB WAL` → **`70.5 MiB 主库 + 0 WAL`**。
 
 **执行后验证**：`PRAGMA integrity_check = ok`；`records 2457 / revisions 4249 / records_fts_docsize 2457 / cjk_bigrams 181100` **全部未变**；trigram（`applied_bytes` 7 命中）与 bigram（`记忆` 10 命中）两条路径正常；sync 轮次 `missing=0 / errors=[]`。
 
