@@ -1,11 +1,20 @@
 """Tests for the primary recall probe.
 
-The probe exists because the primary can answer `Search Index: Ready` while
-everything written after a point is unretrievable (observed from 2026-09-24, still
-true on 2026-10-08, upstream community#649). The alert we had keys off
-`search_index.state`, so it cannot fire for that. These tests pin the property that
-makes the probe useful and the property that keeps it honest: it must separate
-"the primary lost newer content" from "the primary cannot answer at all".
+2026-10-13 追加的教训（本文件此前测不出真实故障）：探针原先用
+`nmem memories search <id>` 并把"命中里有这个 id"当作"可检索"。这个判据对
+**UUID 形态的 id**（导入期记录）成立，因为检索能字面命中 id 字段；但对**我们写入路径
+产生的 `sha256:<hex>` id** 不成立——检索返回 10 条文本相似结果、永不含自身
+（实机实测 3/3 sha256 缺失、5/5 uuid 命中），而 `GET /memories/<id>` 明明是 200。
+于是每条 sha256 记录都被报成"不可检索"，触发 `primary_stale_projection` 假红。
+根因是判据测的是"我的查询方法"，不是"主库能不能取回"。
+本文件的假主库当时**按 anchor 装答案**，恰好让这条错误判据永远通过 ⇒ 契约从未在
+真实 id 形态上被验证。现在假主库同时模拟 `show`（按 id）与 `search`（按 anchor），
+并新增 test_sha256_ids_are_not_reported_as_lost 固定住真实形态。
+
+探针存在的理由（原文保留）：主库可以在报 `Search Index: Ready` 的同时，让某个时间点
+之后写入的一切都取不回（2026-09-24 观察到、2026-10-08 仍成立，upstream community#649）。
+原告警只看 `search_index.state` ⇒ 这种情形永不触发。这些测试钉住两件事：
+它必须把"主库丢了新内容"与"主库根本答不了"分开。
 """
 import json
 import urllib.error
@@ -54,18 +63,32 @@ class FakePrimary:
     not break when anchor selection changes.
     """
 
-    def __init__(self, answers, fails=False):
-        """`answers` maps anchor -> the source_id the primary would return for it."""
+    def __init__(self, answers, fails=False, ids=None):
+        """`answers` maps anchor -> the source_id the primary would return for it.
+
+        `ids` is the set of memory ids the primary actually holds (the `show` path).
+        Defaults to every source id mentioned in `answers`, which is the healthy case.
+        """
         self.answers = dict(answers)
+        self.ids = set(ids) if ids is not None else {v for v in self.answers.values() if v}
         self.fails = fails
         self.queries = []
 
     def __call__(self, argv, **kwargs):
         if self.fails:
             raise urllib.error.URLError("primary unreachable")
-        query = argv[3]
-        self.queries.append(query)
-        source_id = self.answers.get(query)
+        # argv: [nmem, memories, <sub>, <arg>, ...]
+        sub, arg = argv[2], argv[3]
+        self.queries.append(arg)
+        if sub == "show":
+            # 按 id 取：只有"库里真有这条"才 200；未知 id 走 CLI 的 not-found 文案
+            if arg in self.ids:
+                return type("R", (), {"returncode": 0, "stderr": "",
+                                      "stdout": json.dumps({"id": arg})})()
+            return type("R", (), {"returncode": 1, "stdout": "",
+                                  "stderr": "error: memory not found"})()
+        # search：按 anchor 文本检索（自 v2 起只是回退路径）
+        source_id = self.answers.get(arg)
         hits = [{"id": source_id}] if source_id else []
         return type("R", (), {"returncode": 0, "stderr": "",
                               "stdout": json.dumps({"memories": hits})})()
@@ -390,3 +413,45 @@ def test_cli_rejects_an_unbounded_probe_total():
                      "--db", "/tmp/does-not-exist.db")
     assert result.returncode != 0
     assert "13 s per lookup" in result.stderr
+
+
+def test_sha256_ids_are_not_reported_as_lost(mirror, monkeypatch):
+    """回归（2026-10-13 实测的假红）：id 是 `sha256:<hex>` 的记录必须算作**可取回**。
+
+    实机证据：`nmem memories search <sha256-id>` 返回 10 条文本相似结果、**永不含该 id**
+    （3/3），而同样方式查 UUID 形态的 id 则精确命中（5/5）；同时 `GET /memories/<id>`
+    对该 sha256 记录返回 HTTP 200。原判据把"检索命中里有这个 id"当作可取回 ⇒ 每条
+    sha256 记录（= 我们自己写入路径产生的记录，也是最新的那批）都被报成丢失，
+    于是 `primary_stale_projection` 成为**假红**。
+
+    本用例固定住真实形态，使"改回 id-as-search-term"立刻变红。
+    """
+    # 自己放记录：id 取真实的 `sha256:<hex>` 形态，而**锚保持普通标识符**
+    # （`seed()` 造的 `sha256:deadbeef-0` 含 3 段连字符，会被探针判成"非引号锚"而不入选，
+    #   那是另一条判据，不该混进本用例）。12 条是为了给 control/span 留出非近期的记录。
+    ids = []
+    for index in range(12):
+        source_id = f"sha256:deadbeef{index:02d}"
+        put(mirror, "default", build_record(
+            source_id, f"2026-09-{10 + index:02d}T00:00:00Z",
+            f"record-{index} notes", f"uniqueanchor{index} appears only in this record."))
+        ids.append(source_id)
+    probes = select_recall_probes(mirror, recent=3, control=3, span=3)["probes"]
+    recent_ids = {p["source_id"] for p in probes if p["group"] == "recent"}
+    # 主库**持有全部记录** ⇒ 按 id 取（show）一律 200，这是"能取回"的真相；
+    # 而按 id 做文本检索（search）一条都命不中 —— 只让对照组走回退路径，近期组只用 show。
+    answers = {p["anchor"]: p["source_id"] for p in probes if p["group"] != "recent"}
+    fake = FakePrimary(answers=answers, ids=ids)
+    monkeypatch.setattr("memory_tool.shadow.subprocess.run", fake)
+
+    result = probe_primary_recall(mirror, command="nmem", probes=probes)
+    recent_results = [p for p in result["probes"] if p["group"] == "recent"]
+    assert {p["source_id"] for p in recent_results} == recent_ids
+
+    assert result["verdict"] == "ok", result
+    assert all(probe["retrieved"] for probe in result["probes"]), result["probes"]
+    assert all(probe["error"] is None for probe in result["probes"]), result["probes"]
+    # 判定必须走 show（按 id），而不是 search（把 id 当检索词）
+    assert fake.queries, "探针没有向主库提问"
+    assert any(q in ids for q in fake.queries), (
+        "探针应当按 id 提问（show 路径）；实测提问集合里没有任何探针 id：%s" % fake.queries[:3])

@@ -892,6 +892,39 @@ def _nowledge_ids(query, limit, command, timeout):
         return None, time.perf_counter() - started, type(error).__name__
 
 
+def _nowledge_show(source_id, command, timeout):
+    """Ask the primary for **one specific id** (`nmem memories show <id> -j`).
+
+    Why this exists (2026-10-13, root cause of a long-standing false red):
+    the recall probe used to run `nmem memories search <id>` and treat "the id is
+    among the hits" as "retrievable". That works for import-era records whose id is
+    a UUID, because the search matches the id field literally. It does **not** work
+    for the records our own write path creates, whose id is `sha256:<hex>`: the
+    search then returns 10 text-similarity hits and never the record itself.
+    Measured 2026-10-13 against the live primary: 3/3 sha256 ids missing from their
+    own search results, 5/5 uuids present. Every sha256 record was therefore
+    reported unretrievable while `GET /memories/<id>` returned it with HTTP 200 —
+    i.e. the probe was measuring its own lookup method, not the primary's health.
+
+    Returns (found, elapsed, error): `found` is True/False/None (None = cannot tell).
+    A non-zero exit is classified by the CLI's own "not found" text: anything else
+    is reported as an error, so a dead primary cannot masquerade as lost content.
+    """
+    started = time.perf_counter()
+    try:
+        result = subprocess.run([command, "memories", "show", source_id, "-j"],
+                                capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, time.perf_counter() - started, type(error).__name__
+    elapsed = time.perf_counter() - started
+    if result.returncode == 0:
+        return True, elapsed, None
+    message = f"{result.stderr or ''}{result.stdout or ''}".strip()[:200]
+    if "not found" in message.lower():
+        return False, elapsed, None
+    return None, elapsed, message or "show failed"
+
+
 def drain_compare(state_dir=None, max_queries=10, cache_ttl_hours=COMPARE_CACHE_TTL_HOURS,
                   command=None, timeout=180, limit=None):
     """Fill in the Nowledge half for queued queries and log the divergence.
@@ -1191,9 +1224,18 @@ def probe_primary_recall(conn, command=None, timeout=180, limit=10, space="defau
 
     results = []
     for probe in selection:
-        ids, elapsed, error = _nowledge_ids(probe["anchor"], limit, command, timeout)
+        found, elapsed, error = _nowledge_show(probe["source_id"], command, timeout)
+        if found is None and error is not None:
+            # `show` unavailable (older CLI / transport failure): fall back to the
+            # anchor search so the probe still answers *something*, but keep the
+            # error channel so "cannot tell" never reads as "content lost".
+            ids, elapsed2, error2 = _nowledge_ids(probe["anchor"], limit, command, timeout)
+            retrieved = bool(ids) and probe["source_id"] in ids
+            elapsed, error = elapsed2, (error2 or error)
+        else:
+            retrieved = bool(found)
         results.append({**probe,
-                        "retrieved": bool(ids) and probe["source_id"] in ids,
+                        "retrieved": retrieved,
                         "primary_latency_s": round(elapsed, 2),
                         "error": error})
 
