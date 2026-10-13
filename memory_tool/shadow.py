@@ -291,7 +291,15 @@ def compact(conn, vacuum=False):
     - `records_fts` `'optimize'` merges the FTS5 segment b-tree. Safe and
       idempotent; it changes no row.
     - `VACUUM` rewrites the whole file. It needs a full spare copy on disk and an
-      exclusive lock, so it stays opt-in behind `--vacuum`.
+      exclusive lock, so it stays opt-in behind `--vacuum`. It ends with a
+      TRUNCATE checkpoint: `VACUUM` pushes every page through the WAL, which
+      stays **allocated at roughly the size of the whole database** until
+      something truncates it. Measured 2026-10-14 on the live mirror, the first
+      `--vacuum` left a 73.9 MiB database sitting next to a 74.3 MiB `-wal`
+      (released only by an explicit checkpoint) — i.e. the command would have
+      reported 124.3 MiB reclaimed while ~74 MiB of it was still held. A
+      TRUNCATE checkpoint returns `busy=1` without truncating when a reader is
+      mid-transaction, which is not an error: the other levers still applied.
     """
     before = page_stats(conn)
     conn.execute("INSERT INTO records_fts(records_fts) VALUES('optimize')")
@@ -300,6 +308,7 @@ def compact(conn, vacuum=False):
     if vacuum:
         # VACUUM refuses to run inside a transaction; the commit above closes it.
         conn.execute("VACUUM")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         after = page_stats(conn)
     return {"file_bytes_before": before["file_bytes"],
             "file_bytes_after": after["file_bytes"],

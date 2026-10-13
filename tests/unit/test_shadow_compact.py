@@ -8,6 +8,8 @@ than what a rewrite returns, and the rewrite costs no auditability at all.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from memory_tool.shadow import compact, connect, page_stats, put, search, status
@@ -120,6 +122,30 @@ def test_compact_on_an_empty_database_is_a_no_op(conn):
 
     assert result["reclaimed_bytes"] == 0
     assert status(conn)["total"] == 0
+
+
+def test_vacuum_releases_the_wal_it_creates(conn):
+    """`--vacuum` must not leave the same bytes allocated next door in the WAL.
+
+    `VACUUM` pushes every page through the WAL, so the file ends up roughly the
+    size of the database until something truncates it — measured 2026-10-14 on
+    the live mirror: a 73.9 MiB database beside a 74.3 MiB `-wal`, while the
+    command reported 124.3 MiB reclaimed. This pins the truncate checkpoint that
+    closes that gap (measured on this fixture: without it the WAL is ~4.1 MiB for
+    an 868 KiB database; with it, 0).
+    """
+    from memory_tool.shadow import reindex
+
+    seed(conn)
+    reindex(conn)
+
+    result = compact(conn, vacuum=True)
+    assert result["vacuumed"] is True
+
+    wal = Path(conn.execute("PRAGMA database_list").fetchone()[2] + "-wal")
+    assert not wal.exists() or wal.stat().st_size == 0, (
+        f"the WAL still holds {wal.stat().st_size} bytes after --vacuum")
+    assert status(conn)["total"] == 60, "truncating the WAL must not drop records"
 
 
 def test_reindex_merges_the_segments_it_invalidates(conn):
