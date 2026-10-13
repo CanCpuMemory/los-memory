@@ -15,6 +15,7 @@ Progress against the replacement goal, gap list and work packages:
 - [Nowledge replacement readiness review (2026-10-07)](docs/design/nowledge-replacement-readiness.md)
 - [Formal 14-day shadow operation report (2026-10-10)](docs/reports/2026-10-10-shadow-14day-formal.md)
 - [Project status audit and TODO map (2026-10-10)](docs/reports/2026-10-10-status-audit-and-todo-map.md)
+- [Full-chain status review and optimization (2026-10-14)](docs/reports/2026-10-14-status-review-and-optimization.md)
 - [Operation report and alerting](docs/reports/2026-10-07-shadow-operation-report.md)
 - [Off-host encrypted backup and restore drill](docs/reports/2026-10-07-offhost-backup.md)
 - [Client retrieval evidence](docs/reports/2026-10-07-client-retrieval-evidence.md)

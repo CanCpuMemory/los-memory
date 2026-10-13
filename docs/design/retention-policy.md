@@ -37,12 +37,19 @@
 ### 层 0 — 空间回收（零数据损失，收益最大）
 
 - `records_fts` 执行 FTS5 `'optimize'`：合并段 b-tree，安全、幂等、不改任何行。
-- `PRAGMA freelist_count` 作为**可回收量的常规指标**（已进 `shadow status` 的 `storage`，见 §5）。
+- `PRAGMA freelist_count` 作为**可回收量的一项指标**（已进 `shadow status` 的 `storage`，见 §5）。**但它不是全部**：见下面的 2026-10-14 补充。
 - `VACUUM` 仅在显式 `--vacuum` 时执行：它需要磁盘上一份完整副本与排他锁，所以是**被请求才做**，不是默认行为。实现为 `shadow compact [--vacuum]`。
+
+**2026-10-14 补充（本节结论的机制层修正，已实现）**：把层 0 当成"一次性动作"是错的——**制造垃圾的生产者必须自己清理**，否则库会在几天内长回来。实测：10-10 `compact --vacuum` 把库降到 69.7 MiB，10-14 又是 194.8 MiB，而记录只 +25 条；按备份台账，VACUUM 后 13 小时就已回到 112.9 MiB。
+
+- **根因在代码**：`reindex()` 先删空 `records_fts` 再逐条重插，FTS5 把删除的 term 保留为墓碑，**只有段合并才真正释放**；而 `optimize` 此前只存在于手工 `compact` 里。两次全量 reindex（10-10、10-13 部署）≈ 两代陈旧索引。
+- **副本实验**（M3 `/tmp` 快照，未触碰生产库）：`optimize` 把 `records_fts` + `cjk_bigrams` 的页从 **136.2 → 46.4 MiB**、并把 89.8 MiB 转入 freelist（32.0 → 121.8 MiB），随后 `VACUUM` 得 **70.5 MiB** —— 合计可回收 **124.3 MiB**，其中 **89.8 MiB 是 `freelist_bytes` 结构上看不见的"活着的死段"**。这同时解释了 §6 里"实际回收比预测多 38 MiB"的那笔差额。
+- **修法**：`reindex()` 末尾在同一事务内自己 `optimize`（刻意不进 `index_record()`——那是每记录路径）；`status.storage` 新增 **`fts_index_bytes`**（取 FTS5 shadow 表块长之和，`dbstat` 是编译期选项不可依赖；口径为"索引载荷"，用于纵向自比，不是页账）。因此 §5 的可观测性由 `freelist_bytes` 一项扩为两项。
+- **仍未做**：M3 部署与那次 `compact --vacuum`、以及是否给 `compact` 上周期节奏。`reindex` 自清理后主要产生源已消失，周期 compact 属第二层保险。
 
 ### 层 1 — 派生结构：不设保留期，只设重建契约
 
-`records_fts` / `cjk_bigrams` / `record_facets` / `record_labels` 一律**不设 TTL**：它们可由 `records` 用 `shadow reindex` 完整重建，因此保留期这个概念对它们没有意义——空间的正确工具是层 0 的合并与重写，不是删除行。
+`records_fts` / `cjk_bigrams` / `record_facets` / `record_labels` 一律**不设 TTL**：它们可由 `records` 用 `shadow reindex` 完整重建，因此保留期这个概念对它们没有意义——空间的正确工具是层 0 的合并与重写，不是删除行。**`reindex` 现在自带 `optimize`**，所以"重建"不再顺手制造一代死段（见层 0 的 2026-10-14 补充）。
 
 ### 层 2 — `revisions`：保留，用测量而不是删除来约束
 
@@ -58,7 +65,7 @@
 ### 层 4 — 日志与台账：有界，且已有工具
 
 - `sync.out.log` / `compare-drain.out.log` / `recall-probe.out.log` 由 maintenance job 的 `rotate_log` 覆盖（上限 8 MiB / 保留 5）。
-- `alerts.jsonl` **未覆盖**：它是只写的（仓库内无读者），且从 2026-10-10 起每小时增长约 330 B。加进 maintenance 的 `--log` 列表是一行 plist 改动，**属 launchd 变更，待确认**。
+- `alerts.jsonl` 由**写它的脚本自己封顶**（`cap_ledger()`，2026-10-10 实施，2026-10-14 复核生效：现网每条输出带 `ledger_cap`，实测 49,151 B / 上限 8 MiB）。原先设想的"加进 M3 maintenance 的 `--log` 列表"**不成立**：该台账在 M1（告警 job 所在机），M3 的 rotatelog 够不到它。
 
 ## 4. 明确不做
 
@@ -70,9 +77,9 @@
 
 ## 5. 可观测性与验收
 
-- `shadow status` 新增 `storage`：`page_size` / `page_count` / `freelist_pages` / `file_bytes` / `freelist_bytes`。于是"还有多少可回收"是一个**可查询字段**，不再依赖临时 `dbstat`。
+- `shadow status` 新增 `storage`：`page_size` / `page_count` / `freelist_pages` / `file_bytes` / `freelist_bytes`，以及 **`fts_index_bytes`**（2026-10-14 追加）。于是"还有多少可回收"是一个**可查询字段**，不再依赖临时 `dbstat`。两项缺一不可：`freelist_bytes` 看不见未合并的死段（实测 89.8 MiB），`fts_index_bytes` 看不见已释放页。
 - `shadow compact` 返回 `file_bytes_before/after`、`freelist_bytes_before/after`、`reclaimed_bytes`、`vacuumed`，可直接进报告。
-- 测试：`tests/unit/test_shadow_compact.py`（6 例）覆盖"回收空闲页且不丢记录""不带 `--vacuum` 就不重写文件""空库是 no-op""幂等（第二遍回收 0）""索引状态在重写前后一致"。
+- 测试：`tests/unit/test_shadow_compact.py`（9 例）覆盖"回收空闲页且不丢记录""不带 `--vacuum` 就不重写文件""空库是 no-op""幂等（第二遍回收 0）""索引状态在重写前后一致"，以及 2026-10-14 追加的三条：`reindex` 必须合并它自己作废的段、连续重建不得让活页增长、`status` 必须能看见 `freelist` 看不见的索引膨胀。三条都做了**负向控制**（去掉新加的 `optimize` 调用即红；活页 72/71/87/87 对修复后 71/71/71/71）。刻意**不写字节级断言**：夹具规模上 automerge 本来兜得住（仅差 3 页），字节效应在生产镜像上测。
 
 ## 6. 现网动作执行结果（2026-10-10，用户批准后执行）
 
@@ -82,7 +89,7 @@
 | 2 | `shadow compact --vacuum` | **执行完成，且优于预测**：file 174,710,784 B（166.6 MiB）→ **73,039,872 B（69.7 MiB）**；freelist 59,912,192 B → **0**；**回收 101,670,912 B = 97.0 MiB**。执行前先做了一次异机加密备份（`shadow-20261010T151752Z.sqlite3.enc`，2432 条，`integrity ok` / `readback_ok true`）。 |
 | 3 | `alerts.jsonl` 轮转 | **位置修正**：该台账在 M1（告警 job 所在机），不在 M3，所以加进 M3 maintenance 轮转只会永远报 `missing`。已从 M3 撤回，改为**写它的脚本自己封顶**（`cap_ledger()` 复用 `rotate_log`，惰性导入、失败只记录不上抛），不新增第四个 launchd job。 |
 
-**预测偏差（如实记录）**：§2 预测可回收 58.9 MiB（freelist 实测值），实际回收 **97.0 MiB**。多出的约 38 MiB 来自 FTS5 `optimize` 合并段 b-tree 与整库碎片整理——只数 freelist 会**低估**收益。
+**预测偏差（如实记录）**：§2 预测可回收 58.9 MiB（freelist 实测值），实际回收 **97.0 MiB**。多出的约 38 MiB 来自 FTS5 `optimize` 合并段 b-tree 与整库碎片整理——只数 freelist 会**低估**收益。该机制的定量在层 0 的 2026-10-14 补充里：死段在被合并前**既不是 freelist、也不在 `records` 里**，所以任何只盯 freelist 的口径都会漏掉它。
 
 **执行后验证**：`PRAGMA integrity_check = ok`；records 2432 / active 2314 **未变**；revisions 4219 **未变**；索引 `ready` 2432；`shadow`/`applied_bytes` 走 trigram、`记忆` 走 bigram，均正常命中；sync 下一轮 23:14:48 `checked=100 / missing=0 / errors=[]` 正常。
 
