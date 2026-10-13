@@ -24,7 +24,7 @@
 | 召回探针 | `verdict: ok`、`recent_rate 1.0`（6/6）、`control_rate 1.0`（3/3）、`errors: []` | ✅ §4 |
 | 告警 | 2026-10-13 13:14 起 `alerts: []`，投递 `pushed/up` HTTP 200，台账已自封顶（49,151 B） | ✅ |
 | 备份 | 2026-10-14 04:31，`integrity ok` / `readback_ok`，2457 条，83.5 s | ⚠️ RPO 23.98 h，见 §6 |
-| 存储 | 文件 194.8 MiB，freelist 32.0 MiB | ❌ §3 |
+| 存储 | 文件 194.8 MiB，freelist 32.0 MiB | ❌ §3（**当日已回收至 70.5 MiB，见 §3.6**） |
 | 数据契约 | `project` 已分配 622/2339 = **26.6%**，`claim_status=undeclared` 1460/2339 | ⚠️ §7 |
 | 对照台账 | `compare-results.jsonl` **仍是 1 条**（与 10-07 相同） | ❌ §5 |
 
@@ -120,10 +120,24 @@ VACUUM 之后 13 小时（10-11 04:30）就已经回到 112.9 MiB —— **增�
 
 刻意**没有**写"字节数必须降多少"的单元断言：在夹具规模上 FTS5 的 automerge 本来就能兜住大部分，字节级断言只会测到噪声（实测仅差 3 页）。**字节效应在生产镜像上测**（§3.2），单元测试只钉机制。
 
-### 3.6 仍未做（§8.2）
+### 3.6 生产侧执行结果（2026-10-14，用户批准后执行完毕）
 
-- M3 上没有跑这次 `compact --vacuum`（预计回收 **124.3 MiB**），也没有部署新代码到 M3。
-- 是否给 `compact` 上周期节奏（例如每周一次、或部署/重建后自动跟随）：`reindex` 自清理后，**主要产生源已经消失**，周期 compact 属于第二层保险。`optimize` 实测 0.3 s，代价可忽略；但它会写生产库，故列为需批准项。
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | 异机加密备份（回退点） | `shadow-20261013T234504Z.sqlite3.enc`，2457 条，`integrity ok` / `readback_ok true`，65.0 s |
+| 2 | 部署当前树到 M3 | 发布 **`9934bc20a2cca2b86e43`**，等于本地 HEAD 的 `memory_tool/**` 树摘要；四个既有 job 全部 `changed: true` 一次对齐；再跑一次同树部署为幂等（同一摘要、四个 job `changed: false`） |
+| 3 | `compact --vacuum` | **`file 204,210,176 → 73,908,224 B`（194.8 → 70.5 MiB），`reclaimed_bytes = 130,301,952 = 124.3 MiB`**，freelist `28,844,032 → 0`。**与预测的 124.3 MiB 完全一致。** 新仪器直接显示了死段：`fts_index_bytes 112,099,675 → 21,092,183`（106.9 → 20.1 MiB） |
+| 4 | 新增周更 `compact` job | `co.los.memory-shadow-compact`（`StartInterval=604800`，只 optimize、不带 `--vacuum`——VACUUM 仍按策略"被请求才做"）。已 `kickstart` **实证运行**，输出 `reclaimed_bytes: 0`（刚 VACUUM 过，幂等）。同时把 `compact.out.log` 加进 maintenance 的 `--log` 列表，否则新 job 会重造"无界台账"这类问题 |
+
+**执行后验证**：`PRAGMA integrity_check = ok`；`records 2457 / revisions 4249 / records_fts_docsize 2457 / cjk_bigrams 181100` **全部未变**；trigram（`applied_bytes` 7 命中）与 bigram（`记忆` 10 命中）两条路径正常；sync 轮次 `missing=0 / errors=[]`。
+
+**自动对齐已覆盖新 job**：`deploy_shadow.py` 扫描 `co.los.memory-shadow*.plist`，第二次部署的输出里已列出 `co.los.memory-shadow-compact (changed: false)`——即它不会像 10-10 那样漂移成一个"手工对齐"的 job。
+
+**仍未做**：`git push`（用户本轮未选）。
+
+### 3.7 周期节奏的取舍
+
+`reindex` 自合并之后，主要产生源已经消失（一次全量重建不再留下一代死段）。周更 `compact` 是**第二层保险**，覆盖单记录路径（`put` 的 DELETE+INSERT）在长期运行后可能积累的段碎片；`optimize` 实测 0.3 s，代价可忽略。**文件不会因此变小**——`optimize` 只把死页转入 freelist 供复用，文件收缩仍只在显式 `--vacuum` 时发生（策略要求如此）。
 
 ---
 
@@ -205,8 +219,8 @@ ruff check --select F,B memory_tool/hub_lite.py scripts/create_hub_lite_records.
 
 ## 8. 待用户决定
 
-1. **M3 部署 + 回收**：部署当前树（含 `reindex` 自合并）并在 M3 跑一次 `compact --vacuum`，预计回收 **124.3 MiB**（194.8 → ~70.5 MiB）。是否同时给 `compact` 上周期节奏（`optimize` 实测 0.3 s）。
-2. **推送 `main`**（`4cc702f`），让它跑一次 CI。
-3. **影子 MCP 接线**：是否把该 MCP 加入 `desktop` profile（本 GUI 会话用的 profile），以解锁读取路径轮换阶段 1 的样本累积；还是明确"影子只在 `web` profile 可用"并把 `AGENTS.md` 的策略改成按 profile 限定。
-4. **`shared` 库内容策略**：98.6% 是脚本/夹具族，是否清理、隔离或原样保留（本轮只量化未删）。
-5. **备份 RPO 余量**：调整备份时刻/频率以拉开与 24 h 门槛的距离，或接受并写明。
+1. ~~**M3 部署 + 回收**~~ —— **已执行（2026-10-14，用户批准）**：发布 `9934bc20a2cca2b86e43`，`compact --vacuum` 回收 **124.3 MiB**（194.8 → 70.5 MiB，与预测一致），并新增周更 `co.los.memory-shadow-compact`。详见 §3.6。文件收缩仍只在显式 `--vacuum` 时发生。
+2. **推送 `main`**：本轮新增的提交（`5922033` 测试泄漏修复、`015a358` 存储修复、以及本报告所在提交）连同 10-13 的 `4cc702f` 一起待推——**均未推送，也未跑过 CI**。本轮用户未选，保持现状。
+3. **影子 MCP 接线**：是否把该 MCP 加入 `desktop` profile（本 GUI 会话用的 profile），以解锁读取路径轮换阶段 1 的样本累积；还是明确"影子只在 `web` profile 可用"并把 `AGENTS.md` 的策略改成按 profile 限定。**仍待决定。**
+4. **`shared` 库内容策略**：98.6% 是脚本/夹具族，是否清理、隔离或原样保留（本轮只量化未删）。**仍待决定。**
+5. **备份 RPO 余量**：最新一次为 11615 s（3.2 h，因为本轮补做了一次备份），但**日常节奏下仍是 23.98 h 对 24 h 门槛、余量约 78 秒**；是否调整备份时刻/频率以拉开距离，或接受并写明。**仍待决定。**

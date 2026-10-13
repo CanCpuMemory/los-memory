@@ -45,7 +45,7 @@
 - **根因在代码**：`reindex()` 先删空 `records_fts` 再逐条重插，FTS5 把删除的 term 保留为墓碑，**只有段合并才真正释放**；而 `optimize` 此前只存在于手工 `compact` 里。两次全量 reindex（10-10、10-13 部署）≈ 两代陈旧索引。
 - **副本实验**（M3 `/tmp` 快照，未触碰生产库）：`optimize` 把 `records_fts` + `cjk_bigrams` 的页从 **136.2 → 46.4 MiB**、并把 89.8 MiB 转入 freelist（32.0 → 121.8 MiB），随后 `VACUUM` 得 **70.5 MiB** —— 合计可回收 **124.3 MiB**，其中 **89.8 MiB 是 `freelist_bytes` 结构上看不见的"活着的死段"**。这同时解释了 §6 里"实际回收比预测多 38 MiB"的那笔差额。
 - **修法**：`reindex()` 末尾在同一事务内自己 `optimize`（刻意不进 `index_record()`——那是每记录路径）；`status.storage` 新增 **`fts_index_bytes`**（取 FTS5 shadow 表块长之和，`dbstat` 是编译期选项不可依赖；口径为"索引载荷"，用于纵向自比，不是页账）。因此 §5 的可观测性由 `freelist_bytes` 一项扩为两项。
-- **仍未做**：M3 部署与那次 `compact --vacuum`、以及是否给 `compact` 上周期节奏。`reindex` 自清理后主要产生源已消失，周期 compact 属第二层保险。
+- **仍未做**：无。2026-10-14 已部署（发布 `9934bc20a2cca2b86e43`）并执行 `compact --vacuum`；周期节奏以**周更 `co.los.memory-shadow-compact`**（只 optimize）落地，见 §6 第 4/5 行。文件收缩仍只在显式 `--vacuum` 时发生——`optimize` 只把死页转入 freelist 供复用。
 
 ### 层 1 — 派生结构：不设保留期，只设重建契约
 
@@ -93,9 +93,23 @@
 
 **执行后验证**：`PRAGMA integrity_check = ok`；records 2432 / active 2314 **未变**；revisions 4219 **未变**；索引 `ready` 2432；`shadow`/`applied_bytes` 走 trigram、`记忆` 走 bigram，均正常命中；sync 下一轮 23:14:48 `checked=100 / missing=0 / errors=[]` 正常。
 
+## 7. 现网动作执行结果（2026-10-14，用户批准后执行；层 0 机制缺口）
+
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | 异机加密备份（回退点） | `shadow-20261013T234504Z.sqlite3.enc`，2457 条，`integrity ok` / `readback_ok true` |
+| 2 | 部署含"`reindex` 自合并 + `status.storage.fts_index_bytes`"的当前树 | 发布 `9934bc20a2cca2b86e43` = HEAD 的 `memory_tool/**` 树摘要；四个既有 job 一次对齐 |
+| 3 | `compact --vacuum` | **204,210,176 → 73,908,224 B（194.8 → 70.5 MiB），回收 130,301,952 B = 124.3 MiB**，freelist → 0。**与副本实验的预测完全一致。** `fts_index_bytes` 112,099,675 → 21,092,183（106.9 → 20.1 MiB），即新仪器直接量到了那批死段 |
+| 4 | 新增周更 `co.los.memory-shadow-compact` | `StartInterval=604800`，ProgramArguments 为 `compact`（**不带 `--vacuum`**——VACUUM 按策略"被请求才做"）。已 `kickstart` 实证运行，输出 `reclaimed_bytes: 0`（幂等） |
+| 5 | `compact.out.log` 纳入轮转 | 加进 maintenance job 的 `--log` 列表，否则新 job 会重造"无界台账"问题 |
+
+**执行后验证（2026-10-14）**：`integrity_check = ok`；records 2457 / revisions 4249 / `records_fts_docsize` 2457 / cjk_bigrams 181100 **全部未变**；trigram 与 bigram 两条检索路径正常；sync 轮次 `missing=0 / errors=[]`。
+
+**部署纪律**：`deploy_shadow.py` 扫描 `co.los.memory-shadow*.plist`，所以新 job 自动进入"部署时对齐"的集合（同树二次部署的输出里它显示 `changed: false`），不会再出现 10-10 那种"四个 job 指向三个发布"的漂移。
+
 三项均已于 2026-10-10 获用户批准后执行完毕。回退见 §7。
 
-## 7. 回退
+## 8. 回退
 
-- `compact --vacuum` 不改任何行，失败时 `VACUUM` 自身是事务性的（失败不留半写状态）；真出问题的回退是"用当晚异机加密备份恢复"，与既有备份链路一致。
-- 其余各项为配置/代码，回退＝改回 plist 或部署上一发布。
+- `compact --vacuum` 不改任何行，失败时 `VACUUM` 自身是事务性的（失败不留半写状态）；真出问题的回退是"用当晚异机加密备份恢复"，与既有备份链路一致。2026-10-14 那次执行前的回退点是 `shadow-20261013T234504Z.sqlite3.enc`。
+- 其余各项为配置/代码，回退＝改回 plist 或部署上一发布。周更 `co.los.memory-shadow-compact` 的回退＝`launchctl bootout gui/$(id -u)/co.los.memory-shadow-compact` 并删掉 plist（它只做 `optimize`，不删行、不重写文件，所以停掉不会有残留状态）。
