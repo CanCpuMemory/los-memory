@@ -211,7 +211,21 @@ def index_record(conn, space, record):
 
 def reindex(conn, space=None):
     """Rebuild every derived structure from records. Idempotent; the migration
-    path for databases written before the index and facets existed."""
+    path for databases written before the index and facets existed.
+
+    Ends with an FTS5 `optimize` because this function is what creates the
+    garbage it would otherwise leave behind: it deletes every row of
+    `records_fts` and re-inserts them (`index_record` does the same per record),
+    and FTS5 keeps the deleted terms as tombstones until segments are merged. On
+    the live mirror two rebuilds (2026-10-10, 2026-10-13) left ~90 MiB of dead
+    segments inside `records_fts_data` — measured 2026-10-14 by optimizing a
+    copy: 136.2 MiB of FTS+bigram pages fell to 46.4 MiB, and a following
+    `VACUUM` took the 194.8 MiB file to 70.5 MiB.
+
+    `optimize` is deliberately *not* added to `index_record`: that runs once per
+    record on every sync write, where merging the whole index per record would
+    be O(index) work per record.
+    """
     where, params = ("WHERE space=?", (space,)) if space else ("", ())
     rows = conn.execute(f"SELECT space, snapshot FROM records {where}", params).fetchall()
     with conn:
@@ -224,6 +238,7 @@ def reindex(conn, space=None):
         for row in rows:
             record = json.loads(row["snapshot"])
             index_record(conn, row["space"], record)
+        conn.execute("INSERT INTO records_fts(records_fts) VALUES('optimize')")
     return len(rows)
 
 
@@ -234,6 +249,32 @@ def page_stats(conn):
     freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
     return {"page_size": page_size, "page_count": page_count, "freelist_pages": freelist,
             "file_bytes": page_count * page_size, "freelist_bytes": freelist * page_size}
+
+
+def fts_index_bytes(conn):
+    """Payload size of the FTS5 index, so index bloat is visible in `status`.
+
+    `freelist_bytes` alone **understates** what a `compact` can return: the
+    dominant waste measured on the live mirror on 2026-10-14 was dead segments
+    *inside* the live index (optimize moved ~90 MiB of pages into the freelist),
+    and those pages count as used until a merge. Without this field the only way
+    to see that was a `dbstat` query on the host, which is how the 90 MiB was
+    found — an instrument that exists only in an operator's shell is an
+    instrument nobody reads.
+
+    This sums the FTS5 shadow table's blocks rather than using `dbstat`, because
+    `dbstat` is a compile-time option. It is an **index payload** measure, not
+    page accounting: it tracks bloat responsively (measured on a 120-record
+    fixture: 422 KiB merged -> 873 KiB after one unmerged rebuild -> 422 KiB
+    after optimize) but is smaller than the page-aligned `dbstat` figure
+    (932 / 1412 / 932 KiB on the same fixture). Compare it to itself over time,
+    not to `file_bytes`.
+    """
+    try:
+        row = conn.execute("SELECT sum(length(block)) FROM records_fts_data").fetchone()
+    except sqlite3.Error:
+        return None
+    return row[0] or 0
 
 
 def compact(conn, vacuum=False):
@@ -555,7 +596,7 @@ def status(conn, space="default"):
                                      if index_state == "not_built" else None},
             "contract": coverage(conn, space),
             "metering": metering(conn, space),
-            "storage": page_stats(conn),
+            "storage": {**page_stats(conn), "fts_index_bytes": fts_index_bytes(conn)},
             "error_ledger": {"size": conn.execute("SELECT count(*) FROM sync_errors WHERE space=?",
                                                   (space,)).fetchone()[0],
                              "recent": [{"source_id": item["source_id"],

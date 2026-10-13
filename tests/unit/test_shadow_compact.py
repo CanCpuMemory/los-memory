@@ -120,3 +120,105 @@ def test_compact_on_an_empty_database_is_a_no_op(conn):
 
     assert result["reclaimed_bytes"] == 0
     assert status(conn)["total"] == 0
+
+
+def test_reindex_merges_the_segments_it_invalidates(conn):
+    """A full rebuild must not leave the previous index generation behind.
+
+    `reindex` deletes every FTS row and re-inserts it, which FTS5 keeps as
+    tombstoned terms until segments are merged — the same garbage `compact`
+    exists to clear. On the live mirror two rebuilds left ~90 MiB of dead
+    segments (measured 2026-10-14: 136.2 MiB of FTS+bigram pages fell to
+    46.4 MiB on optimize, and the file went 194.8 -> 70.5 MiB on the VACUUM
+    after it).
+
+    This asserts the *call*, not a byte count, and that is deliberate: at
+    fixture scale FTS5's automerge already merges nearly everything, so a size
+    assertion here would measure noise (3 pages of difference before the fix)
+    rather than the mechanism. The byte effect is measured on the live mirror in
+    the report; what a unit test can hold is that `reindex` asks for the merge
+    and that the projection still answers afterwards.
+    """
+    from memory_tool.shadow import fts_docs, reindex
+
+    seed(conn)
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        reindex(conn)
+    finally:
+        conn.set_trace_callback(None)
+
+    assert any("'optimize'" in statement for statement in statements), (
+        "reindex must merge the segments its own DELETE+INSERT invalidated")
+
+    assert fts_docs(conn) == 60, "merging must not drop indexed documents"
+    assert status(conn)["search_index"]["state"] == "ready"
+    assert len(search(conn, "needle-7")) == 1
+    assert len(search(conn, "中文记忆")) > 0, "CJK bigrams survive the merge"
+
+
+def test_repeated_rebuilds_do_not_grow_the_live_index(conn):
+    """The merge must bound repeated rebuilds, not just happen once.
+
+    Measured 2026-10-14 on this fixture (60 records, default `automerge=4`),
+    live pages (page_count - freelist_pages) over four rebuilds:
+    pre-fix 72 / 71 / 87 / 87 — the dead segments stay inside the index and are
+    never returned — versus 71 / 71 / 71 / 71 with the merge. Forcing
+    `automerge=0` separates the two monotonically (pre-fix 72 / 87 / 99 / 112),
+    which is the shape the live mirror showed: automerge keeps up at fixture
+    scale but not on a 2,457-record index.
+    """
+    from memory_tool.shadow import page_stats, reindex
+
+    seed(conn)
+    live_pages = []
+    for _ in range(4):
+        reindex(conn)
+        stats = page_stats(conn)
+        live_pages.append(stats["page_count"] - stats["freelist_pages"])
+
+    assert live_pages[-1] <= live_pages[0] + 4, (
+        f"the live index grew across rebuilds, so the merge is not bounding it: {live_pages}")
+    assert status(conn)["total"] == 60
+
+
+def test_status_reports_index_bloat_that_the_freelist_hides(conn):
+    """`status.storage.fts_index_bytes` must answer "how big is the index".
+
+    The point of the field is that `freelist_bytes` cannot: an unmerged rebuild
+    leaves dead segments inside the live index, so the freelist does not move
+    while the index grows. Measured on this fixture, the payload roughly doubles
+    on an unmerged rebuild and returns on `optimize`.
+    """
+    import json
+
+    from memory_tool.shadow import index_record, reindex
+
+    seed(conn)
+    reindex(conn)
+    merged = status(conn)["storage"]["fts_index_bytes"]
+    assert merged and merged > 0, "a built index must report a non-zero size"
+
+    rows = conn.execute("SELECT space, snapshot FROM records").fetchall()
+    with conn:
+        for table in ("records_fts", "record_facets", "record_labels", "cjk_bigrams"):
+            conn.execute(f"DELETE FROM {table}")
+        for row in rows:
+            index_record(conn, row["space"], json.loads(row["snapshot"]))
+    bloat = status(conn)["storage"]["fts_index_bytes"]
+    assert bloat > merged, (
+        "an unmerged rebuild must show up as index growth — if this fails, the "
+        f"field cannot see the waste it exists to expose (merged {merged}, now {bloat})")
+
+    optimize_only = compact(conn, vacuum=False)
+
+    assert optimize_only["vacuumed"] is False
+    after = status(conn)["storage"]["fts_index_bytes"]
+    # Not exact equality: merging is not byte-identical to the first build (5 bytes
+    # of segment structure on this fixture), so the assertion is "back to the same
+    # size class", which is what separates merged from bloated.
+    assert abs(after - merged) <= max(64, merged // 100), (
+        f"merging must return the reported index size to where it started "
+        f"(was {merged}, now {after})")
+    assert status(conn)["total"] == 60
