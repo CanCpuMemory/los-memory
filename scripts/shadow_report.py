@@ -179,13 +179,17 @@ def alert_push_url():
     return None
 
 
-def cap_ledger(max_bytes=8 * 1024 * 1024, keep=5):
+def cap_ledger(max_bytes=8 * 1024 * 1024, keep=5, path=None):
     """Cap `alerts.jsonl`, which is written by this script on M1.
 
     It was first added to the *M3* maintenance job's rotation list — but the
     ledger lives on M1, where the alert job runs, so that entry only ever
     reported `missing`. Rather than add a fourth launchd job on the other host,
     the writer caps its own file, reusing the tested `rotate_log`.
+
+    `path` defaults to this script's own ledger so existing callers are
+    unchanged; `scripts/memory_console.py` passes its own, because a second
+    writer with an uncapped ledger would recreate the problem this solves.
 
     The import is lazy and the outcome is returned, never raised: this runs on
     the alert path, and a rotation problem must not stop an alert from being
@@ -203,7 +207,7 @@ def cap_ledger(max_bytes=8 * 1024 * 1024, keep=5):
     except Exception as error:  # noqa: BLE001 - any import failure is reported, not fatal
         return {"rotated": False, "reason": f"rotate unavailable: {type(error).__name__}"}
     try:
-        return rotate_log(ALERTS, max_bytes, keep)
+        return rotate_log(Path(path) if path else ALERTS, max_bytes, keep)
     except OSError as error:
         return {"rotated": False, "reason": f"{type(error).__name__}: {error}"[:200]}
 
@@ -238,7 +242,7 @@ def write_push_url(url, path=None):
             "next": "run `shadow_report.py alert` to push the real status"}
 
 
-def notify(url, alerts, generated_at):
+def notify(url, alerts, generated_at, label="los-memory shadow"):
     """Best-effort delivery, recorded either way.
 
     The project already has exactly one notification chain — Uptime Kuma
@@ -248,20 +252,23 @@ def notify(url, alerts, generated_at):
     running: on 2026-10-10 the alert job silently missed four hourly runs while
     M1 slept, and an alert-only channel cannot see that.
 
+    `label` names the sender in the message, so one channel can carry more than
+    one watcher without the reader having to guess which one spoke.
+
     Delivery failure is recorded and makes the job exit non-zero. A channel that
     can break without saying so would reproduce the blindness the thresholds
     were added to remove.
     """
     if not url:
         return {"state": "unconfigured",
-                "detail": "no push URL; alerts are recorded to alerts.jsonl and the job "
+                "detail": "no push URL; alerts are recorded to the ledger and the job "
                           "exits 1, but nothing is notified"}
     status = "down" if alerts else "up"
     if alerts:
         summary = "; ".join(f"{alert['code']}({alert['severity']})" for alert in alerts)
-        message = f"los-memory shadow: {len(alerts)} alert(s) - {summary}"
+        message = f"{label}: {len(alerts)} alert(s) - {summary}"
     else:
-        message = "los-memory shadow: all thresholds satisfied"
+        message = f"{label}: all thresholds satisfied"
     separator = "&" if "?" in url else "?"
     target = f"{url}{separator}status={status}&msg={urllib.parse.quote(message)}"
     try:

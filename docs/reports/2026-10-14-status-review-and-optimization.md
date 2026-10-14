@@ -228,3 +228,54 @@ ruff check --select F,B memory_tool/hub_lite.py scripts/create_hub_lite_records.
 3. **影子 MCP 接线**：是否把该 MCP 加入 `desktop` profile（本 GUI 会话用的 profile），以解锁读取路径轮换阶段 1 的样本累积；还是明确"影子只在 `web` profile 可用"并把 `AGENTS.md` 的策略改成按 profile 限定。**仍待决定。**
 4. **`shared` 库内容策略**：98.6% 是脚本/夹具族，是否清理、隔离或原样保留（本轮只量化未删）。**仍待决定。**
 5. **备份 RPO 余量**：最新一次为 11615 s（3.2 h，因为本轮补做了一次备份），但**日常节奏下仍是 23.98 h 对 24 h 门槛、余量约 78 秒**；是否调整备份时刻/频率以拉开距离，或接受并写明。**仍待决定。**
+
+---
+
+## 9. 记忆的"查看/管理面"与监测缺口（同日下午，用户批准后执行）
+
+盘点结论：记忆有仪器但**没有一个地方能同时看到整体**，且仪器只覆盖了一部分——
+影子镜像有每小时 12 条阈值（→ Kuma → 飞书），DSH 只有一条周更的**内容**盘点
+（`~/.dsh/memories/` 轨，不覆盖影子与主库），而**主库、写入路径、本地 profile 三处零监测**。
+
+### 9.1 已建：`scripts/memory_console.py`（查看面 + 补齐监测）
+
+| 面 | 此前 | 现在 |
+| --- | --- | --- |
+| 影子镜像 | 每小时阈值（已有） | 复用 `shadow_report` 的读取器，同一份真值 |
+| 主库 Nowledge | **无定时检查**（`nmem status/doctor` 只在人工跑时存在） | `nmem status/stats/feed inbox` 每次采集 |
+| 写入路径（DSH→主库） | **无人读**（`mem-sync-evolve.py` 只写日志） | 最近一次的 created/updated/skipped/failed + 龄期 |
+| 本地三 profile | **完全没看**（测试泄漏藏了数月） | 行数/最新记录/体积 + 快照差值，增长即信号 |
+
+新增 11 个阈值码，每个都有"会触发"的用例，外加一条**健康基线必须什么都不报**的基线
+（`tests/unit/test_memory_console.py`，34 例）。其中 `shadow_alert_stale` 是**反向看护**：
+影子报告结构上无法报告自己的静默（2026-10-10 它就在 M1 睡眠期漏跑 4 次），这个脚本用不同
+的调度从外部看它。
+
+### 9.2 投递通道的取舍（实测后改过一次）
+
+第一次实现复用了影子那条 Kuma 推送链路，实测发现两件事：Kuma 的**通知文本只带监视器名**，
+于是主库 backlog 会以"不可用：los-memory-shadow-alerts"到达飞书（而影子本身是健康的）；
+改名需要重启 Kuma 容器，会波及 6 个 60 秒监视器，等于制造新的假噪声。改为**直连飞书**
+（`~/.dsh/scripts/feishu-push.sh`，与 `disk-cleanup.sh --push` 同一条路径）：
+消息自称"记忆总览：…"，`--key = memory-console-<日期>-<码集合>` 让同一状态不重复、
+状态变化时新发、恢复时发一条恢复通知。已实测收到真实消息（`ok:true` + messageId）。
+
+### 9.3 首个 launchd 运行暴露的真缺陷（已修）
+
+launchd 默认 PATH 不含 `/usr/local/bin`（`nmem` 所在），于是把**健康的**主库报成
+`primary_unreachable`。两处修：job 显式设 `PATH`；`run_nmem` 把"我找不到工具"与
+"它不可达"分开成 `primary_cli_missing` —— 一个因自身配置而喊狼来了的 watcher，
+正是本项目最不想要的失败形态。
+
+### 9.4 现网状态
+
+M1 job `com.echerlos.memory-console-alert`（`StartInterval=10800`，落在写入路径 6 h
+预算内）已 bootstrap 并 `kickstart` 实证（11 s 完成）。首次真实输出即两条真发现：
+
+- `primary_reviews_pending`（medium）：主库 3 条待裁决 review，最近一条 **2026-11-07** 自动作废；
+- `primary_review_backlog`（medium）：维护 backlog **772**（清理 162 / 关系 610），
+  产能 42 条/日 vs 增长 54 条/日 —— 即 backlog 仍在变大。
+
+**已知残留**：该 job 自身的静默没有独立告警（死掉的 watcher 无法自报；Kuma 监视器
+属于影子那条线）。闭合它需要第二个 Kuma 监视器或给现有监视器改名，两者都要重启 Kuma
+容器 —— 列为待决策项。
