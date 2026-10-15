@@ -73,8 +73,46 @@ def fetch_status():
                               f"ls -td releases/*/ | head -1 | xargs -I{{}} sh -c "
                               f"'cd {{}} && python3 -m memory_tool.shadow status --db {M3_DB}'")
     if result.returncode != 0:
+        # 第三条回退：远端**直读库**（标准库 sqlite3，不需要 M3 上装 memory_tool）。
+        # 跨机面越薄越好 ——「某台没装包」这种失败形态不该出现在一条判断链上；
+        # 而它一旦发生，就会让判定退回到某个更早的取值（本文件 2026-10-15 的争议正源于此）。
+        script = ("python3 - <<'PY'\n"
+                  "import json, os, sqlite3\n"
+                  f"c = sqlite3.connect(os.path.expanduser({M3_DB!r}))\n"
+                  "r = c.execute('SELECT count(*), sum(active), min(verified_at), max(verified_at) "
+                  "FROM records').fetchone()\n"
+                  "print(json.dumps({'total': r[0], 'active': r[1], "
+                  "'oldest_verified_at': r[2], 'max_verified_at': r[3], 'source': 'sqlite-direct'}))\n"
+                  "PY")
+        result = ssh(M3_HOST, script)
+    if result.returncode != 0:
         raise SystemExit("cannot read shadow status: " + result.stderr.decode()[:500])
     return json.loads(result.stdout.decode())
+
+
+def alert_inputs(status, stats, backups, probe):
+    """报警据以判定的**输入**。必须落盘。
+
+    为什么（2026-10-15 实测）：影子层的 `stale_verification` 在 21:24/22:25 报 24.1h/24.0h，
+    而同一时段直读远端库得到的是 2.5h —— 两边**都无法从留存的记录里复核**，因为
+    `alerts.jsonl` 只记了 alerts 与 delivery，判定的输入（status/stats/阈值）只在内存里过了一遍。
+    于是任何争议都只能靠现场复现，而现场已经过去了。
+
+    判据：一条历史告警必须能**只用这条记录**复算出同一个结论。
+    """
+    return {
+        "thresholds": {
+            "max_oldest_verify_hours": MAX_OLDEST_VERIFY_HOURS,
+            "max_silence_minutes": MAX_SILENCE_MINUTES,
+            "max_backup_age_hours": MAX_BACKUP_AGE_HOURS,
+            "manifest_drop_ratio": MANIFEST_DROP_RATIO,
+            "max_recall_probe_age_hours": MAX_RECALL_PROBE_AGE_HOURS,
+        },
+        "status": status,
+        "stats": stats,
+        "backups": backups,
+        "probe": probe,
+    }
 
 
 def disk_state():
@@ -538,7 +576,8 @@ def main():
         rotation = cap_ledger()
         delivery = notify(alert_push_url(), alerts, generated_at)
         record = {"ts": datetime.datetime.now().timestamp(), "generated_at": generated_at,
-                  "alerts": alerts, "delivery": delivery, "ledger_cap": rotation}
+                  "alerts": alerts, "delivery": delivery, "ledger_cap": rotation,
+                  "inputs": alert_inputs(status, stats, backups, probe)}
         with open(ALERTS, "a") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         os.chmod(ALERTS, 0o600)
