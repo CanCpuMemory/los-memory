@@ -356,7 +356,7 @@ def group_by_category(per_case):
 SNAPSHOT_PY = """\
 import os, sqlite3, time
 t = time.time()
-s = sqlite3.connect("file:%s?mode=ro" % os.path.expanduser(os.environ["SNAP_SRC"]), uri=True)
+s = sqlite3.connect("file:" + os.path.expanduser(os.environ["SNAP_SRC"]) + "?mode=ro", uri=True)
 d = sqlite3.connect(os.environ["SNAP_DST"]); s.backup(d); d.close(); s.close()
 print("snapshot_seconds %.2f" % (time.time() - t))
 """
@@ -371,7 +371,7 @@ def refresh_shadow(host, source, dest, remote_tmp="/tmp/los-memory-shadow-snap.s
     """
     dest = Path(dest).expanduser()
     dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    script = SNAPSHOT_PY % source
+    script = SNAPSHOT_PY
     env_prefix = 'SNAP_SRC=%s SNAP_DST=%s ' % (source, remote_tmp)
     try:
         proc = subprocess.run(
