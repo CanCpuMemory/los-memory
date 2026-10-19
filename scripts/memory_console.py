@@ -372,7 +372,11 @@ def evaluate_alerts(state, now=None):
             severity = "high" if (days is not None and days < REVIEW_EXPIRY_WARN_DAYS) else "medium"
             detail = f"{len(reviews)} pending review(s)"
             if nearest:
-                detail += f"; nearest auto-discard {nearest} ({days} day(s))"
+                try:
+                    local_day = datetime.datetime.fromisoformat(nearest.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+                except ValueError:
+                    local_day = "unknown"
+                detail += f"; nearest auto-discard {local_day} ({days} day(s))"
             alerts.append({"code": "primary_reviews_pending", "severity": severity,
                            "detail": detail})
 
