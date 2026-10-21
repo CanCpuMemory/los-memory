@@ -31,6 +31,7 @@ This repository separates documentation by usage instead of keeping every note a
 - [2026-10-07 P0 evaluation baseline (shadow vs Nowledge)](reports/2026-10-07-eval-baseline.md)
 - [2026-10-21 B0 ruler, main-store ranking defect and frozen baseline](reports/2026-10-21-b0-ruler-and-baseline.md)
 - [2026-10-21 B1 record contract: one coverage definition, attributable reasons](reports/2026-10-21-b1-record-contract.md)
+- [2026-10-21 B2 step 1: embedding model selection (e5-small wins, chunking hurts)](reports/2026-10-21-b2-model-selection.md)
 - [2026-10-07 delivery record (branch / tag / release↔commit)](reports/2026-10-07-delivery.md)
 
 - `docs/design/`: forward-looking design documents, interface proposals, and design-review artifacts

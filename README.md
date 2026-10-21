@@ -18,6 +18,7 @@ Progress against the replacement goal, gap list and work packages:
 - [Full-chain status review and optimization (2026-10-14)](docs/reports/2026-10-14-status-review-and-optimization.md)
 - [B0 ruler, main-store ranking defect and frozen baseline (2026-10-21)](docs/reports/2026-10-21-b0-ruler-and-baseline.md)
 - [B1 record contract: coverage definition and reasons (2026-10-21)](docs/reports/2026-10-21-b1-record-contract.md)
+- [B2 step 1: embedding model selection (2026-10-21)](docs/reports/2026-10-21-b2-model-selection.md)
 - [Operation report and alerting](docs/reports/2026-10-07-shadow-operation-report.md)
 - [Off-host encrypted backup and restore drill](docs/reports/2026-10-07-offhost-backup.md)
 - [Client retrieval evidence](docs/reports/2026-10-07-client-retrieval-evidence.md)
