@@ -22,7 +22,7 @@
 | 记录（导入） | 镜像 `total 2803 / active 2670`，索引 `ready 2803`；24h `271 轮 / 34,149 请求 / 1.998 GB / 0 错`，单轮 8 s | 搬运这一层没有缺口 |
 | 记录（写入） | `shadow_mcp` 四工具全只读；P2-02 运行时未开工；自身库 `codex 7 / claude 0 / shared 6081` 行（夹具族为主） | **不是记录入口** |
 | 记录（实际链路） | `~/.dsh/memories` → `mem-sync-evolve.py` → Nowledge：最近 `entries 2338 / created 12 / skipped 2326 / failed 0` | 日常写入在 Nowledge |
-| 记录（契约） | `project` 665/2670 = **24.91%**；`claim_undeclared` **1560**；threads/entities **0**（主库 456 / 2911） | 字段语义缺失 |
+| 记录（契约） | `project` 683/2680 = **25.49%**，**ceiling 45.65%**（B1 后带原因：policy_excluded 579 / key_label_unmapped 514 / unclassified 821 / no_labels 56 / multi 27）；`claim_undeclared` **1564**（含`claim_source` 三态，0 冲突）；引用透传 thread 1160 / grounding 1096 | 语义可归因，但覆盖率受上游标签限制 |
 | 召回 | 影子按字面：5 条改写/取词查询全部 rank 1；Nowledge 语义召回能返回相关记录但**排序不按输出的分数**（见 §1.4） | 影子是字面匹配；主库排序弱 |
 | 召回（语义来源） | `nmem status`：`embedding.mode=local-gguf`，`degraded=false` | Nowledge 语义是本地向量 |
 | 总结 | 影子 0；本地只有单条正则 hook（`cli.py:1183` 才启用）；Nowledge Working Memory 有 09-19 起的逐日存档 | 本轴未开始 |
@@ -114,15 +114,26 @@ Nowledge 有 40+ 子命令，替代不等于逐个复刻。**必需**：写入�
 - **明确不做**：不改检索实现、不改数据契约、不动同步周期；**不修主库排序**（那是 Nowledge 侧，修了就不是"在它自己的规则下比"）。
 - **为什么排第一**：B2/B4/B5/B6 的验收全部依赖这把尺子；10-19 已经因为坏尺子误挡了一次。
 
-### B1 记录契约（镜像侧，M）
+### B1 记录契约（镜像侧，M）— **已完成 2026-10-21**
 
 - **目的**：让镜像里的记录**具备可验收的语义字段**，否则 B2 的语义检索和 B5 的清理都建在残字段上。
-- **依赖**：B0（或与 B0 并行，只读）。
-- **交付**：`project` 投影（注册表白名单 + 显式声明；冲突标 `multi`/`unassigned`）；`claim_status` 的**来源规则**（不猜、未知即 `undeclared`）；`source_grounding` 与 `source_thread` 引用透传（只存引用，不建图）；把覆盖率与未分配原因做成 `status.contract` 的一等输出。
-- **机械验收**：新增只读审计 `scripts/shadow_contract_audit.py --strict`，判据 = 覆盖率与原因分布可解释；目标 `project ≥80%`（达不到就逐条列原因，不许用"推断"补）。
-- **负向控制**：临时移除注册表 → 覆盖率必须下降且审计变红；构造一条"目录名像项目但未注册"的记录 → 必须记 `unassigned`。
-- **回退**：投影表可整表重建；不改 `records` 语义。
-- **明确不做**：不追平 Nowledge 的 456 threads / 2911 entities；不从线程或路径推断项目。
+- **依赖**：B0（已完成）。
+- **交付（实际形态）**：
+  1. **一个覆盖率定义**：`memory_tool.shadow.coverage` 是唯一实现，`scripts/shadow_eval.py` 改为调用它（此前两份算式给出 0.249 与 0.2089）。
+  2. **原因词表**：`assigned` / `multi` / `policy_excluded` / `key_label_unmapped` / `unclassified` / `no_labels`，每个活跃记录恰一个，写进 `record_facets.reason`。
+  3. **claim 来源规则**：record → metadata → `undeclared`，两处不一致记 `claim_source='conflict'`（不择一）；`claim_conflicts` 是一等输出。
+  4. **引用透传**：`thread_id` + `has_grounding`（只存引用，不建图）。
+  5. **审计**：`scripts/shadow_contract_audit.py`（三态 exit 0/1/2；`coverage-target` 默认只报告）。
+- **机械验收（已实测）**：
+  ```bash
+  python3 -m pytest tests/unit/test_shadow_contract.py -q     # 9 例
+  python3 scripts/shadow_contract_audit.py --strict            # 线上 OK / exit 0
+  ```
+  判据：原因直方图之和 == 活跃记录数、无 `unpopulated`、`claim_conflicts == 0`、注册表非空；`project_reason != {}`。
+- **负向控制（已实测）**：临时清空注册表再 `reindex` ⇒ coverage 1.0→0.0 且审计报 `registry-non-empty` 硬失败；B1 之前的快照上审计 exit 2（"判不了"，而不是"覆盖率 0"）；正文提到项目目录但没有注册标签的记录必须留 `unassigned`。
+- **门槛按数据改写**：`project ≥80%` 在当前上游标签下**不可达**（可命名上限 45.65%：日常写入不带项目标签，1,019 条 `label_memory-evolve`、525 条 `label_daily`）。B1 的门槛改为"原因齐全 + ceiling 已测 + 无冲突 + 投影不陈旧"；**80% 移到 B3**（写入侧必须带 `project`，新写入记录的覆盖率 ≥95%）。
+- **回退**：`record_facets` 是派生表，`reindex` 可整表重建；`records` 语义未变。
+- **明确不做**：不追平 Nowledge 的 threads/entities；不从路径/线程/正文推断项目；**不批量把长尾标签认领成主题**（那会让数字变好而不让能力变好）。
 
 ### B2 语义召回（影子侧只读，L）
 
