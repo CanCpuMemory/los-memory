@@ -45,6 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from memory_tool.shadow import coverage as contract_coverage  # noqa: E402
 from memory_tool.shadow import search_detailed  # noqa: E402  (needs sys.path first)
 
 # Private corpus lives outside the repository on purpose: the case set quotes
@@ -428,18 +429,28 @@ def shadow_facts(conn, path):
         "SELECT COUNT(*) FROM records WHERE space='default' AND active=1"
     ).fetchone()[0]
     total = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+    # Active rows only, and coverage comes from `memory_tool.shadow.coverage` so
+    # there is exactly one definition of the denominator (B1, 2026-10-21). The old
+    # local formula mixed an all-rows numerator with an active denominator and
+    # counted `multi` as assigned, which is how 0.2089 and 0.249 came to describe
+    # the same corpus on the same day.
     facets = {
         row[0]: row[1]
         for row in conn.execute(
-            "SELECT project, COUNT(*) FROM record_facets GROUP BY project ORDER BY 2 DESC"
+            "SELECT f.project, COUNT(*) FROM record_facets f JOIN records r "
+            "ON r.space=f.space AND r.source_id=f.source_id "
+            "WHERE r.active=1 GROUP BY f.project ORDER BY 2 DESC"
         )
     }
     kinds = {
         row[0]: row[1]
         for row in conn.execute(
-            "SELECT kind, COUNT(*) FROM record_facets GROUP BY kind ORDER BY 2 DESC"
+            "SELECT f.kind, COUNT(*) FROM record_facets f JOIN records r "
+            "ON r.space=f.space AND r.source_id=f.source_id "
+            "WHERE r.active=1 GROUP BY f.kind ORDER BY 2 DESC"
         )
     }
+    contract = contract_coverage(conn, "default")
     state = {}
     row = conn.execute("SELECT value FROM state WHERE key='sync:default'").fetchone()
     if row:
@@ -456,9 +467,10 @@ def shadow_facts(conn, path):
         "records_total": total,
         "projects": facets,
         "kinds": kinds,
-        "project_coverage": (
-            round(1 - facets.get("unassigned", 0) / active, 4) if active else None
-        ),
+        "project_coverage": contract["project_coverage"],
+        "coverage_ceiling": contract["coverage_ceiling"],
+        "project_reason": contract["project_reason"],
+        "project_reason_stale": contract["project_reason_stale"],
         "last_sync": state,
     }
 

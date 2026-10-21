@@ -15,7 +15,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .shadow_registry import UNASSIGNED, labels_for, project_for
+from .shadow_registry import (MULTI, NON_PROJECT_LABELS, REASON_ASSIGNED, REASON_KEY_UNMAPPED,
+                              REASON_MULTI, REASON_UNCLASSIFIED, REASONS, UNASSIGNED, classify,
+                              labels_for, project_for)
 from .utils import like_pattern
 
 
@@ -95,6 +97,14 @@ def connect(path):
             space TEXT NOT NULL, source_id TEXT NOT NULL,
             kind TEXT NOT NULL, claim_status TEXT NOT NULL, project TEXT NOT NULL,
             source_app TEXT NOT NULL, thread_source TEXT NOT NULL,
+            -- 2026-10-21 (B1). `reason` is the "why" behind `project`: a coverage
+            -- number without its composition cannot be audited. 'unpopulated'
+            -- means this row predates the column, so the histogram must report it
+            -- as stale rather than as a real category.
+            reason TEXT NOT NULL DEFAULT 'unpopulated',
+            claim_source TEXT NOT NULL DEFAULT 'unpopulated',
+            thread_id TEXT,
+            has_grounding INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(space, source_id));
         CREATE INDEX IF NOT EXISTS record_facets_project ON record_facets(space, project);
         CREATE INDEX IF NOT EXISTS record_facets_kind ON record_facets(space, kind);
@@ -124,7 +134,26 @@ def connect(path):
             space TEXT NOT NULL, source_id TEXT NOT NULL,
             failed_at REAL NOT NULL, error TEXT NOT NULL);
     """)
+    _ensure_facet_columns(conn)
     return conn
+
+
+# Columns added to `record_facets` after the table shipped. SQLite has no
+# `ADD COLUMN IF NOT EXISTS`, so the guard is PRAGMA table_info; the defaults make
+# old rows explicitly stale ('unpopulated') instead of silently claiming a reason.
+FACET_COLUMNS = {
+    "reason": "TEXT NOT NULL DEFAULT 'unpopulated'",
+    "claim_source": "TEXT NOT NULL DEFAULT 'unpopulated'",
+    "thread_id": "TEXT",
+    "has_grounding": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def _ensure_facet_columns(conn):
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(record_facets)")}
+    for name, decl in FACET_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE record_facets ADD COLUMN {name} {decl}")
 
 
 def cjk_bigrams(text):
@@ -166,18 +195,40 @@ def facets(record):
     thread_source = metadata.get("thread_source") or (
         thread.get("source") if isinstance(thread, dict) else "") or ""
     source_app = metadata.get("source_app") or ""
-    project = project_for(labels)
+    verdict = classify(labels)
+    project, reason = verdict["project"], verdict["reason"]
     if project == UNASSIGNED:
         declared = metadata.get("project")
         if isinstance(declared, str) and declared.strip():
             project = declared.strip()
-    claim = record.get("claim_status")
-    if claim is None or claim == "":
-        # 1,350 of 2,048 records carry no claim status. Defaulting to `asserted`
-        # would upgrade unlabelled records into verified facts.
-        claim = "undeclared"
+            reason = REASON_ASSIGNED
+    # Claim status has one field in two positions depending on the ingest path.
+    # Measured 2026-10-21 on 2,676 active records: 1,116 carry both and they agree,
+    # 1,560 carry neither. So "prefer the record, fall back to metadata" is exact
+    # today — and a disagreement is recorded as `conflict` rather than resolved.
+    top_claim = record.get("claim_status")
+    meta_claim = metadata.get("claim_status")
+    top_claim = top_claim.strip() if isinstance(top_claim, str) else ""
+    meta_claim = meta_claim.strip() if isinstance(meta_claim, str) else ""
+    if top_claim:
+        claim, claim_source = top_claim, "record"
+    elif meta_claim:
+        claim, claim_source = meta_claim, "metadata"
+    else:
+        # Never default to `asserted`: that would upgrade unlabelled records into
+        # verified facts.
+        claim, claim_source = "undeclared", "undeclared"
+    if top_claim and meta_claim and top_claim != meta_claim:
+        claim_source = "conflict"
+    thread_id = ""
+    if isinstance(thread, dict):
+        thread_id = str(thread.get("id") or "")
+    thread_id = thread_id or str(metadata.get("source_thread_id") or "")
+    grounding = record.get("source_grounding") or metadata.get("source_grounding") or ""
     return {"kind": record.get("unit_type") or "unknown", "claim_status": claim,
-            "project": project, "source_app": source_app, "thread_source": thread_source,
+            "claim_source": claim_source, "project": project, "project_reason": reason,
+            "source_app": source_app, "thread_source": thread_source,
+            "thread_id": thread_id or None, "has_grounding": 1 if grounding else 0,
             "labels": labels}
 
 
@@ -193,12 +244,17 @@ def index_record(conn, space, record):
                  (rowid, record["id"], space, fts_text(record)))
     derived = facets(record)
     conn.execute(
-        "INSERT INTO record_facets VALUES(?,?,?,?,?,?,?) "
+        "INSERT INTO record_facets(space,source_id,kind,claim_status,project,"
+        "source_app,thread_source,reason,claim_source,thread_id,has_grounding) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(space,source_id) DO UPDATE SET kind=excluded.kind,"
         "claim_status=excluded.claim_status,project=excluded.project,"
-        "source_app=excluded.source_app,thread_source=excluded.thread_source",
+        "source_app=excluded.source_app,thread_source=excluded.thread_source,"
+        "reason=excluded.reason,claim_source=excluded.claim_source,"
+        "thread_id=excluded.thread_id,has_grounding=excluded.has_grounding",
         (space, record["id"], derived["kind"], derived["claim_status"], derived["project"],
-         derived["source_app"], derived["thread_source"]))
+         derived["source_app"], derived["thread_source"], derived["project_reason"],
+         derived["claim_source"], derived["thread_id"], derived["has_grounding"]))
     conn.execute("DELETE FROM record_labels WHERE space=? AND source_id=?", (space, record["id"]))
     conn.executemany("INSERT OR IGNORE INTO record_labels VALUES(?,?,?)",
                      [(label, space, record["id"]) for label in derived["labels"]])
@@ -387,24 +443,79 @@ def coverage(conn, space="default"):
     Reported by status() and attached to any filtered search. Without it an empty
     project-filtered result reads as "this project has no memories" instead of
     "a project is only assignable on the labelled subset".
+
+    **The only definition of project coverage lives here** (2026-10-21, B1).
+    Before that there were two: this one (active denominator, `multi` not counted
+    as assigned → 0.249) and `scripts/shadow_eval.py`'s own (all-rows numerator
+    over an active denominator, `multi` counted as assigned → 0.2089). A percentage
+    is not auditable if two code paths disagree about its denominator, so the
+    evaluator now calls this function.
+
+    Coverage alone is not interpretable either: ~19% of the corpus is labelled
+    with topics only (`policy_excluded`) and ~15% carries a per-project key label
+    nobody has mapped yet (`key_label_unmapped`). Hence the reason histogram and,
+    next to coverage, `coverage_ceiling` — the share that is *nameable at all* with
+    today's upstream labels. The gap between the two can only be closed by the
+    write path (B3), not by re-labelling from our side.
     """
     total = conn.execute("SELECT count(*) FROM records WHERE space=? AND active=1",
                          (space,)).fetchone()[0]
     if not total:
         return {"records": 0, "project_assigned": 0, "project_unassigned": 0, "project_multi": 0,
-                "claim_undeclared": 0, "kind_unknown": 0, "project_coverage": 0.0}
+                "claim_undeclared": 0, "kind_unknown": 0, "project_coverage": 0.0,
+                "coverage_ceiling": 0.0, "project_reason": {}, "project_reason_stale": 0,
+                "claim_source": {}, "claim_conflicts": 0, "source_thread_refs": 0,
+                "source_grounding_refs": 0, "unclassified_labels": []}
     row = conn.execute(
         "SELECT sum(f.project NOT IN ('unassigned','multi')) assigned, "
         "sum(f.project='multi') multi, sum(f.claim_status='undeclared') undeclared, "
-        "sum(f.kind='unknown') unknown FROM record_facets f JOIN records r "
+        "sum(f.kind='unknown') unknown, sum(f.claim_source='conflict') conflicts, "
+        "sum(f.thread_id IS NOT NULL) threads, sum(f.has_grounding) grounding "
+        "FROM record_facets f JOIN records r "
         "ON r.space=f.space AND r.source_id=f.source_id WHERE f.space=? AND r.active=1",
         (space,)).fetchone()
     assigned = row["assigned"] or 0
-    return {"records": total, "project_assigned": assigned,
-            "project_unassigned": total - assigned - (row["multi"] or 0),
-            "project_multi": row["multi"] or 0,
-            "claim_undeclared": row["undeclared"] or 0,
-            "kind_unknown": row["unknown"] or 0, "project_coverage": round(assigned / total, 4)}
+    multi = row["multi"] or 0
+    reasons = {item["reason"]: item["n"] for item in conn.execute(
+        "SELECT f.reason, count(*) n FROM record_facets f JOIN records r "
+        "ON r.space=f.space AND r.source_id=f.source_id "
+        "WHERE f.space=? AND r.active=1 GROUP BY f.reason ORDER BY n DESC", (space,))}
+    sources = {item["claim_source"]: item["n"] for item in conn.execute(
+        "SELECT f.claim_source, count(*) n FROM record_facets f JOIN records r "
+        "ON r.space=f.space AND r.source_id=f.source_id "
+        "WHERE f.space=? AND r.active=1 GROUP BY f.claim_source ORDER BY n DESC", (space,))}
+    # The actionable half of `unclassified`: the labels nobody has classified yet.
+    # Labels already declared as topics (and the per-project key labels) are
+    # excluded, otherwise the report shows `label_surge` as "unclassified" merely
+    # because it shares a record with an unclassified label.
+    topics = sorted(NON_PROJECT_LABELS)
+    placeholders = ",".join("?" * len(topics))
+    unclassified = [[item["label"], item["n"]] for item in conn.execute(
+        "SELECT l.label, count(*) n FROM record_labels l JOIN record_facets f "
+        "ON f.space=l.space AND f.source_id=l.source_id JOIN records r "
+        "ON r.space=l.space AND r.source_id=l.source_id "
+        "WHERE l.space=? AND r.active=1 AND f.reason=? "
+        f"AND l.label NOT IN ({placeholders}) AND l.label NOT LIKE 'label_key-%' "
+        "GROUP BY l.label ORDER BY n DESC LIMIT 20",
+        (space, REASON_UNCLASSIFIED, *topics))]
+    nameable = assigned + multi + reasons.get(REASON_KEY_UNMAPPED, 0)
+    return {
+        "records": total,
+        "project_assigned": assigned,
+        "project_unassigned": total - assigned - multi,
+        "project_multi": multi,
+        "claim_undeclared": row["undeclared"] or 0,
+        "kind_unknown": row["unknown"] or 0,
+        "project_coverage": round(assigned / total, 4),
+        "coverage_ceiling": round(nameable / total, 4),
+        "project_reason": reasons,
+        "project_reason_stale": reasons.get("unpopulated", 0),
+        "claim_source": sources,
+        "claim_conflicts": row["conflicts"] or 0,
+        "source_thread_refs": row["threads"] or 0,
+        "source_grounding_refs": row["grounding"] or 0,
+        "unclassified_labels": unclassified,
+    }
 
 
 def search_detailed(conn, query, limit=10, project=None, kind=None, space="default"):

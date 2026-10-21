@@ -303,8 +303,15 @@ def test_facets_preserve_unknown_values_instead_of_promoting_them(conn):
     # 1,350 of 2,048 real records carry no claim status; `asserted` would be a lie.
     assert facets(canonical("a"))["claim_status"] == "undeclared"
     assert facets(canonical("a", unit_type="decision", claim_status="proposed")) == {
-        "kind": "decision", "claim_status": "proposed", "project": "unassigned",
-        "source_app": "", "thread_source": "", "labels": []}
+        "kind": "decision", "claim_status": "proposed", "claim_source": "record",
+        "project": "unassigned", "project_reason": "no_labels",
+        "source_app": "", "thread_source": "", "thread_id": None,
+        "has_grounding": 0, "labels": []}
+    # The reason travels with the project so a coverage number can be attributed.
+    assert facets(canonical("b", label_ids=["label_daily"]))["project_reason"] == "policy_excluded"
+    assert facets(canonical("c", label_ids=["label_key-0123456789ab"]))["project_reason"] == \
+        "key_label_unmapped"
+    assert facets(canonical("d", label_ids=["label_cankey"]))["project_reason"] == "assigned"
 
 
 def test_project_comes_from_registry_then_declaration_then_unassigned(conn):
