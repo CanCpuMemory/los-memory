@@ -28,6 +28,7 @@ The next service iteration is documented, not yet implemented:
 - [Ingestion, vector and temporal-graph retrieval](docs/design/memory-retrieval-pipeline.md)
 - [Phased goals and acceptance gates](docs/design/memory-roadmap.md)
 - [P2 write-path minimal design review](docs/design/p2-write-path-minimal-loop.md)
+- [Replacement batches B0–B7 (2026-10-21)](docs/design/nowledge-replacement-batches.md) — 尺子、记录契约、语义召回、写入运行时、总结、清理、读/写切换
 - [Memory tools and storage research](docs/reports/2026-09-26-memory-landscape.md)
 
 ## Architecture (v2.0.0+)
