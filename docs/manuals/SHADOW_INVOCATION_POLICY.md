@@ -157,21 +157,24 @@ ssh m3-t 'cd ~/.local/share/los-memory-shadow/releases/<release> && \
 读切换在 B6、写入口切换在 B7，两者都要先过该文的机械验收。本节其余内容（不做双写、写只走
 Nowledge、影子只读可回退）在 B7 之前继续有效。
 
-### 6.1 实测门槛
+### 6.1 实测门槛（2026-10-21 用 B0 的尺子复量）
 
 | 指标 | 当前值 | 切换要求 |
 |---|---|---|
-| overall Hit@5 | 0.771 | 不劣于冻结基线 |
-| semantic_paraphrase | **0.000** | 必须有非零区分度 |
-| project coverage | **25.85%**（644/2491） | 先补数据契约 |
-| claim_undeclared | **1469/2491** | 先补 claim 语义 |
+| 40 条留出集 Hit@5 | **shadow 0.771 / Nowledge 0.200**（Recall@5 0.700 / 0.186） | 绝对线（每形态 ≥0.8）而非"不劣于基线" |
+| semantic_paraphrase | **两端均 0.000** | 必须补语义（B2），且按绝对 recall@5 判 |
+| exact_identifier / chinese_short | shadow 1.000 / 0.800；Nowledge **0.200 / 0.000** | 影子已优于主库，不再是缺口 |
+| project coverage | **24.9%**（`shadow_status.contract` 666/2675） | 先统一口径（评测器算出 20.9%）再谈 ≥80% |
+| claim_undeclared | **1559** | 先补 claim 语义 |
 | L2 写入闭环 | 未实现 | N1–N11 负向测试 |
 
-`semantic=0.000` **不是"主库没有语义能力"的证据**。2026-10-21 现场复核：两条与语料零字面重叠的
-改写查询（"记忆库替代 nowledge 的迁移门槛"、"两个记忆库谁说了算 避免双写"）在影子上 0 命中，
-在 Nowledge 上分别 5 条 / 3 条且标注 `Semantic Match`（`embedding.mode=local-gguf`、未降级）。
-因此 0.000 更可能是**该评测类别没有区分度**（用例或期望 ID 的问题），只能记为**度量缺陷**；
-在 `nowledge-replacement-batches.md` 的 B0 重做该类别之前，不得用它推导任何能力结论。
+2026-10-19 把 `semantic_paraphrase = 0.000` 读成"两边都没有可测能力"并当作第一顺位阻断项，这个
+读法已被 2026-10-21 的仪器推翻（证据见 [`docs/reports/2026-10-21-b0-ruler-and-baseline.md`](../reports/2026-10-21-b0-ruler-and-baseline.md)）：
+① 40 条语料里 41 个期望记录全部可读回；② 主库的 0.200 **不是记录不存在**，而是带下划线的标识符
+与中文短词检不出来（`SQLITE_IOERR_TRUNCATE` 在本库记录的正文里，却不在其 top-20）；
+③ 主库输出的分数与排序不一致（期望记录分数全场最高却排第 18）；④ 该查询没有相关度下限
+（乱码锚点仍返回 5 条）。因此 0.000 是**主库排序+词法弱**的结果，不是"没有区分度"，也不能
+作为"不做读切换"的理由。
 
 ### 6.2 为什么不是双写
 
@@ -186,10 +189,14 @@ Nowledge、影子只读可回退）在 B7 之前继续有效。
 
 ### 6.4 重新评估的触发条件
 
-1. semantic_paraphrase 有非零区分度（**先按 B0 重做该类别**，不能拿当前 0.000 当已达标或未达标）；
-2. project coverage ≥ 80% 且 claim_undeclared 有明确来源规则（B1）；
+1. semantic_paraphrase 达到绝对门槛（B0 已把该类别的判据定为"预期记录可读 + 锚点 rank + 绝对 recall@5"，**不需要重做语料**；B2 交付后按 ≥0.8 判）；
+2. project coverage ≥ 80%（**先统一口径**，见 §6.1）且 claim_undeclared 有明确来源规则（B1）；
 3. P2-02 在隔离库通过 N1–N11（B3）；
 4. 用户明确给出切换窗口（B7）。
+
+上述前三条分别对应 [替代的分批判定与设计](../design/nowledge-replacement-batches.md) 的 B2/B1/B3；
+在第 2–4 条同时满足前，**读仍按 §2 分流、写仍只走 Nowledge**。本文与分批设计冲突时，以分批设计
+的批次门槛为准（本文只保留"双轨期纪律"这一层）。
 
 上述前三条分别对应 [替代的分批判定与设计](../design/nowledge-replacement-batches.md) 的 B0/B1/B3；
 在第 2–4 条同时满足前，**读仍按 §2 分流、写仍只走 Nowledge**。本文与分批设计冲突时，以分批设计
