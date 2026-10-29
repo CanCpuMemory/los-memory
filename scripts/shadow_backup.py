@@ -81,8 +81,46 @@ def run(command, input_bytes=None, check=True, capture=True, cwd=None):
 
 
 def ssh(host, command, input_bytes=None, check=True):
-    return run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, command],
-               input_bytes=input_bytes, check=check)
+    """Run a command over ssh without depending on interactive state.
+
+    2026-10-28 实测（事故）：本作业每天 04:30 在无人值守/暗唤醒时刻跑，而 NAS 用的
+    `~/.ssh/id_ed25519.syno.zhang` **是带口令的**（`ssh-keygen -y -P ''` 报 incorrect
+    passphrase）⇒ 它只能靠交互式 ssh-agent 解锁。重启后 04:34 那次运行拿不到已解锁的
+    agent，于是 `Permission denied (publickey)` 被记成"命令失败 (255)"，看起来像网络/
+    权限问题，实际是**作业依赖交互式会话**。
+
+    两条纪律落在这里：
+      · `ControlMaster=no / ControlPath=none`：批处理作业不该依赖（或创建）用户会话里的
+        复用 socket；否则在沙箱里跑还会撞上 `~/.ssh/cm-*` 不可写。
+      · 认证失败 → exit 78（判不了），并直接打印"该怎么修"，不冒充业务失败。
+    """
+    argv = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "ControlMaster=no", "-o", "ControlPath=none"]
+    key = os.environ.get("SHADOW_SSH_KEY", "").strip()
+    # ⚠️ 只对 NAS 生效（2026-10-30）：本脚本同时 ssh 到 M3_HOST（取 release / summary / scp）。
+    # 无条件注入 `-i <nas-key> -o IdentitiesOnly=yes` 会让**连 m3-t 也带这把 key** ⇒ M3 认证失败，
+    # 整条备份链在第一步就崩，而报错点落在 m3_release，极难归因到"plist 里设了个环境变量"。
+    # 判据：只有 host == NAS_HOST 才注入；M3 继续走它自己的 config/agent。
+    if key and host == NAS_HOST:
+        argv += ["-i", os.path.expanduser(key), "-o", "IdentitiesOnly=yes"]
+    argv += [host, command]
+    result = run(argv, input_bytes=input_bytes, check=False)
+    if result.returncode == 255:
+        err = result.stderr.decode(errors="replace")
+        if "Permission denied" in err or "publickey" in err:
+            sys.stderr.write(
+                f"ENV_GAP: ssh 认证失败（{host}, exit 255）—— 不是网络问题，是凭据形态问题。\n"
+                f"  当前 SHADOW_SSH_KEY={key or '(未设置，走 ssh config / agent)'}\n"
+                "  该 key 若带口令，则只有 agent 解锁后才可用；launchd 在无人值守时刻拿不到 agent。\n"
+                "  修法（二选一）：\n"
+                "    a) 免口令专用密钥 + NAS 侧 authorized_keys 授权，然后 plist 里设 SHADOW_SSH_KEY\n"
+                "    b) 口令存登录钥匙串，作业用 SSH_ASKPASS 解锁\n"
+                f"  原始 stderr: {err.strip()[:400]}\n")
+            sys.exit(78)
+    if check and result.returncode != 0:
+        raise SystemExit(f"command failed ({result.returncode}): {' '.join(argv)}\n"
+                         f"{result.stderr.decode(errors='replace')[:2000]}")
+    return result
 
 
 def sha256_file(path):
