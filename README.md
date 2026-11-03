@@ -32,7 +32,7 @@ The next service iteration is documented, not yet implemented:
 - [Phased goals and acceptance gates](docs/design/memory-roadmap.md)
 - [P2 write-path minimal design review](docs/design/p2-write-path-minimal-loop.md)
 - [Replacement batches B0–B7 (2026-10-21)](docs/design/nowledge-replacement-batches.md) — 尺子、记录契约、语义召回、写入运行时、总结、清理、读/写切换
-- [Memory hygiene and consolidation (2026-11-03)](docs/design/memory-hygiene-and-consolidation.md) — 定期整理 / 退役 / 更新：判据库、计划-执行-回退、拓扑与节律（P0 只读尺子已实现）
+- [Memory hygiene and consolidation (2026-11-03)](docs/design/memory-hygiene-and-consolidation.md) — 定期整理 / 退役 / 更新：判据库、计划-执行-回退、拓扑与节律（P0 扫描 + P1a 计划器已实现，写者未接）
 - [Memory hygiene baseline (2026-11-03)](docs/reports/2026-11-03-memory-hygiene-baseline.md) — 7,594 条语料实测：31.3% 冗余来自轨道重复，210 条"声明取代"缺机械边
 - [Memory tools and storage research](docs/reports/2026-09-26-memory-landscape.md)
 

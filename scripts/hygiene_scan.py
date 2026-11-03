@@ -226,8 +226,12 @@ def _sample(track: Track, entry: Entry | None = None, extra: dict[str, Any] | No
     return payload
 
 
-def scan(root: Path, near_dup_threshold: float = 0.8) -> dict[str, Any]:
-    """Scan ``root`` and return the report body (no printing, no writes)."""
+def scan(root: Path, near_dup_threshold: float = 0.8, max_samples: int = MAX_SAMPLES) -> dict[str, Any]:
+    """Scan ``root`` and return the report body (no printing, no writes).
+
+    ``max_samples`` exists because the plan writer needs *every* track-duplicate
+    group to build an actionable plan, while the human report must stay small.
+    """
     if not root.exists() or not root.is_dir():
         raise FileNotFoundError(str(root))
     paths = discover_tracks(root)
@@ -257,7 +261,7 @@ def scan(root: Path, near_dup_threshold: float = 0.8) -> dict[str, Any]:
     def hit(code: str, safety: str, description: str, sample: dict[str, Any]) -> None:
         current = bucket(code, safety, description)
         current["count"] += 1
-        if len(current["samples"]) < MAX_SAMPLES:
+        if len(current["samples"]) < max_samples:
             current["samples"].append(sample)
 
     # D1: the same entry set under two tracks (cwd-alias duplication).
@@ -272,7 +276,11 @@ def scan(root: Path, near_dup_threshold: float = 0.8) -> dict[str, Any]:
             "track_duplicate",
             "auto_safe",
             "两个轨道的条目集合完全相同（通常是同一项目经 cwd 别名建了两份）",
-            {"tracks": [track.path for track in group], "entries": len(group[0].entries)},
+            {
+                "tracks": [track.path for track in group],
+                "entries": len(group[0].entries),
+                "entry_set_hash": group[0].entry_set_hash[:16],
+            },
         )
 
     # D2/D3: within-track exact duplicates, and the mechanical lifecycle edges.
@@ -376,7 +384,11 @@ def scan(root: Path, near_dup_threshold: float = 0.8) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "corpus": {"kind": "dsh-md", "root": str(root)},
-        "rules": {"near_dup_threshold": near_dup_threshold, "blind_track_min_entries": BLIND_TRACK_MIN_ENTRIES},
+        "rules": {
+            "near_dup_threshold": near_dup_threshold,
+            "blind_track_min_entries": BLIND_TRACK_MIN_ENTRIES,
+            "max_samples": max_samples,
+        },
         "metrics": metrics,
         "findings": {code: findings[code] for code in sorted(findings)},
         "counts_by_safety": {

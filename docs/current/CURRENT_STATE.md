@@ -101,8 +101,18 @@ This document records the current, implemented state of `los-memory`.
   extra entries (31.3%)**, 2 within-track duplicates, 212 prose claims with no mechanical edge, 50 unmarked
   tracks, 4.0% of entries carrying `[id:…]`, 5 slots. The global track has **0** slots, so its
   `sameSlotMultiActive = 0` is an empty-denominator zero and must not be read as health.
-- **Not implemented, deliberately**: `cleanup plan|apply|revert`, any scheduled job, the topology layer, and
-  any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text
+- `scripts/hygiene_cleanup.py` is **P1a**: it turns the scan into a decision-ready plan
+  (`plans/<plan_id>.json`), still **read-only**. `plan_id` is content-addressed (rules + corpus byte hash +
+  canonical actions, no time window), so a replay is idempotent and any corpus edit invalidates the old plan.
+  The plan has three parts with different authority: `actions` (entry-scoped, mechanically decidable),
+  `proposals.dedupe_track` (14 groups today; needs a decision on which directory survives) and
+  `proposals.review` (text-similarity candidates, never auto-applied). `daily/*` never enters `actions`
+  because a day's log is an evidence surface. Measured 2026-11-04: **actions 0**, dedupe 14 groups /
+  2,382 extra entries, review 269 — i.e. under the current rules *nothing* in the corpus may be executed
+  without a human decision.
+- **Not implemented, deliberately**: the writer bridge (P1b — the corpus belongs to `dsh-memory-evolve`,
+  which owns `<dir>/.memory.lock` and the `[id:…]` vocabulary; a Python writer would be a second lock and a
+  second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text
   similarity as a verdict; see `docs/design/memory-hygiene-and-consolidation.md` §2/§5/§6.
 
 ## Current Documentation Rule

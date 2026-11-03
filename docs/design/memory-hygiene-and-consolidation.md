@@ -1,7 +1,7 @@
 # 记忆整理与清理方案（hygiene & consolidation）
 
-状态：**设计稿 + P0 尺子已实现**（`scripts/hygiene_scan.py`）。写入侧（plan/apply/revert）、
-节律作业、拓扑层均**未实现**，本文件说明它们各自要满足什么判据。
+状态：**设计稿 + P0 尺子（`scripts/hygiene_scan.py`）+ P1a 计划器（`scripts/hygiene_cleanup.py`）已实现**。
+写者桥接（P1b）、节律作业（P2）、拓扑层（P3）**未实现**，本文件说明它们各自要满足什么判据。
 
 依据：2026-11-03 对现网语料的只读实测（[基线报告](../reports/2026-11-03-memory-hygiene-baseline.md)）、
 [空间轴保留策略](retention-policy.md)、[替代批次 B5 语义清理](nowledge-replacement-batches.md) §5、
@@ -188,7 +188,7 @@ score = exp(-Δdays / (τ · S)),  S = 1 + 召回次数,  Δdays = 上次召回�
 
 ```json
 {
-  "plan_id": "sha256(语料快照hash + 规则版本 + 候选集 + 创建时间窗)",
+  "plan_id": "sha256(规则版本 + 语料快照hash + 规范化候选集)  ← 内容寻址，刻意不含时间窗",
   "created_at": "...", "expires_at": "...(+7d)",
   "corpus": {"kind": "dsh-md", "root": "...", "snapshot_hash": "..."},
   "rules_version": "hygiene-1",
@@ -245,15 +245,41 @@ python3 -m pytest tests/unit/test_hygiene_scan.py -q
 - 验收：`--self-test` 12/12；实跑 135 轨 / 7,594 条 / 48 s；auto_safe 16、review_only 263。
 - 不做：任何写入、任何 plist、任何 LLM 调用。
 
-### P1 生命周期执行器（计划 → 执行 → 回退，先在影子与本地 profile）
+### P1a 计划器（**已实现**，只读）
 
-- 交付：`memory_tool/hygiene/`（`plan.py` / `apply.py` / `ledger.py` / `adapters/`）；`cleanup plan|apply|revert`
-  CLI（沿用 B5 §8.3 已定：CLI + append-only 台账，UI 只读 `pendingPlans`）；首个适配器
-  `dsh-md`（写者 = dsh-memory-evolve，经其锁与 `lifecycle.js` 的 `deprecateEntry`）。
-- 验收：`archive` 后默认召回隐藏、`get by id` 可读；`revert` 逐字段还原；台账行数与动作数对账；
-  并发写者改动目标 ⇒ `skipped` 而不是覆盖。
-- 负向控制：无 `plan_id` 拒绝；过期 plan 拒绝；archive 被引用条目拒绝；第二遍 apply 幂等（0 动作）。
-- 回退：删 CLI 入口 + 账本；数据面只多了标记，去掉标记即回到原状。
+- 交付：`scripts/hygiene_cleanup.py`（`plan` / `status` / `--self-test`，`--json`，三态退出）+
+  `tests/unit/test_hygiene_cleanup.py`（10 例）。计划文件落
+  `~/.local/share/los-memory-hygiene/plans/<plan_id>.json`（`LOS_MEMORY_HYGIENE_DIR` 可重定向，保持 hermetic）。
+- 计划分三段，**只有第一段可被机器执行**：
+  - `actions`：入口作用域、可机械判定（D2/D3/D4），每条带 `target{track,id8,label}`、`keep`、`why`；
+  - `proposals.dedupe_track`：轨道重复组（14 组），每组给 `entry_set_hash` + `proposed_survivor` +
+    `requires_decision: true`；
+  - `proposals.review`：文本类候选（claim_without_edge / near_duplicate / lifecycle_blind）与
+    `exact_duplicate_evidence_track`（`daily/` 是证据面，重复只报告不动）。
+- 关键实现决定（每一条都可被测试咬住）：
+  - `plan_id` **内容寻址**（规则版本 + 语料快照 hash + 规范化动作集，不含时间窗）⇒ 同语料同动作 ⇒ 同 id，
+    重放幂等；语料一变 id 就变，这就是写者侧的前置条件依据；
+  - `snapshot_hash` 取每个轨道**字节**的 sha256（不信 mtime）；
+  - `daily/*` 永不进 `actions`（清理会改写当天日志）；
+  - `writer` 字段点名写者与锁协议，避免"谁负责落盘"变成隐含假设。
+- 实测（2026-11-04，`~/.dsh/memories`）：`actions = 0`、`dedupe_track = 14 组 / 多出 2,382 条`、
+  `review = 269`（claim 216 / near-dup 1 / blind 50 / daily 精确重复 2）。**这个 0 是有意义的结论**：
+  在"轨道去重"与"日刊不自动清"两条约束下，当前语料**没有一条可以无人确认就执行**的动作。
+
+### P1b 写者桥接（未实现，需要写者所在仓开工）
+
+- 为什么不在 los-memory 里写：语料属于 `dsh-memory-evolve`，它用 `<dir>/.memory.lock`
+  （`openSync(…, 'wx')`）串行化，并按 `lib/lifecycle.js` 的头部词汇落标记。Python 侧再实现一个写者
+  = 第二套锁 + 第二套标记，正是 §0 宪法 C2 与"单写者"要禁止的形态。
+- 写者侧需要实现的最小面（契约已定，见 §9）：读 `plans/<plan_id>.json` → 在 `withLock` 内逐条
+  复核 `target` 与 `snapshot_hash` → `deprecateEntry(entry, byId)` → 原子写 → 输出 receipt
+  （`plan_id / action id / before_hash / after_hash / added_prefix`）。`revert` = 按 receipt 去掉
+  `added_prefix`（含被补发的 `[id:…]`），恢复到字节一致。
+- 验收：`deprecate` 后条目不在默认召回但 `get by id` 可读；`revert` 后文件与原文字节一致；
+  并发写者改动目标 ⇒ `skipped` 而不是覆盖；同 `plan_id` 第二遍 apply 产生 0 动作。
+- 负向控制：无 `plan_id` 拒绝；过期 plan 拒绝；`snapshot_hash` 不符拒绝整批；被 bundle/边引用的条目拒绝
+  archive；锁未取到时报"判不了"（不是"清理成功"）。
+- 回退：删写者脚本即可；数据面只多了标记，去掉标记即回到原状。
 
 ### P2 节律与告警
 
