@@ -138,7 +138,7 @@
 | D7 | `expired_validity` | 生命周期头 `valid_to`/`expires_at` 已过 | 时间字段 | auto_safe | 误退役仍有效的事实 | 时区/未来时间夹到 0 |
 | D8 | `orphan_evidence` | 来源记录在上游已 tombstone / 源不可达 | 上游状态 | review_only | 把上游索引故障当内容过期 | 上游"判不了"不得当"已删" |
 | D9 | `decay_candidate` | 修正 Ebbinghaus 分数低于阈值，且**无入边、无 slot、从未被 bundle 引用** | 召回计数 + 边 + 引用 | review_only | 退役冷门但重要的知识 | 分数必须单调（见下） |
-| D10 | `fact_drift` | 少数**可验证事实**（端口/版本/路径/端点）与外部探针真值不一致 | 探针输出 | review_only | 追逐瞬时故障 | 探针"判不了"（rc=2）不得计入漂移 |
+| D10 | `fact_drift` / `stale_path` | 少数**可验证事实**与真值不一致。已实现的部分：文件系统路径断言（`hygiene_verify.py`，T1） | 路径 + `stat` | review_only | 把"别的主机/瞬时路径/父目录缺失"当反证 | `unknown ≠ refuted` 三条约束（见分析报告 §2.1） |
 
 D9 的分数与测试（这是"借鉴 MemoryBank 但修正其错误"的落点）：
 
@@ -184,6 +184,7 @@ score = exp(-Δdays / (τ · S)),  S = 1 + 召回次数,  Δdays = 上次召回�
 | 每周日 05:10 | `memory-hygiene-apply` | **只执行 auto_safe**，且计划已过 24 h 观察窗 | ≤50 条/次 | 连续 2 次失败即停并告警 | `cleanup-ledger.jsonl` |
 | 每月 1 日 05:40 | `memory-hygiene-consolidate` | 聚类 + 复审队列 + `compact` | 全量 | 同上 | 同上 |
 | 每小时 | `memory-hygiene-queue` | 复审队列 >20 时提醒 | — | 静默即告警 | `queue-state.json` |
+| 每周一 05:20 | `memory-hygiene-report` | `hygiene_verify.py report`：T1 判定（confirmed/refuted/unknown）+ T2/T3 抽样 | 全量（实测 0.3 s） | 退避 + 周报 | `hygiene-report-<ISO 周>.json` |
 
 **静默即告警**：作业自己的心跳写 `hygiene-metrics.jsonl`；6 h 无新增即 `hygiene_stale`
 （本仓已两次踩过"探针静默被读成正常"：`recall_probe_stale`、`memory_console` 自身）。

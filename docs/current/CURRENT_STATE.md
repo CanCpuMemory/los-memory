@@ -115,6 +115,17 @@ This document records the current, implemented state of `los-memory`.
   because a day's log is an evidence surface. Measured 2026-11-04 (corrected identity): **actions 0**,
   **dedupe 0 groups** (the 14 groups are symlink aliases, not copies), review 183 — i.e. under the current
   rules *nothing* in the corpus may be executed without a human decision.
+- `scripts/hygiene_verify.py` implements **accuracy by scenario** (user rule, 2026-11-04):
+  T1 = a filesystem assertion a machine can settle (path, optional `:line`) → `confirmed` / `refuted` /
+  `unknown`; T2 = a change-claim with no checkable assertion → cross-review; T3 = subjective → human sample.
+  `report` prints the weekly split plus a reproducible sample (`seed = sha256(week|size)`; `refuted` is never
+  sampled, and 5 `confirmed` are sampled as a control so a broken verifier shows up as wrong controls).
+  Measured 2026-11-04 on 5,242 entries: **confirmed 486 (9.3%) · refuted 181 (3.5%) · unknown 310 (5.9%) ·
+  T2 277 · T3 3,988 (76.1%)** — so only 12.8% is machine-decidable and 76% is not, which is why write-side
+  quality plus sampling, not automatic cleanup, is the main lever. `unknown ≠ refuted` is enforced three ways:
+  a foreign root (`/root/…`, `C:\…` — the store mixes M1 and M3 memories under one user name), an ephemeral
+  path (`/tmp`, `/var/folders`), or a **missing parent** all yield `unknown`; only "the tree exists, the file
+  does not" yields `refuted(stale_path)`.
 - **Not implemented, deliberately**: the writer bridge (P1b — the corpus belongs to `dsh-memory-evolve`,
   which owns `<dir>/.memory.lock` and the `[id:…]` vocabulary; a Python writer would be a second lock and a
   second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text
