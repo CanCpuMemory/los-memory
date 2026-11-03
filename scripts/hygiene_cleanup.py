@@ -10,9 +10,10 @@ entry, keeping which copy, and why*. It is deliberately still **read-only**:
   writer from Python is exactly what the design forbids, so this tool emits the
   plan and the writer applies it;
 * two classes in the measured corpus need a human decision before any action —
-  duplicated **tracks** (31.3% of entries; removing one path is reversible only
-  if the survivor is named) and prose claims without a mechanical edge (210 of
-  212). Both are emitted under ``proposals``, never under ``actions``.
+  symbolically-aliased tracks (one file, two names: reported as ``aliases`` and
+  never "deduped") and prose claims without a mechanical edge (**only 4 of 136**
+  resolve to a target at all). Both are emitted under ``proposals``, never under
+  ``actions``.
 
 ``actions`` therefore contains only entry-scoped, mechanically decidable work
 (exact duplicate bodies, unresolved supersede edges, multi-active slots — the

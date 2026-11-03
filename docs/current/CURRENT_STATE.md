@@ -97,9 +97,14 @@ This document records the current, implemented state of `los-memory`.
 - Buckets, all structural: `track_duplicate` (identical entry-set hash), `exact_duplicate` (normalized-body
   hash within a track), `near_duplicate` (5-gram Jaccard, **review only**), `claim_without_edge`,
   `supersedes_unresolved`, `slot_multi_active`, `lifecycle_blind`.
-- Measured 2026-11-03 (135 tracks / 7,594 entries / 47.8 s): 14 duplicated track groups carrying **2,378
-  extra entries (31.3%)**, 2 within-track duplicates, 212 prose claims with no mechanical edge, 50 unmarked
-  tracks, 4.0% of entries carrying `[id:…]`, 5 slots. The global track has **0** slots, so its
+- **Identity is `(st_dev, st_ino)`, not path** (corrected 2026-11-04): `dsh-memory-evolve` resolves cwd
+  aliases by symlinking the project directory, so one track is reachable through two names. An earlier pass
+  counted those aliases as duplicates and reported 31.3% "redundancy" that did not exist; the alias groups are
+  now reported under `aliases` and excluded from `track_duplicate` (a real copy, i.e. a distinct inode, still
+  fires — covered by a negative control). Corrected measurement at 2026-11-04: **122 tracks / 5,227 entries**
+  (+14 alias paths), **2** true duplicates (0.04%), 136 prose claims with no mechanical edge, 44 unmarked
+  tracks, **addressability 2.9%**, **validity coverage 0.06%**, 5 slots, and an injected face of
+  **25 tracks / 845 entries / 883 KB**. The global track has **0** slots, so its
   `sameSlotMultiActive = 0` is an empty-denominator zero and must not be read as health.
 - `scripts/hygiene_cleanup.py` is **P1a**: it turns the scan into a decision-ready plan
   (`plans/<plan_id>.json`), still **read-only**. `plan_id` is content-addressed (rules + corpus byte hash +
@@ -107,9 +112,9 @@ This document records the current, implemented state of `los-memory`.
   The plan has three parts with different authority: `actions` (entry-scoped, mechanically decidable),
   `proposals.dedupe_track` (14 groups today; needs a decision on which directory survives) and
   `proposals.review` (text-similarity candidates, never auto-applied). `daily/*` never enters `actions`
-  because a day's log is an evidence surface. Measured 2026-11-04: **actions 0**, dedupe 14 groups /
-  2,382 extra entries, review 269 — i.e. under the current rules *nothing* in the corpus may be executed
-  without a human decision.
+  because a day's log is an evidence surface. Measured 2026-11-04 (corrected identity): **actions 0**,
+  **dedupe 0 groups** (the 14 groups are symlink aliases, not copies), review 183 — i.e. under the current
+  rules *nothing* in the corpus may be executed without a human decision.
 - **Not implemented, deliberately**: the writer bridge (P1b — the corpus belongs to `dsh-memory-evolve`,
   which owns `<dir>/.memory.lock` and the `[id:…]` vocabulary; a Python writer would be a second lock and a
   second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text

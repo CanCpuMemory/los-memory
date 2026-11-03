@@ -184,3 +184,53 @@ def test_json_report_is_the_machine_contract(scan_module, tmp_path, capsys):
 def test_self_test_passes(scan_module):
     """The script's own ruler check, which CI can run without a corpus."""
     assert scan_module.self_test() == 0
+
+
+def test_symlinked_project_is_an_alias_not_a_duplicate(scan_module, tmp_path):
+    """A path alias addresses one file; counting it twice inflated a baseline 31%.
+
+    `dsh-memory-evolve` resolves path aliases by symlinking the project directory,
+    so the same track is reachable through two names. Identity is (st_dev, st_ino):
+    the alias must be reported, not "deduped".
+    """
+    write_track(tmp_path / "projects" / "aaaa" / "MEMORY.md", ["[2026-01-01] 一条足够长的正文用于别名检测"])
+    (tmp_path / "projects" / "bbbb").symlink_to(tmp_path / "projects" / "aaaa")
+
+    report = scan_module.scan(tmp_path)
+    assert report["metrics"]["tracks"] == 1
+    assert report["metrics"]["alias_tracks"] == 1
+    assert report["aliases"] == [
+        {"canonical": "projects/aaaa/MEMORY.md", "aliases": ["projects/bbbb/MEMORY.md"]}
+    ]
+    assert "track_duplicate" not in report["findings"]
+
+
+def test_a_real_copy_is_still_a_duplicate(scan_module, tmp_path):
+    """Negative control: two inodes with identical content are real duplication."""
+    import shutil
+
+    write_track(tmp_path / "projects" / "aaaa" / "MEMORY.md", ["[2026-01-01] 一条足够长的正文用于复制检测"])
+    (tmp_path / "projects" / "bbbb").mkdir(parents=True)
+    shutil.copyfile(tmp_path / "projects" / "aaaa" / "MEMORY.md", tmp_path / "projects" / "bbbb" / "MEMORY.md")
+
+    report = scan_module.scan(tmp_path)
+    assert report["metrics"]["tracks"] == 2
+    assert report["metrics"]["alias_tracks"] == 0
+    assert counts(report)["track_duplicate"] == 1
+
+
+def test_coverage_ratios_are_reported(scan_module, tmp_path):
+    """The two objectives need ratios, not raw counts, to be comparable over time."""
+    write_track(
+        tmp_path / "MEMORY.md",
+        [
+            "[id:11111111] [2026-01-01] 有身份证的一条足够长的正文",
+            "[2026-01-02] 另一条足够长的正文",
+            "[id:22222222] [supersedes:11111111] [2026-01-03] 取代上一条的足够长正文",
+        ],
+    )
+    report = scan_module.scan(tmp_path)
+    coverage = report["metrics"]["coverage"]
+    assert coverage["addressability"] == pytest.approx(2 / 3, abs=1e-4)
+    assert coverage["validity"] == pytest.approx(1 / 3, abs=1e-4)
+    assert "context_face" in report["metrics"]

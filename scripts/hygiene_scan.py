@@ -203,6 +203,44 @@ def load_track(path: Path, root: Path) -> Track:
     return Track(path=str(path.relative_to(root)), entries=entries)
 
 
+def resolve_aliases(root: Path, paths: list[Path]) -> tuple[list[Path], list[dict[str, Any]]]:
+    """Collapse paths that resolve to the same file; report the alias groups.
+
+    A symlinked project directory makes two tracks address one inode. They are
+    *not* duplicated content — writing through either name reaches the same file
+    — so they must not be counted twice, and must not be "deduped" by a cleanup.
+    """
+    base = root.resolve()
+    kept: dict[str, Path] = {}
+    groups: dict[str, list[str]] = {}
+    order: list[str] = []
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        rel = str(path.relative_to(root))
+        is_canonical = resolved == (base / rel)
+        key = str(resolved)
+        if key not in kept:
+            kept[key] = path
+            groups[key] = []
+            order.append(key)
+        elif is_canonical:
+            # The real path wins as the canonical name regardless of discovery order.
+            groups[key].append(str(kept[key].relative_to(root)))
+            kept[key] = path
+        else:
+            groups[key].append(rel)
+    canonical = [kept[key] for key in order]
+    aliases = [
+        {"canonical": str(kept[key].relative_to(root)), "aliases": groups[key]}
+        for key in order
+        if groups[key]
+    ]
+    return canonical, aliases
+
+
 def _ngrams(body: str, size: int = 5) -> set[str]:
     """Character n-grams; for CJK text a char window is the honest unit."""
     if len(body) <= size:
@@ -234,13 +272,21 @@ def scan(root: Path, near_dup_threshold: float = 0.8, max_samples: int = MAX_SAM
     """
     if not root.exists() or not root.is_dir():
         raise FileNotFoundError(str(root))
-    paths = discover_tracks(root)
-    if not paths:
+    discovered = discover_tracks(root)
+    if not discovered:
         raise LookupError(f"no memory track found under {root}")
+    # **Aliases are not duplicates** (2026-11-04 correction). `dsh-memory-evolve`
+    # resolves path aliases with a symlinked project directory, so the same file
+    # is reachable through two paths. Counting both made an earlier baseline
+    # report 31.3% "redundancy" that did not exist; identity is (st_dev, st_ino),
+    # and the alias is reported as what it is: one file, two names.
+    canonical_paths, aliases = resolve_aliases(root, discovered)
+    paths = canonical_paths
     tracks = [load_track(path, root) for path in paths]
 
     metrics = {
         "tracks": len(tracks),
+        "alias_tracks": sum(len(group["aliases"]) for group in aliases),
         "entries_total": sum(len(track.entries) for track in tracks),
         "entries_active": sum(1 for track in tracks for entry in track.entries if entry.active),
         "entries_deprecated": sum(1 for track in tracks for entry in track.entries if entry.deprecated),
@@ -249,6 +295,29 @@ def scan(root: Path, near_dup_threshold: float = 0.8, max_samples: int = MAX_SAM
         "claim_entries": sum(
             1 for track in tracks for entry in track.entries if CLAIM_RE.search(entry.body)
         ),
+    }
+    # Coverage ratios, not counts: these are the two objectives in
+    # `docs/reports/2026-11-04-memory-accuracy-and-reachability-analysis.md`.
+    # Addressability = an entry can be named (id) ⇒ it can be superseded/merged/
+    # referenced; validity coverage = an entry participates in a retraction or
+    # expiry relation ⇒ "still active" carries information.
+    total = metrics["entries_total"] or 1
+    retracted = sum(
+        1 for track in tracks for entry in track.entries if entry.deprecated or entry.supersedes
+    )
+    metrics["coverage"] = {
+        "addressability": round(metrics["entries_with_id"] / total, 4),
+        "validity": round(retracted / total, 4),
+        "alias_ratio": round(metrics["alias_tracks"] / (metrics["tracks"] + metrics["alias_tracks"]), 4),
+    }
+    # The injected face is not the store: only the global track plus each project's
+    # KEY are summarised into the prompt, so its size is the budget the model sees.
+    face = [track for track in tracks if track.path in ("MEMORY.md", "USER.md")
+            or track.path.endswith("/KEY.md")]
+    metrics["context_face"] = {
+        "tracks": len(face),
+        "entries": sum(len(track.entries) for track in face),
+        "chars": sum(len(entry.body) for track in face for entry in track.entries),
     }
 
     findings: dict[str, dict[str, Any]] = {}
@@ -384,6 +453,7 @@ def scan(root: Path, near_dup_threshold: float = 0.8, max_samples: int = MAX_SAM
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "corpus": {"kind": "dsh-md", "root": str(root)},
+        "aliases": aliases,
         "rules": {
             "near_dup_threshold": near_dup_threshold,
             "blind_track_min_entries": BLIND_TRACK_MIN_ENTRIES,
@@ -483,6 +553,29 @@ def self_test() -> int:
         checks.append(("clean corpus has no duplicates", not clean_counts.get("exact_duplicate")))
         checks.append(("clean corpus has no near duplicates", not clean_counts.get("near_duplicate")))
         checks.append(("clean corpus is not track_duplicate", not clean_counts.get("track_duplicate")))
+
+        # Alias vs copy: one file with two names must collapse, and the two
+        # coverage ratios must be reported (they are the objectives of the
+        # 2026-11-04 analysis, so the ruler has to emit them).
+        alias_root = Path(tmp) / "alias"
+        (alias_root / "projects" / "real").mkdir(parents=True)
+        (alias_root / "projects" / "real" / "MEMORY.md").write_text(
+            "[2026-04-01] 一条足够长的正文用于别名自检\n", encoding="utf-8"
+        )
+        (alias_root / "projects" / "link").symlink_to(alias_root / "projects" / "real")
+        alias_report = scan(alias_root)
+        checks.append(
+            (
+                "alias collapses to one track",
+                alias_report["metrics"]["tracks"] == 1 and alias_report["metrics"]["alias_tracks"] == 1,
+            )
+        )
+        checks.append(
+            (
+                "coverage and context_face reported",
+                "coverage" in alias_report["metrics"] and "context_face" in alias_report["metrics"],
+            )
+        )
 
         # Negative control 2: a missing root must be "cannot judge", not "clean".
         try:
