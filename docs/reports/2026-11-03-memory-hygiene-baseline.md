@@ -41,7 +41,7 @@ python3 scripts/hygiene_scan.py --corpus dsh-md:~/.dsh/memories --json --out /tm
 | 条目总数 | **7,594** | active 7,590 / deprecated 4 |
 | 带身份证 `[id:…]` | **302（4.0%）** | 集中在 KEY 轨（148×2）与少数重写过的条目 |
 | 槽位 `[slot:…]` | **5** | 全局 `MEMORY.md` 的 slots = **0** |
-| 正文自称"修正/取代/已过时" | **212** | 机械 `[supersedes:id]` 边：**0** 条（无未落实、也无已落实） |
+| 正文自称"修正/取代/已过时" | **212** | 机械 `[supersedes:id]` 边：**2** 条（同一条链，目标均已 deprecated ⇒ 未落实 0） |
 | 生命周期全空的轨道 | **50** | 条目 ≥20 但 id/slot/deprecated 全 0 |
 | 同轨精确重复 | **2** | `daily/2026-08-16.md` 内两条；条目级重复极少 |
 | 近似重复（≥0.8） | **1 对** | `MEMORY.md` 两条"跨项目可复用两条"（0.81） |
@@ -79,7 +79,7 @@ python3 scripts/hygiene_scan.py --corpus dsh-md:~/.dsh/memories --json --out /tm
 1. **先合并轨道，再谈删条目**：31.3% vs 0.03%。合并轨道不损失内容，且可拆回；删条目是最后手段。
 2. **`sameSlotMultiActive = 0` 不能读成健康**：全局槽位是 0。按本仓既有纪律（`slots > 0` 才认那两个 0），
    这里必须报"空分母"，而不是报绿。
-3. **瓶颈是"意愿 → 机械后果"这一步**：212 条自述修正 vs 0 条机械边。写侧已实现
+3. **瓶颈是"意愿 → 机械后果"这一步**：212 条自述修正 vs 2 条机械边，而那 2 条都在 `projects/c08ebee3a588/KEY.md` 的 `lzlyx-202611-demo-baseline` 链里（2026-11-03 写入）——机制刚被用起来一次，尚未扩散。写侧已实现
    `[supersedes:id]`（dsh-memory-evolve `lib/lifecycle.js`），但**没人执行**。
 4. **判据要按结构走**：真正可自动化的是 D1/D2/D3/D4（集合 hash、边、槽位、归一化 hash）；
    212 条文本候选里大概率混着"只是提到过"的条目，只能进复审队列。
