@@ -173,6 +173,11 @@ Nowledge 有 40+ 子命令，替代不等于逐个复刻。**必需**：写入�
 
 ### B5 语义清理（生命周期，M）
 
+> **细化方案（2026-11-03）**：判据库（D1–D10）、计划/执行/回退契约、拓扑与节律见
+> [memory-hygiene-and-consolidation.md](memory-hygiene-and-consolidation.md)；实测基线见
+> [2026-11-03-memory-hygiene-baseline.md](../reports/2026-11-03-memory-hygiene-baseline.md)。
+> 本批次与那份方案是"批次 × 详细设计"的关系，验收句子仍以本节为准。
+
 - **目的**：把"删或留"升级为"可逆、可审计、可回读"的生命周期，这是 Nowledge 与 los-memory 差距最大的一条**语义**能力。
 - **依赖**：B3。
 - **交付**：`archive`（默认召回隐藏，按 id 可读）、`deprecate`、`supersede`（版本链）、`merge`（带证据且可 `split` 还原）、review 队列（矛盾/重复候选，人工确认后应用）。

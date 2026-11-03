@@ -84,6 +84,27 @@ This document records the current, implemented state of `los-memory`.
 - Semantics worth knowing before reading any future write-path code: `accepted` means only that the original payload is durably stored (`lexical_ready`/`semantic_ready` stay false and are reported as the named degradation `projections_pending`); replaying the same `(principal, client_event_id)` returns the same receipt, while a different payload under the same key is refused as a conflict; server-owned identity fields are refused rather than stripped; `effective_scope = requested ∩ granted`; only an evidence-bearing approval can reach `asserted` and `claim_status` otherwise stays `undeclared`.
 - Evidence: `docs/design/p2-01-contract-layer.md`, `tests/unit/test_service_contract_negative.py`, `tests/unit/test_service_contract_contract.py`.
 
+## Memory hygiene (added 2026-11-03)
+
+- `scripts/hygiene_scan.py` is the **only** implemented part of
+  `docs/design/memory-hygiene-and-consolidation.md`: a **read-only** scan of a memory corpus that turns
+  "what would be cleaned" into counts. Three-state exit (`0` judged / `1` finding / `2` cannot judge),
+  `--self-test` (12 assertions, 3 negative controls), `--json`, `--fail-on none|auto-safe|any`.
+- Corpus adapter `dsh-md` reads `~/.dsh/memories` (`MEMORY.md`, `USER.md`, `daily/*.md`,
+  `projects/*/MEMORY.md|KEY.md`; `TODOS*.md` is excluded as a different schema) and parses the lifecycle
+  vocabulary owned by `dsh-memory-evolve/lib/lifecycle.js` (`[id:…] [slot:…] [supersedes:…] [deprecated…]`) —
+  reused rather than reinvented.
+- Buckets, all structural: `track_duplicate` (identical entry-set hash), `exact_duplicate` (normalized-body
+  hash within a track), `near_duplicate` (5-gram Jaccard, **review only**), `claim_without_edge`,
+  `supersedes_unresolved`, `slot_multi_active`, `lifecycle_blind`.
+- Measured 2026-11-03 (135 tracks / 7,594 entries / 47.8 s): 14 duplicated track groups carrying **2,378
+  extra entries (31.3%)**, 2 within-track duplicates, 212 prose claims with no mechanical edge, 50 unmarked
+  tracks, 4.0% of entries carrying `[id:…]`, 5 slots. The global track has **0** slots, so its
+  `sameSlotMultiActive = 0` is an empty-denominator zero and must not be read as health.
+- **Not implemented, deliberately**: `cleanup plan|apply|revert`, any scheduled job, the topology layer, and
+  any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text
+  similarity as a verdict; see `docs/design/memory-hygiene-and-consolidation.md` §2/§5/§6.
+
 ## Current Documentation Rule
 
 - The proposed cross-device service is described in `docs/design/memory-service-architecture.md`, `memory-retrieval-pipeline.md`, and `memory-roadmap.md`. These do not mean authenticated HTTP writes, learned vector search, graph extraction, or NAS34 deployment are implemented.
