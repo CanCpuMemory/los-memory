@@ -151,3 +151,108 @@ def test_status_lists_plans_from_the_state_dir(cleanup, corpus, tmp_path, monkey
 
 def test_self_test_passes(cleanup):
     assert cleanup.self_test() == 0
+
+
+def test_positional_claim_resolves_to_previous_entry(cleanup, tmp_path):
+    write(
+        tmp_path / "MEMORY.md",
+        [
+            "[2026-01-01] 旧结论：端口是 8080，这条正文要足够长",
+            "[2026-01-02] 修正上一条：端口其实是 9090，这条正文也要足够长",
+        ],
+    )
+    claims = cleanup.resolve_claims(tmp_path)
+    card = claims["cards"][0]
+    assert card["signal"] == "positional"
+    assert "8080" in card["target"]["excerpt"]
+    assert "9090" in card["claim"]["excerpt"]
+    assert card["choices"] == list(cleanup.CARD_CHOICES)
+
+
+def test_quoted_claim_resolves_to_a_unique_entry(cleanup, tmp_path):
+    write(
+        tmp_path / "MEMORY.md",
+        [
+            "[2026-01-01] 关于「网关超时」的旧结论：超时是 8 秒，正文足够长",
+            "[2026-01-02] 另一条无关但足够长的正文，用来占位",
+            "[2026-01-03] 更正「网关超时」：实际是 30 秒，正文足够长",
+        ],
+    )
+    claims = cleanup.resolve_claims(tmp_path)
+    card = claims["cards"][0]
+    assert card["signal"] == "quoted"
+    assert card["evidence"]["quoted"] == "网关超时"
+    assert "8 秒" in card["target"]["excerpt"]
+
+
+def test_claim_without_referent_is_counted_not_carded(cleanup, tmp_path):
+    write(
+        tmp_path / "MEMORY.md",
+        ["[2026-01-01] 修正了「一个根本不在库里的说法」，正文足够长的一条"],
+    )
+    claims = cleanup.resolve_claims(tmp_path)
+    assert claims["cards"] == []
+    assert claims["counts"]["unresolved_no_referent"] == 1
+
+
+def test_daily_claims_and_edged_claims_are_excluded(cleanup, tmp_path):
+    write(tmp_path / "daily" / "2026-01-01.md", ["[2026-01-01] 日刊里的修正上一条，正文足够长"])
+    write(
+        tmp_path / "MEMORY.md",
+        [
+            "[id:11111111] [2026-01-01] 旧结论，正文足够长",
+            "[id:22222222] [supersedes:11111111] [2026-01-02] 已经带边的修正上一条，正文足够长",
+        ],
+    )
+    claims = cleanup.resolve_claims(tmp_path)
+    assert claims["counts"]["excluded_evidence_track"] == 1
+    assert claims["counts"]["excluded_has_edge"] == 1
+    assert claims["cards"] == []
+
+
+def test_cards_are_ordered_positional_first(cleanup, tmp_path):
+    write(
+        tmp_path / "MEMORY.md",
+        [
+            "[2026-01-01] 关于「甲说法有误」的旧结论，正文足够长",
+            "[2026-01-02] 更正「甲说法有误」，正文足够长",
+            "[2026-01-03] 旧结论二，正文足够长",
+            "[2026-01-04] 修正上一条，正文足够长",
+        ],
+    )
+    claims = cleanup.resolve_claims(tmp_path)
+    assert [card["signal"] for card in claims["cards"]] == ["positional", "quoted"]
+
+
+def test_cards_render_carries_the_choices(cleanup, tmp_path):
+    write(
+        tmp_path / "MEMORY.md",
+        ["[2026-01-01] 旧结论，正文足够长", "[2026-01-02] 修正上一条，正文足够长"],
+    )
+    text = cleanup.render_cards(cleanup.resolve_claims(tmp_path))
+    assert "1=整条取代 2=仅这一句 3=无关 4=看不出" in text
+    assert "待判卡片 1 张" in text
+
+
+def test_claims_never_write_the_corpus(cleanup, tmp_path):
+    write(tmp_path / "MEMORY.md", ["[2026-01-01] 旧结论，正文足够长", "[2026-01-02] 修正上一条，正文足够长"])
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.md")}
+    cleanup.resolve_claims(tmp_path)
+    after = {p: p.read_bytes() for p in tmp_path.rglob("*.md")}
+    assert before == after
+
+
+def test_cli_claims_flag_writes_cards(cleanup, tmp_path, monkeypatch, capsys):
+    corpus = tmp_path / "corpus"
+    write(corpus / "MEMORY.md", ["[2026-01-01] 旧结论，正文足够长", "[2026-01-02] 修正上一条，正文足够长"])
+    monkeypatch.setenv("LOS_MEMORY_HYGIENE_DIR", str(tmp_path / "state"))
+    cards = tmp_path / "cards.md"
+    plan = tmp_path / "plan.json"
+    code = cleanup.main(
+        ["plan", "--corpus", f"dsh-md:{corpus}", "--claims", "--cards", str(cards), "--out", str(plan)]
+    )
+    assert code == cleanup.EXIT_OK
+    assert "待判卡片 1 张" in cards.read_text(encoding="utf-8")
+    payload = json.loads(plan.read_text(encoding="utf-8"))
+    assert payload["claims"]["counts"]["cards"] == 1
+    capsys.readouterr()

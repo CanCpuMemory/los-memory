@@ -134,6 +134,13 @@ This document records the current, implemented state of `los-memory`.
   `independent`), and neither writes anything. The same run also proved the *question* was underspecified:
   both models said `supersede` where only one clause of a broad entry was superseded, so the verdict set gains
   `supersede_clause` and entry-level `deprecate` may never come straight from a T2 verdict.
+- **T2 review cards** (`hygiene_cleanup.py plan --claims [--cards FILE]`, read-only): each card pairs a claim
+  with its likely target and asks a human for one of four answers (`supersede_entry` / `supersede_clause` /
+  `independent` / `unclear`). Measured 2026-11-04: 329 durable claims → 189 excluded as `daily/` evidence →
+  **305 with no referent (counted, never judged)** → **24 cards** (13 positional, 11 quoted). Precision came
+  from three gates rather than more matching: a span must look like a name (no `@ { } / \`` , not hex), sit
+  within 40 chars of the claim word, and appear in **at most two** entries (`df ≤ 2`). Without them the first
+  pass produced 69 cards whose targets included `…@im.wechat` and `{{DSH_SCHED_DELIVERY_KEY}}`.
 - **Not implemented, deliberately**: the writer bridge (P1b — the corpus belongs to `dsh-memory-evolve`,
   which owns `<dir>/.memory.lock` and the `[id:…]` vocabulary; a Python writer would be a second lock and a
   second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text

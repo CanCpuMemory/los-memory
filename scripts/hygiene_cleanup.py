@@ -35,6 +35,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 from collections.abc import Iterable
@@ -55,6 +56,35 @@ PROPOSAL_CODES = ("track_duplicate",)
 #: `daily/*.md` is an append-only evidence surface (a day's log), so a duplicate
 #: line there is reported, never "cleaned": removing it would edit history.
 EVIDENCE_TRACK_PREFIXES = ("daily/",)
+
+#: Positional self-reference: "修正上一条 …" points at the previous entry in the
+#: same track. Measured 2026-11-04: 12/12 such claims have a live predecessor, so
+#: this is the highest-confidence resolver for a claim's target.
+POSITIONAL_RE = re.compile(r"(上一条|上条|前一条|上面那条|此前那条|上一条目)")
+
+#: A quoted span is the second-strongest pointer (43 of 112 quoted claims resolve
+#: to exactly one entry in the same track). Identifier overlap is deliberately
+#: NOT used: it "matched" 135/136 claims in a 5k-entry corpus, i.e. no signal.
+QUOTED_RE = re.compile(r"[「“\"]([^」”\"]{4,60})[」”\"]")
+
+#: Card generation wants **recall** (a human filters cheaply), while the scan's
+#: `CLAIM_RE` is a stable bucket definition. So this one is broader on purpose:
+#: "更正「X」" is a claim even though it lacks the "上一条" phrasing.
+CLAIM_ANY_RE = re.compile(r"(supersedes|取代|修正|更正|已过时|已废弃|过期)")
+
+#: A quoted span is only a *pointer* when it looks like a name, not like data.
+#: Measured 2026-11-04: without this filter, `o9cq807d…@im.wechat` and
+#: `{{DSH_SCHED_DELIVERY_KEY}}` were "resolved" to unrelated entries — text
+#: matching again failing to discriminate. Spans carrying these shapes are dropped.
+POINTER_REJECT_RE = re.compile(r"[@{}<>|/\\`]")
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+#: Distance (chars) from the nearest claim word within which a quote is treated as
+#: the object of the claim rather than incidental quoting elsewhere in the entry.
+QUOTE_PROXIMITY = 40
+
+#: The four choices a human makes per card. Written into the card so the review
+#: surface and the plan cannot drift apart.
+CARD_CHOICES = ("supersede_entry", "supersede_clause", "independent", "unclear")
 
 
 def load_scan_module():
@@ -130,6 +160,184 @@ def _action_from_sample(code: str, sample: dict[str, Any]) -> dict[str, Any]:
         action["slot"] = sample.get("slot")
         action["why"] = "同一轨道同一槽位有多个 active，保留最新一条"
     return action
+
+
+def _pointer_like(span: str) -> bool:
+    """Whether a quoted span reads like a name a claim would point at."""
+    if POINTER_REJECT_RE.search(span):
+        return False
+    if len(span) < 4 or len(span) > 60:
+        return False
+    if not CJK_RE.search(span) and len(span) < 8:
+        return False  # bare short ASCII tokens are identifiers, not titles
+    return not re.fullmatch(r"[0-9a-fA-F\-.]+", span)
+
+
+def _claim_logo_spans(body: str) -> list[int]:
+    """Positions of claim words, used for the proximity test."""
+    return [match.start() for match in CLAIM_ANY_RE.finditer(body)]
+
+
+def _best_quoted_pointer(body: str, entries: list[Any], self_entry: Any, df_lookup) -> dict[str, Any] | None:
+    """Pick the quoted span that most likely names the entry being superseded.
+
+    Scoring is deliberately about *shape and position*, not similarity:
+    spans near a claim word score higher; a target whose body starts with the span
+    (i.e. the span is its title) scores higher. No span ⇒ no card.
+    """
+    logo = _claim_logo_spans(body)
+    best: dict[str, Any] | None = None
+    best_score = 0.0
+    for match in QUOTED_RE.finditer(body):
+        span = match.group(1).strip()
+        if not _pointer_like(span):
+            continue
+        distance = min((abs(match.start() - position) for position in logo), default=10_000)
+        if distance > QUOTE_PROXIMITY:
+            continue
+        hits = [other for other in entries if other is not self_entry and other.active and span in other.body]
+        if not hits:
+            continue
+        # **Rarity gate** (measured 2026-11-04): a common phrase like "有真实调用"
+        # matches an unrelated entry, so a span present in more than two entries is
+        # not a pointer. This is the discriminator that plain containment lacks.
+        if df_lookup(span) > 2:
+            continue
+        score = 3.0
+        score += 2.0 if any(other.body.lstrip().startswith(span) for other in hits) else 0.0
+        score += 1.0 if len(span) >= 8 else 0.0
+        score += max(0.0, 1.0 - distance / QUOTE_PROXIMITY)
+        if score <= best_score:
+            continue
+        best_score = score
+        signal = "quoted" if len(hits) == 1 else "quoted_multi"
+        best = {
+            "signal": signal,
+            "target": hits[0],
+            "evidence": {
+                "quoted": span,
+                "candidates": len(hits),
+                "distance_to_claim_word": distance,
+                "document_frequency": df_lookup(span),
+                "score": round(score, 2),
+                "rule": "引号短语（名称形状 + 靠近声明词）在同轨命中",
+            },
+        }
+    return best
+
+
+
+def resolve_claims(root: Path) -> dict[str, Any]:
+    """Turn prose claims into a short list of reviewable cards (read-only).
+
+    The funnel measured on 2026-11-04: 278 T2 entries → drop `daily/` (113) and
+    already-edged entries → 136 → 47 cards (12 positional + 35 quoted). The
+    remaining claims have no referent at all; they are counted, not judged.
+    """
+    scan = load_scan_module()
+    canonical, _aliases = scan.resolve_aliases(root, scan.discover_tracks(root))
+    all_entries: list[Any] = []
+    for path in canonical:
+        all_entries.extend(scan.load_track(path, root).entries)
+    df_cache: dict[str, int] = {}
+
+    def df_lookup(span: str) -> int:
+        """How many corpus entries contain the span — the rarity discriminator."""
+        if span not in df_cache:
+            df_cache[span] = sum(1 for candidate in all_entries if span in candidate.body)
+        return df_cache[span]
+
+    cards: list[dict[str, Any]] = []
+    counts = {"claim_entries": 0, "excluded_evidence_track": 0, "excluded_has_edge": 0,
+              "excluded_deprecated": 0, "unresolved_no_referent": 0, "cards": 0}
+    for path in canonical:
+        track = scan.load_track(path, root)
+        if track.path.startswith(EVIDENCE_TRACK_PREFIXES):
+            counts["excluded_evidence_track"] += sum(
+                1 for entry in track.entries if entry.active and CLAIM_ANY_RE.search(entry.body)
+            )
+            continue
+        entries = track.entries
+        for index, entry in enumerate(entries):
+            if not entry.active or not CLAIM_ANY_RE.search(entry.body):
+                continue
+            counts["claim_entries"] += 1
+            if entry.supersedes is not None:
+                counts["excluded_has_edge"] += 1
+                continue
+            if entry.deprecated:
+                counts["excluded_deprecated"] += 1
+                continue
+            signal, target, evidence = "", None, {}
+            previous = entries[index - 1] if index > 0 else None
+            if POSITIONAL_RE.search(entry.body) and previous is not None and previous.active:
+                signal, target = "positional", previous
+                evidence = {"distance": 1, "rule": "上一条 ⇒ 同轨前一条"}
+            if target is None:
+                chosen = _best_quoted_pointer(entry.body, entries, entry, df_lookup)
+                if chosen is not None:
+                    signal, target = chosen["signal"], chosen["target"]
+                    evidence = chosen["evidence"]
+            if target is None:
+                counts["unresolved_no_referent"] += 1
+                continue
+            cards.append(
+                {
+                    "card_id": f"c{len(cards) + 1}",
+                    "signal": signal,
+                    "track": track.path,
+                    "claim": {
+                        "id8": entry.id,
+                        "date": entry.date,
+                        "label": re.sub(r"\s+", " ", entry.body)[:160],
+                        "excerpt": re.sub(r"\s+", " ", entry.body)[:400],
+                    },
+                    "target": {
+                        "id8": target.id,
+                        "date": target.date,
+                        "label": re.sub(r"\s+", " ", target.body)[:160],
+                        "excerpt": re.sub(r"\s+", " ", target.body)[:400],
+                    },
+                    "evidence": evidence,
+                    "choices": list(CARD_CHOICES),
+                    "default": "unclear",
+                }
+            )
+    order = {"positional": 0, "quoted": 1, "quoted_multi": 2}
+    cards.sort(key=lambda card: (order[card["signal"]], card["track"]))
+    for index, card in enumerate(cards, start=1):
+        card["card_id"] = f"c{index}"
+    counts["cards"] = len(cards)
+    counts["by_signal"] = {
+        name: sum(1 for card in cards if card["signal"] == name) for name in order
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "counts": counts,
+        "cards": cards,
+        "how_to_answer": "每张卡选 1=整条取代 2=仅这一句 3=无关 4=看不出；结果写回后由写者落 [supersedes:id]",
+    }
+
+
+def render_cards(claims: dict[str, Any]) -> str:
+    """Human review list: one block per card, choices at the bottom."""
+    counts = claims["counts"]
+    lines = [
+        f"待判卡片 {counts['cards']} 张（位置 {counts['by_signal']['positional']} / 引号 "
+        f"{counts['by_signal']['quoted']} / 多候选 {counts['by_signal']['quoted_multi']}）",
+        f"已排除：daily 证据面 {counts['excluded_evidence_track']} · 已有边 {counts['excluded_has_edge']}"
+        f" · 已退役 {counts['excluded_deprecated']}；无指代（不判）{counts['unresolved_no_referent']}",
+        "",
+    ]
+    for card in claims["cards"]:
+        evidence = card["evidence"]
+        hint = evidence.get("quoted") or evidence.get("rule", "")
+        lines.append(f"=== {card['card_id']} · {card['signal']} · {card['track']} · 线索：{hint}")
+        lines.append(f"旧（{card['target']['date'] or '?'}·{card['target']['id8'] or '无id'}）：{card['target']['label']}")
+        lines.append(f"新（{card['claim']['date'] or '?'}·{card['claim']['id8'] or '无id'}）：{card['claim']['label']}")
+        lines.append("判定：1=整条取代 2=仅这一句 3=无关 4=看不出")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def build_plan(root: Path, include_review: bool = False) -> dict[str, Any]:
@@ -261,11 +469,25 @@ def cmd_plan(args: argparse.Namespace) -> int:
         print(f"cannot judge: {error}", file=sys.stderr)
         return EXIT_UNJUDGEABLE
 
+    if args.claims:
+        plan["claims"] = resolve_claims(root)
+
     target = args.out or (state_dir() / "plans" / f"{plan['plan_id']}.json")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    if args.claims and args.cards is not None:
+        args.cards.parent.mkdir(parents=True, exist_ok=True)
+        args.cards.write_text(render_cards(plan["claims"]) + "\n", encoding="utf-8")
     print(json.dumps(plan, ensure_ascii=False, indent=2) if args.json else render_human(plan))
+    if args.claims:
+        cards = plan["claims"]["counts"]
+        print(
+            f"claims: {cards['cards']} 张卡（位置 {cards['by_signal']['positional']} / 引号 "
+            f"{cards['by_signal']['quoted']} / 多候选 {cards['by_signal']['quoted_multi']}）· "
+            f"无指代 {cards['unresolved_no_referent']} 条不判",
+            file=sys.stderr,
+        )
     print(f"plan written: {target}", file=sys.stderr)
     return EXIT_OK
 
@@ -356,6 +578,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="plan file path (default: state dir)")
     parser.add_argument("--json", action="store_true", help="print JSON")
     parser.add_argument("--include-review", action="store_true", help="carry more review samples")
+    parser.add_argument("--claims", action="store_true", help="also emit the T2 review cards (read-only)")
+    parser.add_argument("--cards", type=Path, help="write the human card list here")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.command == "self-test":
