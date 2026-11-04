@@ -141,6 +141,11 @@ This document records the current, implemented state of `los-memory`.
   from three gates rather than more matching: a span must look like a name (no `@ { } / \`` , not hex), sit
   within 40 chars of the claim word, and appear in **at most two** entries (`df ≤ 2`). Without them the first
   pass produced 69 cards whose targets included `…@im.wechat` and `{{DSH_SCHED_DELIVERY_KEY}}`.
+- **Answering the cards** is a first-class surface, not an export: `--compact` prints two lines per card for an
+  in-chat reply (`c1=1`), `--answers FILE` ingests those answers (an unknown card id or choice exits 2 and names
+  the line — a silently dropped answer is a lost decision), and the result is two artefacts that still write
+  nothing: an append-only `answers-<plan_id>.jsonl` and `proposals-<plan_id>.json` (edges only for answers 1/2,
+  carrying `granularity` and `id_backfill_required`). A markdown dump alone was not a review surface.
 - **Not implemented, deliberately**: the writer bridge (P1b — the corpus belongs to `dsh-memory-evolve`,
   which owns `<dir>/.memory.lock` and the `[id:…]` vocabulary; a Python writer would be a second lock and a
   second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text

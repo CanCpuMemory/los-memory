@@ -85,6 +85,14 @@ QUOTE_PROXIMITY = 40
 #: The four choices a human makes per card. Written into the card so the review
 #: surface and the plan cannot drift apart.
 CARD_CHOICES = ("supersede_entry", "supersede_clause", "independent", "unclear")
+#: Keys accepted in an answers file: digits (fastest to type) and the names.
+ANSWER_KEYS = {
+    "1": "supersede_entry", "2": "supersede_clause", "3": "independent", "4": "unclear",
+    "supersede_entry": "supersede_entry", "supersede_clause": "supersede_clause",
+    "independent": "independent", "unclear": "unclear",
+}
+#: Only these two choices produce an edge; the other two produce nothing at all.
+EDGE_CHOICES = ("supersede_entry", "supersede_clause")
 
 
 def load_scan_module():
@@ -224,6 +232,66 @@ def _best_quoted_pointer(body: str, entries: list[Any], self_entry: Any, df_look
             },
         }
     return best
+
+
+
+def render_compact(claims: dict[str, Any], width: int = 64) -> str:
+    """One line per card: the review surface for a chat or a terminal."""
+    lines = [f"# {claims['counts']['cards']} 张卡；答案格式 c1=1（1 整条 / 2 仅这一句 / 3 无关 / 4 看不出）"]
+    for card in claims["cards"]:
+        signal = "位置" if card["signal"] == "positional" else "引号"
+        old = card["target"]["label"][:width]
+        new = card["claim"]["label"][:width]
+        lines.append(f"{card['card_id']:>4} {signal} | 旧: {old}")
+        lines.append(f"{'':>4}      | 新: {new}")
+    return "\n".join(lines)
+
+
+def parse_answers(path: Path, claims: dict[str, Any]) -> dict[str, str]:
+    """Read ``c1=1`` lines. Unknown card id or value is fatal, never silently dropped."""
+    known = {card["card_id"]: card for card in claims["cards"]}
+    answers: dict[str, str] = {}
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"line {number}: expected c1=1, got {raw!r}")
+        card_id, _, value = line.partition("=")
+        card_id = card_id.strip()
+        value = value.strip()
+        if card_id not in known:
+            raise ValueError(f"line {number}: unknown card {card_id!r}")
+        if value not in ANSWER_KEYS:
+            raise ValueError(f"line {number}: unknown choice {value!r} for {card_id}")
+        answers[card_id] = ANSWER_KEYS[value]
+    return answers
+
+
+def build_edge_proposals(claims: dict[str, Any], answers: dict[str, str]) -> list[dict[str, Any]]:
+    """Turn answers into *edge proposals* — nothing here writes the corpus."""
+    proposals: list[dict[str, Any]] = []
+    for card in claims["cards"]:
+        choice = answers.get(card["card_id"])
+        if choice not in EDGE_CHOICES:
+            continue
+        proposals.append(
+            {
+                "op": "add_supersedes_edge",
+                "card_id": card["card_id"],
+                "from": {"track": card["track"], "id8": card["claim"]["id8"], "label": card["claim"]["label"]},
+                "to": {"track": card["track"], "id8": card["target"]["id8"], "label": card["target"]["label"]},
+                "granularity": "entry" if choice == "supersede_entry" else "clause",
+                # A target without `[id:…]` needs the writer to backfill the
+                # deterministic id (`legacyIdFor = sha1(normalized content)`)
+                # before the edge can be written; naming it here keeps that
+                # implicit step from being lost.
+                "id_backfill_required": card["target"]["id8"] is None,
+                "signal": card["signal"],
+                "requires_human": True,
+            }
+        )
+    return proposals
 
 
 
@@ -480,6 +548,37 @@ def cmd_plan(args: argparse.Namespace) -> int:
         args.cards.parent.mkdir(parents=True, exist_ok=True)
         args.cards.write_text(render_cards(plan["claims"]) + "\n", encoding="utf-8")
     print(json.dumps(plan, ensure_ascii=False, indent=2) if args.json else render_human(plan))
+    if args.claims and args.answers is not None:
+        try:
+            answers = parse_answers(args.answers, plan["claims"])
+        except ValueError as error:
+            print(f"cannot judge answers: {error}", file=sys.stderr)
+            return EXIT_UNJUDGEABLE
+        proposals = build_edge_proposals(plan["claims"], answers)
+        answered_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        week = args.week or f"{datetime.now().isocalendar().year}-W{datetime.now().isocalendar().week:02d}"
+        rows = [
+            {
+                "answered_at": answered_at, "card_id": card_id, "choice": choice,
+                "plan_id": plan["plan_id"], "week": week,
+            }
+            for card_id, choice in sorted(answers.items())
+        ]
+        answers_out = args.answers_out or (state_dir() / "claims" / f"answers-{plan['plan_id']}.jsonl")
+        answers_out.parent.mkdir(parents=True, exist_ok=True)
+        with answers_out.open("a", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        proposals_out = args.proposals_out or (state_dir() / "claims" / f"proposals-{plan['plan_id']}.json")
+        proposals_out.parent.mkdir(parents=True, exist_ok=True)
+        proposals_out.write_text(json.dumps(proposals, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        plan["answers"] = {"count": len(answers), "ledger": str(answers_out), "proposals": len(proposals)}
+        print(f"answers {len(answers)} 条 → 边提案 {len(proposals)} 条（仍需写者落盘）", file=sys.stderr)
+        print(f"answers: {answers_out}\nproposals: {proposals_out}", file=sys.stderr)
+
+    if args.claims and args.compact:
+        print(render_compact(plan["claims"]))
+
     if args.claims:
         cards = plan["claims"]["counts"]
         print(
@@ -579,7 +678,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="print JSON")
     parser.add_argument("--include-review", action="store_true", help="carry more review samples")
     parser.add_argument("--claims", action="store_true", help="also emit the T2 review cards (read-only)")
-    parser.add_argument("--cards", type=Path, help="write the human card list here")
+    parser.add_argument("--cards", type=Path, help="write the human card list here (markdown)")
+    parser.add_argument("--compact", action="store_true", help="print one line per card (chat/terminal review)")
+    parser.add_argument("--week", default=None, help="ISO week for the answer ledger (default: current)")
+    parser.add_argument("--answers", type=Path, help="read c1=1 answers from this file")
+    parser.add_argument("--answers-out", type=Path, help="append accepted answers here")
+    parser.add_argument("--proposals-out", type=Path, help="write edge proposals here")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.command == "self-test":

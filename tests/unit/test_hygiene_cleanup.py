@@ -256,3 +256,91 @@ def test_cli_claims_flag_writes_cards(cleanup, tmp_path, monkeypatch, capsys):
     payload = json.loads(plan.read_text(encoding="utf-8"))
     assert payload["claims"]["counts"]["cards"] == 1
     capsys.readouterr()
+
+
+def _two_card_corpus(tmp_path):
+    write(
+        tmp_path / "MEMORY.md",
+        [
+            "[2026-01-01] 旧结论甲，正文足够长",
+            "[2026-01-02] 修正上一条：改成了乙，正文足够长",
+            "[2026-01-03] 关于「丙说法有误」的旧结论，正文足够长",
+            "[2026-01-04] 更正「丙说法有误」，正文足够长",
+        ],
+    )
+    return tmp_path
+
+
+def test_compact_prints_one_block_per_card(cleanup, tmp_path):
+    claims = cleanup.resolve_claims(_two_card_corpus(tmp_path))
+    text = cleanup.render_compact(claims)
+    assert "答案格式 c1=1" in text
+    for card in claims["cards"]:
+        assert card["card_id"] in text
+
+
+def test_answers_accept_digits_and_names(cleanup, tmp_path):
+    claims = cleanup.resolve_claims(_two_card_corpus(tmp_path))
+    answers_path = tmp_path / "answers.txt"
+    answers_path.write_text("# 注释\nc1=1\nc2=supersede_clause\n", encoding="utf-8")
+    answers = cleanup.parse_answers(answers_path, claims)
+    assert answers == {"c1": "supersede_entry", "c2": "supersede_clause"}
+
+
+def test_answers_reject_unknown_card_and_choice(cleanup, tmp_path):
+    claims = cleanup.resolve_claims(_two_card_corpus(tmp_path))
+    bad_card = tmp_path / "bad1.txt"
+    bad_card.write_text("c999=1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown card"):
+        cleanup.parse_answers(bad_card, claims)
+
+    bad_choice = tmp_path / "bad2.txt"
+    bad_choice.write_text("c1=yes\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown choice"):
+        cleanup.parse_answers(bad_choice, claims)
+
+
+def test_only_supersede_choices_produce_edges(cleanup, tmp_path):
+    claims = cleanup.resolve_claims(_two_card_corpus(tmp_path))
+    proposals = cleanup.build_edge_proposals(
+        claims, {"c1": "supersede_entry", "c2": "independent"}
+    )
+    assert [item["card_id"] for item in proposals] == ["c1"]
+    assert proposals[0]["granularity"] == "entry"
+    assert proposals[0]["requires_human"] is True
+    assert proposals[0]["id_backfill_required"] is True  # target has no [id:…]
+
+    clause = cleanup.build_edge_proposals(claims, {"c2": "supersede_clause"})
+    assert clause[0]["granularity"] == "clause"
+
+
+def test_cli_answers_write_ledger_and_proposals(cleanup, tmp_path, monkeypatch, capsys):
+    corpus = _two_card_corpus(tmp_path / "corpus")
+    monkeypatch.setenv("LOS_MEMORY_HYGIENE_DIR", str(tmp_path / "state"))
+    answers = tmp_path / "answers.txt"
+    answers.write_text("c1=1\nc2=3\n", encoding="utf-8")
+    ledger = tmp_path / "ledger.jsonl"
+    proposals = tmp_path / "prop.json"
+    plan = tmp_path / "plan.json"
+    code = cleanup.main(
+        [
+            "plan", "--corpus", f"dsh-md:{corpus}", "--claims",
+            "--answers", str(answers), "--answers-out", str(ledger),
+            "--proposals-out", str(proposals), "--out", str(plan),
+        ]
+    )
+    assert code == cleanup.EXIT_OK
+    rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+    assert {row["card_id"] for row in rows} == {"c1", "c2"}
+    assert {row["choice"] for row in rows} == {"supersede_entry", "independent"}
+    assert len(json.loads(proposals.read_text(encoding="utf-8"))) == 1
+    capsys.readouterr()
+
+
+def test_answers_never_touch_the_corpus(cleanup, tmp_path):
+    corpus = _two_card_corpus(tmp_path / "corpus")
+    before = {p: p.read_bytes() for p in corpus.rglob("*.md")}
+    claims = cleanup.resolve_claims(corpus)
+    cleanup.build_edge_proposals(claims, {card["card_id"]: "supersede_entry" for card in claims["cards"]})
+    after = {p: p.read_bytes() for p in corpus.rglob("*.md")}
+    assert before == after
