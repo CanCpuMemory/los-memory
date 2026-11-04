@@ -146,6 +146,11 @@ This document records the current, implemented state of `los-memory`.
   the line — a silently dropped answer is a lost decision), and the result is two artefacts that still write
   nothing: an append-only `answers-<plan_id>.jsonl` and `proposals-<plan_id>.json` (edges only for answers 1/2,
   carrying `granularity` and `id_backfill_required`). A markdown dump alone was not a review surface.
+  `--html FILE` renders a **single-file offline questionnaire** (cards embedded, no fetch, no external assets):
+  one card at a time, keys 1–4 record and advance, ←/→ navigate, `u` undoes, `s` skips, a progress dialog
+  jumps by card, answers autosave to `localStorage` keyed by plan id, and export produces exactly the
+  `c1=1` text that `--answers` accepts. Verified in a real browser (Chrome via Playwright): 25 cards render,
+  no console errors, pressing 1 then 2 yields `c1=1\nc2=2`, and the summary lists all 25 rows.
 - **Not implemented, deliberately**: the writer bridge (P1b — the corpus belongs to `dsh-memory-evolve`,
   which owns `<dir>/.memory.lock` and the `[id:…]` vocabulary; a Python writer would be a second lock and a
   second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text

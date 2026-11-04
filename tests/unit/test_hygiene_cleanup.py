@@ -344,3 +344,51 @@ def test_answers_never_touch_the_corpus(cleanup, tmp_path):
     cleanup.build_edge_proposals(claims, {card["card_id"]: "supersede_entry" for card in claims["cards"]})
     after = {p: p.read_bytes() for p in corpus.rglob("*.md")}
     assert before == after
+
+
+def test_html_questionnaire_embeds_every_card(cleanup, tmp_path):
+    corpus = _two_card_corpus(tmp_path / "corpus")
+    claims = cleanup.resolve_claims(corpus)
+    html = cleanup.render_html(claims, "plan123", "2026-W45")
+    assert "__CARDS_JSON__" not in html and "__PLAN_ID__" not in html
+    start = html.index("const CARDS = ") + len("const CARDS = ")
+    end = html.index(";\nconst KEY =", start)
+    embedded = json.loads(html[start:end])
+    assert [card["card_id"] for card in embedded] == [card["card_id"] for card in claims["cards"]]
+    assert "2026-W45" in html and "plan123" in html
+
+
+def test_html_questionnaire_is_offline_and_selfcontained(cleanup, tmp_path):
+    claims = cleanup.resolve_claims(_two_card_corpus(tmp_path / "corpus"))
+    html = cleanup.render_html(claims, "p", "2026-W45")
+    assert "http://" not in html and "https://" not in html
+    assert "<script src=" not in html and "<link" not in html
+    for label in ("整条取代", "仅这一句", "无关", "看不出"):
+        assert label in html
+
+
+def test_html_escapes_script_terminators(cleanup, tmp_path):
+    """A memory containing ``</script>`` must not break out of the data block."""
+    corpus = tmp_path / "corpus"
+    write(
+        corpus / "MEMORY.md",
+        [
+            "[2026-01-01] 旧结论里带了 </script> 这种字符，正文足够长",
+            "[2026-01-02] 修正上一条：仍然带 </script>，正文足够长",
+        ],
+    )
+    html = cleanup.render_html(cleanup.resolve_claims(corpus), "p", "2026-W45")
+    assert "</script>" in html  # the page's own closing tag exists
+    assert html.count("</script>") == 1  # the payload did not add another
+
+
+def test_cli_html_flag_writes_the_file(cleanup, tmp_path, monkeypatch, capsys):
+    corpus = _two_card_corpus(tmp_path / "corpus")
+    monkeypatch.setenv("LOS_MEMORY_HYGIENE_DIR", str(tmp_path / "state"))
+    target = tmp_path / "q.html"
+    code = cleanup.main(
+        ["plan", "--corpus", f"dsh-md:{corpus}", "--claims", "--html", str(target), "--out", str(tmp_path / "p.json")]
+    )
+    assert code == cleanup.EXIT_OK
+    assert target.exists() and "const CARDS = [" in target.read_text(encoding="utf-8")
+    capsys.readouterr()

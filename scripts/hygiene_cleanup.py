@@ -295,6 +295,202 @@ def build_edge_proposals(claims: dict[str, Any], answers: dict[str, str]) -> lis
 
 
 
+HTML_TEMPLATE = r"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>记忆待判卡片 __PLAN_ID__</title>
+<style>
+:root{--bg:#f7f7f5;--fg:#16181a;--muted:#5b6167;--line:#dfe1de;--card:#fff;--accent:#0f766e;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e8eaed;--muted:#9aa3ab;--line:#2b3036;--card:#1b1f24;--accent:#2dd4bf;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 20px;z-index:2}
+h1{font-size:15px;margin:0 0 6px;font-weight:600;letter-spacing:.02em}
+.bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .18s ease}
+.meta{color:var(--muted);font-size:13px;display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}
+main{max-width:880px;margin:0 auto;padding:20px 20px 120px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.tagrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:12px}
+.tag{border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.tag.acc{border-color:var(--accent);color:var(--accent)}
+section.part{border-top:1px dashed var(--line);padding-top:12px;margin-top:12px}
+section.part:first-of-type{border-top:0;padding-top:0;margin-top:0}
+h2{font-size:12px;margin:0 0 6px;color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+p.label{margin:0;font-size:15px}
+details{margin-top:8px}summary{cursor:pointer;color:var(--muted);font-size:13px}
+pre{white-space:pre-wrap;word-break:break-word;background:transparent;border-left:3px solid var(--line);padding:6px 10px;margin:8px 0 0;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}
+.choices{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:18px}
+@media (max-width:640px){.choices{grid-template-columns:repeat(2,1fr)}}
+button{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left}
+button:hover{border-color:var(--accent)}
+button[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+button b{display:block;font-size:14px}
+button span{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+footer{position:fixed;bottom:0;left:0;right:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 20px;display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}
+.nav{display:flex;gap:8px}
+.pill{padding:7px 12px;border-radius:999px}
+.primary{background:var(--accent);color:#04110f;border-color:transparent;font-weight:600}
+.ghost{border-color:var(--line)}
+textarea{width:100%;height:120px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px;font:13px/1.5 ui-monospace,Menlo,monospace}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--fg);max-width:720px;width:92%}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+.hint{color:var(--muted);font-size:12px}
+</style></head><body>
+<header>
+  <h1>记忆待判卡片 · 逐张确认</h1>
+  <div class="bar"><i id="progress"></i></div>
+  <div class="meta"><span id="counter"></span><span id="tally"></span><span class="hint">键 1–4 选择，←/→ 翻页，u 撤销，s 跳过</span></div>
+</header>
+<main>
+  <div class="card" id="card">
+    <div class="tagrow" id="tags"></div>
+    <section class="part"><h2>旧条目（可能被取代）</h2><p class="label" id="oldLabel"></p>
+      <details><summary>看全文</summary><pre id="oldText"></pre></details></section>
+    <section class="part"><h2>新条目（声称修正/取代）</h2><p class="label" id="newLabel"></p>
+      <details><summary>看全文</summary><pre id="newText"></pre></details></section>
+    <div class="choices" id="choices"></div>
+  </div>
+</main>
+<footer>
+  <div class="nav"><button class="pill ghost" id="prev">← 上一张</button><button class="pill ghost" id="next">下一张 →</button></div>
+  <div class="nav"><button class="pill ghost" id="skip">跳过</button><button class="pill ghost" id="summaryBtn">查看进度</button><button class="pill primary" id="exportBtn">导出答案</button></div>
+</footer>
+<dialog id="summaryDlg"><h3 style="margin:0 0 10px;font-size:15px">进度</h3><table id="summaryTable"></table>
+<p class="hint">点任意行可跳到该卡。</p><div style="text-align:right;margin-top:10px"><button class="pill ghost" id="closeSummary">关闭</button></div></dialog>
+<dialog id="exportDlg"><h3 style="margin:0 0 10px;font-size:15px">导出</h3>
+<p class="hint" id="exportHint"></p><textarea id="exportText" readonly></textarea>
+<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+<button class="pill ghost" id="copyBtn">复制</button><button class="pill ghost" id="downloadBtn">下载 answers.txt</button><button class="pill primary" id="closeExport">关闭</button></div></dialog>
+<script>
+const PLAN_ID = "__PLAN_ID__";
+const WEEK = "__WEEK__";
+const CARDS = __CARDS_JSON__;
+const KEY = "hygiene-answers-" + PLAN_ID;
+const LABELS = {1:["整条取代","旧条目整体作废"],2:["仅这一句","只有其中一处结论被取代"],3:["无关","两者不是同一结论"],4:["看不出","需要更多上下文"]};
+let state = {index:0, answers:{}};
+try { const raw = localStorage.getItem(KEY); if (raw) state = JSON.parse(raw); } catch (e) {}
+if (!state.answers) state.answers = {};
+if (typeof state.index !== "number" || state.index < 0 || state.index >= CARDS.length) state.index = 0;
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+const card = () => CARDS[state.index];
+const esc = (s) => String(s == null ? "" : s);
+// Labels are shown as plain prose: markdown emphasis and the [summary:…] marker
+// are storage syntax, not reading material. The full excerpt stays raw.
+const plain = (s) => esc(s).replace(/\[summary:[^\]]*\]\s*/g, "").replace(/\*\*/g, "").replace(/`{1,3}/g, "").replace(/\s+/g, " ").trim();
+function render(){
+  const c = card();
+  document.getElementById("tags").innerHTML =
+    '<span class="tag acc">' + (c.signal === "positional" ? "位置指代（上一条）" : "引号指代") + "</span>" +
+    '<span class="tag">' + esc(c.track) + "</span>" +
+    '<span class="tag">' + esc(c.card_id) + "</span>" +
+    (c.evidence && c.evidence.quoted ? '<span class="tag">引号：' + esc(c.evidence.quoted) + "</span>" : "");
+  document.getElementById("oldLabel").textContent = plain(c.target.label);
+  document.getElementById("newLabel").textContent = plain(c.claim.label);
+  document.getElementById("oldText").textContent = esc(c.target.excerpt);
+  document.getElementById("newText").textContent = esc(c.claim.excerpt);
+  const box = document.getElementById("choices"); box.innerHTML = "";
+  [1,2,3,4].forEach((k) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.dataset.key = k;
+    b.setAttribute("aria-pressed", String(state.answers[c.card_id] === k));
+    b.innerHTML = "<b>" + k + " · " + LABELS[k][0] + "</b><span>" + LABELS[k][1] + "</span>";
+    b.addEventListener("click", () => choose(k));
+    box.appendChild(b);
+  });
+  const answered = Object.keys(state.answers).length;
+  document.getElementById("counter").textContent = "第 " + (state.index+1) + " / " + CARDS.length + " 张";
+  const tally = [1,2,3,4].map((k) => k + ":" + Object.values(state.answers).filter((v)=>v===k).length).join("  ");
+  document.getElementById("tally").textContent = "已答 " + answered + " · " + tally;
+  document.getElementById("progress").style.width = (answered / CARDS.length * 100) + "%";
+}
+function choose(k){
+  const c = card(); state.answers[c.card_id] = k; save();
+  if (state.index < CARDS.length - 1) state.index += 1;
+  save(); render();
+}
+function go(delta){ state.index = Math.min(CARDS.length-1, Math.max(0, state.index+delta)); save(); render(); }
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("skip").onclick = () => go(1);
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "TEXTAREA") return;
+  if (["1","2","3","4"].includes(e.key)) { e.preventDefault(); choose(Number(e.key)); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+  else if (e.key === "u" || e.key === "U") { delete state.answers[card().card_id]; save(); render(); }
+  else if (e.key === "s" || e.key === "S") { go(1); }
+});
+function answersText(){
+  return CARDS.filter((c) => state.answers[c.card_id]).map((c) => c.card_id + "=" + state.answers[c.card_id]).join("\n") + "\n";
+}
+const summaryDlg = document.getElementById("summaryDlg");
+document.getElementById("summaryBtn").onclick = () => {
+  const rows = CARDS.map((c, i) => "<tr data-i='" + i + "'><td>" + esc(c.card_id) + "</td><td>" + esc(c.track) + "</td><td>" +
+    (state.answers[c.card_id] ? state.answers[c.card_id] + " · " + LABELS[state.answers[c.card_id]][0] : "—") + "</td></tr>").join("");
+  document.getElementById("summaryTable").innerHTML = "<tr><th>卡</th><th>轨道</th><th>答案</th></tr>" + rows;
+  summaryDlg.showModal();
+};
+document.getElementById("summaryTable").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-i]"); if (!tr) return;
+  state.index = Number(tr.dataset.i); save(); render(); summaryDlg.close();
+});
+document.getElementById("closeSummary").onclick = () => summaryDlg.close();
+const exportDlg = document.getElementById("exportDlg");
+document.getElementById("exportBtn").onclick = () => {
+  const text = answersText();
+  document.getElementById("exportText").value = text;
+  const missing = CARDS.length - Object.keys(state.answers).length;
+  document.getElementById("exportHint").textContent = missing
+    ? "还有 " + missing + " 张未答；导出只包含已答的 " + (CARDS.length - missing) + " 条。"
+    : "全部 " + CARDS.length + " 张已答。";
+  exportDlg.showModal();
+};
+document.getElementById("closeExport").onclick = () => exportDlg.close();
+document.getElementById("copyBtn").onclick = async () => {
+  const ta = document.getElementById("exportText"); ta.select();
+  try { await navigator.clipboard.writeText(ta.value); } catch (e) { document.execCommand("copy"); }
+};
+document.getElementById("downloadBtn").onclick = () => {
+  const blob = new Blob([document.getElementById("exportText").value], {type:"text/plain"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "answers-" + WEEK + ".txt"; a.click();
+  URL.revokeObjectURL(a.href);
+};
+render();
+</script></body></html>
+"""
+
+
+def render_html(claims: dict[str, Any], plan_id: str, week: str) -> str:
+    """Single-file, offline questionnaire over the cards (no external assets).
+
+    The cards are embedded so the page never fetches anything: opening it from
+    ``file://`` still works, and the answers it exports are exactly the
+    ``c1=1`` lines that ``parse_answers`` accepts.
+    """
+    cards = [
+        {
+            "card_id": card["card_id"],
+            "signal": card["signal"],
+            "track": card["track"],
+            "claim": card["claim"],
+            "target": card["target"],
+            "evidence": card.get("evidence", {}),
+        }
+        for card in claims["cards"]
+    ]
+    payload = json.dumps(cards, ensure_ascii=False).replace("</", "<\\/")
+    return (
+        HTML_TEMPLATE.replace("__CARDS_JSON__", payload)
+        .replace("__PLAN_ID__", plan_id)
+        .replace("__WEEK__", week)
+    )
+
+
+
 def resolve_claims(root: Path) -> dict[str, Any]:
     """Turn prose claims into a short list of reviewable cards (read-only).
 
@@ -544,6 +740,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    if args.claims and args.html is not None:
+        week = args.week or f"{datetime.now().isocalendar().year}-W{datetime.now().isocalendar().week:02d}"
+        args.html.parent.mkdir(parents=True, exist_ok=True)
+        args.html.write_text(render_html(plan["claims"], plan["plan_id"], week), encoding="utf-8")
+        print(f"questionnaire written: {args.html}", file=sys.stderr)
+
     if args.claims and args.cards is not None:
         args.cards.parent.mkdir(parents=True, exist_ok=True)
         args.cards.write_text(render_cards(plan["claims"]) + "\n", encoding="utf-8")
@@ -681,6 +883,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--cards", type=Path, help="write the human card list here (markdown)")
     parser.add_argument("--compact", action="store_true", help="print one line per card (chat/terminal review)")
     parser.add_argument("--week", default=None, help="ISO week for the answer ledger (default: current)")
+    parser.add_argument("--html", type=Path, help="write the interactive questionnaire (single file)")
     parser.add_argument("--answers", type=Path, help="read c1=1 answers from this file")
     parser.add_argument("--answers-out", type=Path, help="append accepted answers here")
     parser.add_argument("--proposals-out", type=Path, help="write edge proposals here")
