@@ -146,7 +146,14 @@ This document records the current, implemented state of `los-memory`.
   the line — a silently dropped answer is a lost decision), and the result is two artefacts that still write
   nothing: an append-only `answers-<plan_id>.jsonl` and `proposals-<plan_id>.json` (edges only for answers 1/2,
   carrying `granularity` and `id_backfill_required`). A markdown dump alone was not a review surface.
-  `--html FILE` renders a **single-file offline questionnaire** (cards embedded, no fetch, no external assets):
+  Cards are **clause-level, not entry-level** (2026-11-04): 19 of 21 cards' older entries and 20 of 21 newer ones
+  contain ≥3 items, i.e. they are process logs, where "does the whole entry get superseded?" has no answer. A card
+  is now one shared structural subject (path > endpoint > version > backticked token > CONST_LIKE > 「name」) plus
+  a window of each of the two clauses; pairs with no shared subject are counted (`unresolved_no_shared_subject`)
+  and never shown. The four answers read as questions (`1 新的是当前 / 2 旧的仍有效（新条目可能写错） / 3 两件不同
+ 的事 / 4 看不出`), answer 2 emits `flag_contradiction` instead of nothing, and **`supersede_entry` is no longer
+  offered** — one clause verdict must never retire a whole entry.
+- `--html FILE` renders a **single-file offline questionnaire** (cards embedded, no fetch, no external assets):
   one card at a time, keys 1–4 record and advance, ←/→ navigate, `u` undoes, `s` skips, a progress dialog
   jumps by card, answers autosave to `localStorage` keyed by plan id, and export produces exactly the
   `c1=1` text that `--answers` accepts. Verified in a real browser (Chrome via Playwright): 25 cards render,

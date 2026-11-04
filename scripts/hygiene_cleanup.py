@@ -84,14 +84,20 @@ QUOTE_PROXIMITY = 40
 
 #: The four choices a human makes per card. Written into the card so the review
 #: surface and the plan cannot drift apart.
-CARD_CHOICES = ("supersede_entry", "supersede_clause", "independent", "unclear")
+#: A card asks about **one clause on one subject**, so the answers are about that
+#: clause: which statement is current. "Old still valid" is not "nothing" — it
+#: means the *new* entry may be wrong and is worth flagging as a contradiction.
+CARD_CHOICES = ("supersede_clause", "old_still_valid", "different_things", "unclear")
 #: Keys accepted in an answers file: digits (fastest to type) and the names.
+#: `supersede_entry` stays accepted but is not offered: retiring a whole entry
+#: from one clause verdict is exactly the mistake this redesign removes.
 ANSWER_KEYS = {
-    "1": "supersede_entry", "2": "supersede_clause", "3": "independent", "4": "unclear",
-    "supersede_entry": "supersede_entry", "supersede_clause": "supersede_clause",
-    "independent": "independent", "unclear": "unclear",
+    "1": "supersede_clause", "2": "old_still_valid", "3": "different_things", "4": "unclear",
+    "supersede_clause": "supersede_clause", "old_still_valid": "old_still_valid",
+    "different_things": "different_things", "unclear": "unclear",
+    "supersede_entry": "supersede_entry",
 }
-#: Only these two choices produce an edge; the other two produce nothing at all.
+#: Only a supersede verdict produces an edge; a contradiction produces a review flag.
 EDGE_CHOICES = ("supersede_entry", "supersede_clause")
 
 
@@ -237,13 +243,12 @@ def _best_quoted_pointer(body: str, entries: list[Any], self_entry: Any, df_look
 
 def render_compact(claims: dict[str, Any], width: int = 64) -> str:
     """One line per card: the review surface for a chat or a terminal."""
-    lines = [f"# {claims['counts']['cards']} 张卡；答案格式 c1=1（1 整条 / 2 仅这一句 / 3 无关 / 4 看不出）"]
+    lines = [f"# {claims['counts']['cards']} 张卡；答案格式 c1=1（1 新的成立 / 2 旧的仍有效 / 3 两件事 / 4 看不出）"]
     for card in claims["cards"]:
-        signal = "位置" if card["signal"] == "positional" else "引号"
-        old = card["target"]["label"][:width]
-        new = card["claim"]["label"][:width]
-        lines.append(f"{card['card_id']:>4} {signal} | 旧: {old}")
-        lines.append(f"{'':>4}      | 新: {new}")
+        old = card["old_clause"][:width]
+        new = card["new_clause"][:width]
+        lines.append(f"{card['card_id']:>4} [{card['subject'][:18]}] 旧: {old}")
+        lines.append(f"{'':>4} {'':>20} 新: {new}")
     return "\n".join(lines)
 
 
@@ -274,6 +279,20 @@ def build_edge_proposals(claims: dict[str, Any], answers: dict[str, str]) -> lis
     for card in claims["cards"]:
         choice = answers.get(card["card_id"])
         if choice not in EDGE_CHOICES:
+            if choice == "old_still_valid":
+                # The reviewer says the older statement is still current, i.e. the
+                # newer entry is wrong: that is a contradiction, not a no-op.
+                proposals.append(
+                    {
+                        "op": "flag_contradiction",
+                        "card_id": card["card_id"],
+                        "subject": card.get("subject"),
+                        "old_clause": card.get("old_clause"),
+                        "new_clause": card.get("new_clause"),
+                        "track": card["track"],
+                        "requires_human": True,
+                    }
+                )
             continue
         proposals.append(
             {
@@ -282,6 +301,9 @@ def build_edge_proposals(claims: dict[str, Any], answers: dict[str, str]) -> lis
                 "from": {"track": card["track"], "id8": card["claim"]["id8"], "label": card["claim"]["label"]},
                 "to": {"track": card["track"], "id8": card["target"]["id8"], "label": card["target"]["label"]},
                 "granularity": "entry" if choice == "supersede_entry" else "clause",
+                "subject": card.get("subject"),
+                "old_clause": card.get("old_clause"),
+                "new_clause": card.get("new_clause"),
                 # A target without `[id:…]` needs the writer to backfill the
                 # deterministic id (`legacyIdFor = sha1(normalized content)`)
                 # before the edge can be written; naming it here keeps that
@@ -311,6 +333,7 @@ h1{font-size:15px;margin:0 0 6px;font-weight:600;letter-spacing:.02em}
 .meta{color:var(--muted);font-size:13px;display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}
 main{max-width:880px;margin:0 auto;padding:20px 20px 120px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+p.q{font-size:16px;font-weight:600;margin:0 0 14px;line-height:1.5}
 .tagrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:12px}
 .tag{border:1px solid var(--line);border-radius:999px;padding:2px 9px}
 .tag.acc{border-color:var(--accent);color:var(--accent)}
@@ -347,9 +370,12 @@ th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
 <main>
   <div class="card" id="card">
     <div class="tagrow" id="tags"></div>
-    <section class="part"><h2>旧条目（可能被取代）</h2><p class="label" id="oldLabel"></p>
+    <p class="q" id="question"></p>
+    <section class="part"><h2>旧说法（该主题）</h2><p class="label" id="oldClause"></p>
+      <p class="label" id="oldLabel" style="display:none"></p>
       <details><summary>看全文</summary><pre id="oldText"></pre></details></section>
-    <section class="part"><h2>新条目（声称修正/取代）</h2><p class="label" id="newLabel"></p>
+    <section class="part"><h2>新说法（该主题）</h2><p class="label" id="newClause"></p>
+      <p class="label" id="newLabel" style="display:none"></p>
       <details><summary>看全文</summary><pre id="newText"></pre></details></section>
     <div class="choices" id="choices"></div>
   </div>
@@ -369,7 +395,7 @@ const PLAN_ID = "__PLAN_ID__";
 const WEEK = "__WEEK__";
 const CARDS = __CARDS_JSON__;
 const KEY = "hygiene-answers-" + PLAN_ID;
-const LABELS = {1:["整条取代","旧条目整体作废"],2:["仅这一句","只有其中一处结论被取代"],3:["无关","两者不是同一结论"],4:["看不出","需要更多上下文"]};
+const LABELS = {1:["新的是当前","旧的这句作废"],2:["旧的仍有效","新条目可能写错了"],3:["两件不同的事","不构成取代"],4:["看不出","需要更多上下文"]};
 let state = {index:0, answers:{}};
 try { const raw = localStorage.getItem(KEY); if (raw) state = JSON.parse(raw); } catch (e) {}
 if (!state.answers) state.answers = {};
@@ -386,7 +412,11 @@ function render(){
     '<span class="tag acc">' + (c.signal === "positional" ? "位置指代（上一条）" : "引号指代") + "</span>" +
     '<span class="tag">' + esc(c.track) + "</span>" +
     '<span class="tag">' + esc(c.card_id) + "</span>" +
+    (c.subject ? '<span class="tag">主题：' + esc(c.subject) + "</span>" : "") +
     (c.evidence && c.evidence.quoted ? '<span class="tag">引号：' + esc(c.evidence.quoted) + "</span>" : "");
+  document.getElementById("question").textContent = c.question || "";
+  document.getElementById("oldClause").textContent = plain(c.old_clause || c.target.label);
+  document.getElementById("newClause").textContent = plain(c.new_clause || c.claim.label);
   document.getElementById("oldLabel").textContent = plain(c.target.label);
   document.getElementById("newLabel").textContent = plain(c.claim.label);
   document.getElementById("oldText").textContent = esc(c.target.excerpt);
@@ -476,6 +506,11 @@ def render_html(claims: dict[str, Any], plan_id: str, week: str) -> str:
             "card_id": card["card_id"],
             "signal": card["signal"],
             "track": card["track"],
+            "subject": card.get("subject", ""),
+            "subject_kind": card.get("subject_kind", ""),
+            "question": card.get("question", ""),
+            "old_clause": card.get("old_clause", ""),
+            "new_clause": card.get("new_clause", ""),
             "claim": card["claim"],
             "target": card["target"],
             "evidence": card.get("evidence", {}),
@@ -488,6 +523,91 @@ def render_html(claims: dict[str, Any], plan_id: str, week: str) -> str:
         .replace("__PLAN_ID__", plan_id)
         .replace("__WEEK__", week)
     )
+
+
+
+#: Clause markers used by this store: circled numbers, semicolons, line breaks.
+CLAUSE_SPLIT_RE = re.compile(r"[①②③④⑤⑥⑦⑧⑨⑩]|[；;]|\n|(?<=[。！？])\s")
+#: Subject keys are *structural*: a path, an endpoint, a version, a backticked
+#: identifier, a CONSTANT_LIKE token, or a 「quoted name」. Order = specificity.
+KEY_PATTERNS = (
+    ("path", re.compile(r"(?:~|/Users|/opt|/usr|/etc|/var|/private)/[A-Za-z0-9._@%+\-/]{2,}")),
+    ("endpoint", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b|\b[A-Za-z0-9._-]+:\d{2,5}\b")),
+    ("version", re.compile(r"\bv?\d+\.\d+(?:\.\d+)?\b")),
+    ("token", re.compile(r"`([^`]{3,60})`")),
+    ("const", re.compile(r"\b[A-Z][A-Z0-9_\-]{5,}\b")),
+    ("name", re.compile(r"[「“\"]([^」”\"]{4,60})[」”\"]")),
+)
+CLAUDE_MIN_CLAUSE = 12
+
+
+def split_clauses(body: str) -> list[str]:
+    """Split one entry into clause-sized segments (storage syntax out of the way)."""
+    text = re.sub(r"\[summary:[^\]]*\]", "", body)
+    text = re.sub(r"\*\*|`{1,3}", "", text)
+    parts = [re.sub(r"\s+", " ", part).strip(" ：:、，,") for part in CLAUSE_SPLIT_RE.split(text)]
+    return [part for part in parts if len(part) >= CLAUDE_MIN_CLAUSE]
+
+
+def subject_keys(clause: str) -> list[tuple[str, str]]:
+    """Ordered ``(kind, key)`` pairs a clause is about."""
+    found: list[tuple[str, str]] = []
+    for kind, pattern in KEY_PATTERNS:
+        for match in pattern.finditer(clause):
+            key = (match.group(1) if pattern.groups else match.group(0)).strip()
+            if len(key) >= 3 and (kind, key) not in found:
+                found.append((kind, key))
+    return found
+
+
+def trim_around(text: str, key: str, width: int = 200) -> str:
+    """Show a window around the subject so a card stays one readable line-block."""
+    position = text.find(key)
+    if position < 0:
+        return text[:width]
+    half = max(40, (width - len(key)) // 2)
+    start = max(0, position - half)
+    end = min(len(text), position + len(key) + half)
+    snippet = text[start:end].strip()
+    return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
+
+
+def best_clause_pair(claim_body: str, target_body: str, df_lookup) -> dict[str, Any] | None:
+    """Pick the clause pair that shares the most specific subject key.
+
+    This is the answer to "条目我看不懂": an entry is often a bundle of many
+    statements, so the judgement unit must be one clause on one subject. Rarity
+    decides which shared key is the subject (a path/port/version beats a common
+    phrase), and only one pair is shown — the shortest readable one.
+    """
+    claim_clauses = split_clauses(claim_body)
+    target_clauses = split_clauses(target_body)
+    if not claim_clauses or not target_clauses:
+        return None
+    candidates: list[dict[str, Any]] = []
+    for claim_clause in claim_clauses:
+        for kind, key in subject_keys(claim_clause):
+            hits = [clause for clause in target_clauses if key in clause]
+            if not hits:
+                continue
+            target_clause = hits[0]
+            specificity = {"path": 0, "endpoint": 1, "version": 2, "token": 3, "const": 4, "name": 5}[kind]
+            candidates.append(
+                {
+                    "subject_kind": kind,
+                    "subject": key,
+                    "old_clause": trim_around(target_clause, key),
+                    "new_clause": trim_around(claim_clause, key),
+                    "document_frequency": df_lookup(key),
+                    "score": (10 - specificity) + max(0.0, 3.0 - df_lookup(key) / 2.0),
+                }
+            )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item["score"], len(item["new_clause"])))
+    best = candidates[0]
+    best["alternatives"] = len(candidates)
+    return best
 
 
 
@@ -513,7 +633,8 @@ def resolve_claims(root: Path) -> dict[str, Any]:
 
     cards: list[dict[str, Any]] = []
     counts = {"claim_entries": 0, "excluded_evidence_track": 0, "excluded_has_edge": 0,
-              "excluded_deprecated": 0, "unresolved_no_referent": 0, "cards": 0}
+              "excluded_deprecated": 0, "unresolved_no_referent": 0,
+              "unresolved_no_shared_subject": 0, "cards": 0}
     for path in canonical:
         track = scan.load_track(path, root)
         if track.path.startswith(EVIDENCE_TRACK_PREFIXES):
@@ -545,22 +666,35 @@ def resolve_claims(root: Path) -> dict[str, Any]:
             if target is None:
                 counts["unresolved_no_referent"] += 1
                 continue
+            pair = best_clause_pair(entry.body, target.body, df_lookup)
+            if pair is None:
+                # No shared structural subject ⇒ the pair is not judgeable clause
+                # by clause. Counted, never dumped on the reviewer as a whole-entry
+                # question ("条目我看不懂" is exactly this case).
+                counts["unresolved_no_shared_subject"] += 1
+                continue
             cards.append(
                 {
                     "card_id": f"c{len(cards) + 1}",
                     "signal": signal,
                     "track": track.path,
+                    "subject_kind": pair["subject_kind"],
+                    "subject": pair["subject"],
+                    "old_clause": pair["old_clause"],
+                    "new_clause": pair["new_clause"],
+                    "alternatives": pair["alternatives"],
+                    "question": f"「{pair['subject']}」这件事，哪个说法是当前的？",
                     "claim": {
                         "id8": entry.id,
                         "date": entry.date,
                         "label": re.sub(r"\s+", " ", entry.body)[:160],
-                        "excerpt": re.sub(r"\s+", " ", entry.body)[:400],
+                        "excerpt": re.sub(r"\s+", " ", entry.body),
                     },
                     "target": {
                         "id8": target.id,
                         "date": target.date,
                         "label": re.sub(r"\s+", " ", target.body)[:160],
-                        "excerpt": re.sub(r"\s+", " ", target.body)[:400],
+                        "excerpt": re.sub(r"\s+", " ", target.body),
                     },
                     "evidence": evidence,
                     "choices": list(CARD_CHOICES),
@@ -594,12 +728,11 @@ def render_cards(claims: dict[str, Any]) -> str:
         "",
     ]
     for card in claims["cards"]:
-        evidence = card["evidence"]
-        hint = evidence.get("quoted") or evidence.get("rule", "")
-        lines.append(f"=== {card['card_id']} · {card['signal']} · {card['track']} · 线索：{hint}")
-        lines.append(f"旧（{card['target']['date'] or '?'}·{card['target']['id8'] or '无id'}）：{card['target']['label']}")
-        lines.append(f"新（{card['claim']['date'] or '?'}·{card['claim']['id8'] or '无id'}）：{card['claim']['label']}")
-        lines.append("判定：1=整条取代 2=仅这一句 3=无关 4=看不出")
+        lines.append(f"=== {card['card_id']} · {card['track']} · 主题 {card['subject_kind']}:{card['subject']}")
+        lines.append(f"问：{card['question']}")
+        lines.append(f"旧（{card['target']['date'] or '?'}）：{card['old_clause']}")
+        lines.append(f"新（{card['claim']['date'] or '?'}）：{card['new_clause']}")
+        lines.append("判定：1=新的取代旧的 2=旧的仍有效（新条目可能错） 3=两件不同的事 4=看不出")
         lines.append("")
     return "\n".join(lines)
 
