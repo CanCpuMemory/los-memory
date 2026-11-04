@@ -126,6 +126,14 @@ This document records the current, implemented state of `los-memory`.
   a foreign root (`/root/…`, `C:\…` — the store mixes M1 and M3 memories under one user name), an ephemeral
   path (`/tmp`, `/var/folders`), or a **missing parent** all yield `unknown`; only "the tree exists, the file
   does not" yields `refuted(stale_path)`.
+- **T2 judge selection (measured 2026-11-04, not assumed)**: `codex` 0.166.0 costs 27,166 tokens and 41.9 s
+  for a two-character reply and produces schema-constrained JSON (`--output-schema`); `kimi` 2.4.1 answers the
+  same judge prompt in 12.3 s and prints a version banner plus reasoning that must be stripped. Decision:
+  kimi is the first-pass judge (batched 20 per call, strict JSON extraction, no guessing on parse failure),
+  codex is the audit/disagreement arm (schema output, only on `supersede*` verdicts and a 10% sample of
+  `independent`), and neither writes anything. The same run also proved the *question* was underspecified:
+  both models said `supersede` where only one clause of a broad entry was superseded, so the verdict set gains
+  `supersede_clause` and entry-level `deprecate` may never come straight from a T2 verdict.
 - **Not implemented, deliberately**: the writer bridge (P1b — the corpus belongs to `dsh-memory-evolve`,
   which owns `<dir>/.memory.lock` and the `[id:…]` vocabulary; a Python writer would be a second lock and a
   second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text
