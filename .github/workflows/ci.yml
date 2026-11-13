@@ -36,6 +36,7 @@ jobs:
             memory_tool/analytics.py \
             memory_tool/projects.py \
             memory_tool/service_contract/ \
+            memory_tool/ledger/ \
             memory_tool/feedback.py \
             memory_tool/links.py \
             scripts/create_hub_lite_records.py \
@@ -52,6 +53,9 @@ jobs:
             tests/unit/test_hub_lite_record_script.py \
             tests/unit/test_cross_repo_reporter.py \
             tests/unit/test_ledger_boundary.py \
+            tests/unit/test_ledger_store.py \
+            tests/unit/test_ledger_import.py \
+            tests/unit/test_ledger_cli.py \
             tests/unit/test_lsclaw_records.py \
             tests/unit/test_docs_command_lint.py \
             tests/unit/test_docs_current_state.py \

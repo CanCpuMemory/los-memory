@@ -589,6 +589,18 @@ def _register_review_subcommands(subparsers: argparse._SubParsersAction) -> None
     review_apply.add_argument("--dry-run", action="store_true")
 
 
+def _register_ledger_subcommands(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `mem` command group (the writable ledger).
+
+    The ledger CLI is imported lazily and dispatched before the profile/config
+    path, so a ledger command can never open or create a ``codex`` / ``claude`` /
+    ``shared`` profile database.
+    """
+    from .ledger.cli import register as register_ledger
+
+    register_ledger(subparsers)
+
+
 def _register_extension_subcommands(
     parser: argparse.ArgumentParser,
     subparsers: argparse._SubParsersAction,
@@ -628,6 +640,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _register_tool_subcommands(subparsers)
     _register_admin_subcommands(subparsers)
     _register_review_subcommands(subparsers)
+    _register_ledger_subcommands(subparsers)
     _register_extension_subcommands(parser, subparsers)
     return parser
 
@@ -745,10 +758,22 @@ def _run_standard_command(args: argparse.Namespace, db_path: str) -> int:
             conn.close()
 
 
+def _run_ledger_command(args: argparse.Namespace) -> int:
+    """Dispatch a `mem` command before any profile database is resolved."""
+    from .ledger.cli import run as run_ledger
+
+    return run_ledger(args)
+
+
 def main() -> int:
     """Main entry point."""
     args = parse_args()
     _ensure_human_flag(args)
+
+    if args.command == "mem":
+        # Deliberately before config resolution: the ledger path comes from
+        # `--db` / MEMORY_SERVICE_DB, never from a profile default.
+        return _run_ledger_command(args)
 
     try:
         db_path = _apply_config_to_args(args)

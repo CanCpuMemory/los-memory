@@ -84,6 +84,34 @@ This document records the current, implemented state of `los-memory`.
 - Semantics worth knowing before reading any future write-path code: `accepted` means only that the original payload is durably stored (`lexical_ready`/`semantic_ready` stay false and are reported as the named degradation `projections_pending`); replaying the same `(principal, client_event_id)` returns the same receipt, while a different payload under the same key is refused as a conflict; server-owned identity fields are refused rather than stripped; `effective_scope = requested ∩ granted`; only an evidence-bearing approval can reach `asserted` and `claim_status` otherwise stays `undeclared`.
 - Evidence: `docs/design/p2-01-contract-layer.md`, `tests/unit/test_service_contract_negative.py`, `tests/unit/test_service_contract_contract.py`.
 
+## M1 writable ledger runtime (added 2026-11-13)
+
+- `memory_tool/ledger/` is the **first implemented writer**: `service.sqlite3`
+  (`units`/`revisions`/append-only `events` + derived `units_fts`(trigram) and
+  `cjk_bigrams`), exposed as the `los-memory mem ...` command group
+  (`add/replace/supersede/archive/list/expand/search/import-evolve/init/status`).
+  It is a new layer: `memory_tool/service_contract/` stays a runtime-free contract and
+  `memory_tool/shadow*.py` keeps its read-only semantics (neither is imported or changed).
+- Path is `~/.local/share/los-memory/service.sqlite3` (`MEMORY_SERVICE_DB` / `--db`
+  override). Profile databases are untouched by construction: `mem` is dispatched
+  **before** config resolution, so `--profile` cannot route it anywhere.
+- Exit codes are the three-state instrument convention (`0` judged / `1` real negative /
+  `2` cannot judge), deliberately separate from the `0`–`5` error-code enum used by the
+  profile commands. A missing or uninitialised ledger is `2` and **read commands never
+  create it**; `--dry-run` writes nothing (real ledger: savepoint + rollback; absent
+  ledger: scratch in-memory simulation reported as `simulated_fresh`).
+- `mem import-evolve` maps `~/.dsh/memories` onto the five tracks (`MEMORY.md`→memory,
+  `USER.md`→user, `projects/<hash>/{KEY,MEMORY}.md`→key/project, `daily/*.md`→daily) and
+  skips `TODOS*.md` with counts. `§` separates only as a standalone line (867 lines in the
+  live corpus carry an inline `§`), file identity is `(st_dev, st_ino)` (7 symlinked project
+  dirs, 14 alias groups), and the second run creates nothing.
+- Measured 2026-11-13 21:03 (live corpus, temp database): 184 files / 6,692 entries
+  (memory 340, user 4, key 768, project 2,772, daily 2,808), 19 deprecated + 19 supersede
+  edges, 128.7 MB database, first import 5.8 s and the second 0.46 s creating 0.
+- Not implemented here: the injection surface (P2) and the cutover from
+  `dsh-memory-evolve` (P4). Nothing calls this runtime yet. Design and the two documented
+  contract conflicts: `docs/design/m1-writable-ledger.md`.
+
 ## Memory hygiene (added 2026-11-03)
 
 - `scripts/hygiene_scan.py` is the **only** implemented part of
