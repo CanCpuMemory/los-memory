@@ -47,3 +47,22 @@
 - P1：service 库是新增文件，删除即回滚（不动既有库）。
 - P2：插件未加载即无影响；加载后在 profile patch 删一行即可回退。
 - P5：见审计清单的 Step 0 冷备（63M tar + 三个 profile 文件）。
+
+## 5. 命名与三条待决项（2026-11-13 定稿，Lead 自决）
+
+**命名（定稿，不再讨论）**
+
+| 层 | 名字 | 说明 |
+| --- | --- | --- |
+| 写运行时 | `los-memory mem ...`（模块 `memory_tool/ledger/`，交付名 **M1**） | 唯一写者 + 检索真源 |
+| 注入面 | 插件 `dsh-memory-inject`，段名 `memory:snapshot`，台账 `~/.dsh/memory-inject/renders-YYYY-MM.jsonl` | 段名沿用 evolve 以便机械对照 |
+| 宿主能力 | 插件 `dsh-host-tools`，工具名 `dtodo` / `skill_manage` / `de_channel_send` **一字不改** | 名字是契约，改名会连带改 AGENTS.md 与 quick-actions |
+
+**三条待决项（已裁）**
+
+1. **同名工具切换** → 不做"同时启用"，走**原子批**：先装 host-tools 但三开关全 `false`（不注册）→ 同一批 patch 里关 evolve 三条 + 开 host-tools 三条 → **一次** reload → 用宿主 tools 清单验证「每个工具只注册一次」。
+   为什么不靠"重名注册时谁覆盖谁"：那是宿主未文档化行为，验它要扰动在跑的会话；原子批根本不需要这个知识。
+2. **`skill_manage` 采纳面** → host-tools 默认 `skillReviewEnabled: true`（直写 `~/.agents/skills`），保留 `false` 可配；切换前清空 `pending-skills/`（当前为空）。理由：卸载后没有采纳 UI，队列只会堆积。
+3. **cwd 别名规范化** → **搬**（evolve `lib/path-alias.js` 的最小必要部分 + 只读 `~/.dsh/storages/path-alias-map.json`）。理由：写进旧 hash 的"死"项目目录是静默错误，代价高于 150 行；别名表缺失/坏 JSON ⇒ fail-open 退化为不归一化 + warn。
+
+**事实补充**：Nowledge 镜像是一次性安全副本（P0 已补 KEY/全局/用户三轨，共 1,111 条）；此后以 M1 库为权威，P5 停 `mem-sync-evolve` 后不再新增镜像。`nmem m add` 每条约 5–8 s（后端带蒸馏），**不要**为低价值轨（project 日志/daily 增量）再跑批量补镜像。
