@@ -89,7 +89,9 @@ units_fts(trigram) / cjk_bigrams(term, unit_id)              -- 派生，可重�
 
 显式给了 `--project-map-from-registry` 而文件缺失/结构不认识 ⇒ **exit 2**（判不了）；未给则该映射是**尽力而为**：不可用时报 `degraded`/`project_map.available:false`，命令继续（命令不得因为本机没有工作区登记而不可用，CI 也要能跑）。`status` 用同一映射报 `project_slug_assigned/unassigned`（对 `key`+`project` 轨的去重 project 值计数；hash 或已解析 slug 两种存量形态都算 assigned）。
 
-**实测覆盖（2026-11-13）**：注册表 36 个 hash，语料 73 个 project 目录**只命中 11**（`dsfolder` ✓，`project_hash('/Users/echerlos/syncfolder/project/dsfolder') = 2d4994d462af`）。其余是子目录 cwd 或搬迁前的字面路径（如 `~/Downloads/projects/*`），注册表本身表达不了——这是**已知覆盖缺口**，不是 bug；要更高覆盖需引入"会话 cwd 台账"这类数据源，属 P2 决策项。
+**已知限制（不是缺陷，2026-11-13 裁决）**：11/73 是**注册表表达力的真实上限**——其余是子目录 cwd（如 `<repo>/dsplugins/x`）或搬迁前的字面路径（如 `~/Downloads/projects/*`），注册表里没有这些"项目根"，机械反解就没有候选可算。**P4 对账时按 `project_slug_unassigned` 计数处理，不判失败**；要提高覆盖只能新增数据源（会话 cwd 台账），那是 P2/P4 的决策，不是 M1 的欠账。
+
+**实测覆盖（2026-11-13）**：注册表 36 个 hash，语料 73 个 project 目录**只命中 11**（`dsfolder` ✓，`project_hash('/Users/echerlos/syncfolder/project/dsfolder') = 2d4994d462af`）。其余是子目录 cwd 或搬迁前的字面路径（如 `~/Downloads/projects/*`），注册表本身表达不了（见下方「已知限制」）。
 
 ## 3. 写与检索语义
 
