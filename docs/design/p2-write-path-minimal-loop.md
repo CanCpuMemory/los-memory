@@ -232,3 +232,5 @@ harness 纪律中与本文件直接相关的几条：**一个循环、多个适�
 ## 8. 本轮不做
 
 不建 `service.sqlite3`、不写任何 API、不改客户端默认入口、不迁移任何真实记录、不扩展 deprecated approval 模块。本文件是评审稿，不是实施授权。
+
+**状态注（2026-11-13）**：`service.sqlite3` 已由 M1 写运行时（`memory_tool/ledger/`）创建，但对象是 DSH 语料 `~/.dsh/memories` 的承接，**不接管 Nowledge 主库替换线的写入权**，I1 仍然成立。见 [`m1-writable-ledger.md`](m1-writable-ledger.md)。

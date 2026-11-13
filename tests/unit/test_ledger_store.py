@@ -304,10 +304,12 @@ def test_search_paths_and_no_match_behaviour(tmp_path: Path) -> None:
 
 
 def test_search_matches_body_not_program_tokens(tmp_path: Path) -> None:
-    """The index carries the entry body and human-facing tokens, not identity/date."""
-    assert searchable_text("[id:aaaa1111] [2026-01-05] [summary:网关端口] 正文 §7") == (
-        "正文 §7\nsummary:网关端口"
-    )
+    """The index carries the body, the summary value and `[<project>]`; not identity/date/scope."""
+    indexed = searchable_text("[id:aaaa1111] [2026-01-05] [branch:main] [summary:网关端口] 正文 §7")
+    assert indexed == "正文 §7\n网关端口"
+    assert "[id:aaaa1111]" not in indexed
+    assert "2026-01-05" not in indexed
+    assert "branch:" not in indexed, "branch scope is metadata, not searchable text"
     assert "[id:aaaa1111]" not in searchable_text("[id:aaaa1111] [2026-01-05] 正文")
 
 

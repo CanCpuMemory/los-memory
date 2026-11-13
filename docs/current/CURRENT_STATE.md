@@ -105,12 +105,29 @@ This document records the current, implemented state of `los-memory`.
   skips `TODOS*.md` with counts. `§` separates only as a standalone line (867 lines in the
   live corpus carry an inline `§`), file identity is `(st_dev, st_ino)` (7 symlinked project
   dirs, 14 alias groups), and the second run creates nothing.
-- Measured 2026-11-13 21:03 (live corpus, temp database): 184 files / 6,692 entries
-  (memory 340, user 4, key 768, project 2,772, daily 2,808), 19 deprecated + 19 supersede
-  edges, 128.7 MB database, first import 5.8 s and the second 0.46 s creating 0.
-- Not implemented here: the injection surface (P2) and the cutover from
-  `dsh-memory-evolve` (P4). Nothing calls this runtime yet. Design and the two documented
-  contract conflicts: `docs/design/m1-writable-ledger.md`.
+- **Identity is stable and display is separate**: `project` stores the evolve directory name
+  (`sha1(<literal cwd>)[:12]`, e.g. `2d4994d462af`), and a human slug is resolved from the
+  workspace registry (`--project-map-from-registry`, default
+  `~/syncfolder/project/los-workspace/.workspace/projects.json`) — hashing declared roots,
+  never guessing a directory name. An unknown hash stays `project_slug: null`. **Measured
+  coverage 11 of 73 corpus project directories**; the rest are sub-directory cwds or
+  pre-relocation literal paths the registry cannot express (a known gap, not a defect).
+  A slug and its hash are interchangeable in `add --project` / `list --project`.
+- `[branch:main,dev]` is imported as real branch scope (`branch_scope`; `NULL` = visible on
+  every branch, the way `evolve` words an absent tag) and filtering is a set intersection, so
+  `main` cannot match `main-old`. Measured on the live corpus for the dsfolder project: 450
+  active key entries in total = 419 untagged + 31 `main`-only, and `--branch <other>` returns
+  419 — the filter really filters.
+- `mem snapshot --json` is the **one-shot render payload** for the P2 injection plugin: five
+  tracks, `count`/`truncated`/`mode`, daily and project-log counters, slot health and an
+  explicit `degraded` list. Bodies are never included (fetched with `expand --id`), a missing
+  git branch is fail-open with `branch_unresolved`, and a missing ledger is exit 2.
+- Measured 2026-11-13 21:2x (live corpus, temp database): 184 files / 6,696 entries
+  (memory 340, user 4, key 768, project 2,774, daily 2,810), 19 deprecated + 19 supersede
+  edges, 128.9 MB database, first import 5.5 s and the second 0.46 s creating 0.
+- Not implemented here: the injection plugin itself (P2 consumes `snapshot`) and the cutover
+  from `dsh-memory-evolve` (P4). Nothing calls this runtime yet. Design, contract rulings and
+  samples: `docs/design/m1-writable-ledger.md`.
 
 ## Memory hygiene (added 2026-11-03)
 

@@ -59,19 +59,34 @@ class Entry:
     deprecated_by: str | None = None
     day: str | None = None
     time: str | None = None
+    #: ``[branch:main,dev]`` scope. ``None`` means "visible in every branch",
+    #: which is exactly how ``evolve`` words the absence of the tag.
+    branches: list[str] | None = None
+    #: ``[summary:…]`` — evolve's title line for summary-mode injection.
+    summary: str | None = None
     neutral: list[str] = field(default_factory=list)
 
     @property
     def searchable_text(self) -> str:
         """Text the search index should carry.
 
-        The body plus the order-preserving tokens that are human-facing — notably
-        ``[summary:…]`` (evolve's title line) and ``[<project>]`` — while
-        identity/date tokens stay out so a query cannot match on metadata.
+        The body plus the human-facing tokens — notably ``[summary:…]`` (evolve's
+        title line) and ``[<project>]`` — while identity/date/scope tokens stay out
+        so a query cannot match on metadata.
         """
         parts = [self.body]
+        if self.summary:
+            parts.append(self.summary)
         parts.extend(self.neutral)
         return "\n".join(part for part in parts if part)
+
+    def summary_text(self, limit: int = 80) -> str:
+        """Title for summary-mode rendering: the ``[summary:…]`` tag, else line 1."""
+        source = (self.summary or self.body.split("\n")[0]).strip()
+        source = re.sub(r"\s+", " ", source)
+        if len(source) <= limit:
+            return source
+        return source[: max(0, limit - 1)] + "…"
 
 
 @dataclass
@@ -83,6 +98,7 @@ class TrackFile:
     track: str
     project: str | None = None
     day: str | None = None
+
 
     @property
     def is_daily(self) -> bool:
@@ -154,6 +170,12 @@ def parse_entry(text: str) -> Entry:
         elif lowered.startswith("deprecated"):
             entry.deprecated = True
             entry.deprecated_by = token.split(":", 1)[1].strip() if ":" in token else None
+        elif lowered.startswith("branch:"):
+            entry.branches = [
+                part.strip() for part in token[7:].split(",") if part.strip()
+            ] or None
+        elif lowered.startswith("summary:"):
+            entry.summary = token[8:].strip() or None
         elif DATE_RE.match(token):
             parsed = DATE_RE.match(token)
             entry.day = parsed.group(1)
@@ -166,8 +188,12 @@ def parse_entry(text: str) -> Entry:
     return entry
 
 
-def _track_for(root: Path, path: Path, project_map: dict[str, str] | None = None):
+def _track_for(root: Path, path: Path):
     """Map a discovered file onto ``(track, project, day)``.
+
+    ``project`` is always the evolve directory name (``sha1(cwd)[:12]``) — the
+    stable identity. Human-readable slugs are resolved from the workspace registry at
+    read time, so storage never depends on which flags an import used.
 
     Returns ``None`` for files that are intentionally not imported.
     """
@@ -186,29 +212,24 @@ def _track_for(root: Path, path: Path, project_map: dict[str, str] | None = None
         return None
     if parent.parent.parent == root and parent.parent.name == "projects":
         directory = parent.name
-        project = (project_map or {}).get(directory, directory)
         if name == "KEY.md":
-            return "key", project, None
+            return "key", directory, None
         if name == "MEMORY.md":
-            return "project", project, None
+            return "project", directory, None
         return None
     return None
 
 
-def discover(
-    root: str | os.PathLike[str],
-    only: tuple[str, ...] | None = None,
-    project_map: dict[str, str] | None = None,
-) -> Discovery:
+def discover(root: str | os.PathLike[str], only: tuple[str, ...] | None = None) -> Discovery:
     """Walk a corpus root and return the files to import, de-aliased.
 
     Args:
         root: ``~/.dsh/memories`` (or a fixture).
         only: Optional track filter; ``None`` imports every track.
-        project_map: Optional ``{directory_hash: display_slug}`` mapping. Without
-            it the project identifier is the evolve directory name, which is
-            ``sha1(<literal cwd>)[:12]`` — reproducible by hashing a candidate
-            path, never guessed here.
+
+    The project identifier is the evolve directory name,
+    ``sha1(<literal cwd>)[:12]`` — reproducible by hashing a candidate path (see
+    ``registry.py``), never guessed here.
 
     Returns:
         A :class:`Discovery` with the selected files, alias groups and skip counts.
@@ -222,7 +243,7 @@ def discover(
     skipped_daily_other: list[str] = []
 
     def add(path: Path) -> None:
-        mapped = _track_for(base, path, project_map)
+        mapped = _track_for(base, path)
         if mapped is None:
             return
         track, project, day = mapped

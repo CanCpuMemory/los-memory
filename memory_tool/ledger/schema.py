@@ -57,8 +57,12 @@ class LedgerError(Exception):
     code = "ledger_error"
 
     def __init__(self, message: str, **details: object) -> None:
-        """Store the message and optional structured details."""
+        """Store the message (a specific reason code) and optional structured details."""
         super().__init__(message)
+        #: The specific reason, e.g. ``service_ledger_missing``. ``code`` stays the
+        #: class-level exit-code class (unavailable / refused) so consumers can rely
+        #: on a stable pair.
+        self.detail_code = message
         self.details = details
 
 

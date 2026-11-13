@@ -11,7 +11,7 @@
 | 三个 profile 库（codex/claude/shared） | 不读不写。`mem` 在**配置解析之前**分派，profile 参数对它无意义（有负向测试） |
 | Nowledge | 不写、不读，不参与本层 |
 
-⚠️ **与 `p2-write-path-minimal-loop.md` 的字面冲突（需 Lead 裁决，见 §7）**：该文 I1/§8 写"正式写入仍只走 Nowledge、不建 `service.sqlite3`"，其对象是 **Nowledge 主库替换线（B0–B7）**。M1 写的不是 Nowledge 主库，而是 **DSH 记忆语料 `~/.dsh/memories`**（当前由 `dsh-memory-evolve` 写）。所以本层满足 I2（独立库/独立 schema/不导入旧库），但确实新建了 `service.sqlite3`，与该文 §8 字面相反。
+**与 `p2-write-path-minimal-loop.md` 的字面冲突：已裁决（2026-11-13，Lead）**——二者的对象不同：该文 I1/§8 管的是 **Nowledge 主库替换线（B0–B7）**，M1 承接的是 **DSH 记忆语料 `~/.dsh/memories`**（原由 `dsh-memory-evolve` 写）。M1 满足 I2（独立库/独立 schema/不导入旧库），**不接管 Nowledge 主库的写入权，I1 仍然成立**。裁决已落成两处状态注：该文 §8 末尾 + `nowledge-replacement-batches.md` B3 一栏（标明"仅 DSH 语料侧的 B3 前置"）。
 
 ## 1. schema（`SCHEMA_VERSION = 1`）
 
@@ -27,6 +27,8 @@ units_fts(trigram) / cjk_bigrams(term, unit_id)              -- 派生，可重�
 
 - `track ∈ {memory,user,key,project,daily}`；`state ∈ {active,archived,deprecated}`。
 - `scope_key = track|project|branch|day`（值里出现 `|` 一律拒绝，避免作用域歧义）。
+- **`project` 身份 = evolve 目录名 = `sha1(字面绝对 cwd)[:12]`**（稳定、可机械反解）；人类 slug 是**显示层**，由工作区注册表在读取期解析（见 §2.2）。写侧传 slug 或 hash 都会解析成 hash 落库，所以同一事实不会因为导入时带了什么参数而变成两个可寻址名字。
+- **`branch_scope`**：`NULL` = 所有分支可见（`evolve` 对"没有 `[branch:…]` 标签"的语义），否则逗号分隔的分支集（`[branch:main,dev]`）。命中判定是**集合相交**（`main` 不会误匹配 `main-old`）。
 - `revisions.content` 存**整条原文**（含 `[id:…]`/`[date]` 等头标记），可回读；`digest = sha256(canonical)`。
 - `events` **只追加**：本包不 UPDATE/DELETE 它（有测试对比写入前后的历史行）。
 - `origin ∈ {cli, import:evolve}`；`origin_key` 唯一索引 —— 导入幂等靠它，不靠文本相似度。
@@ -42,8 +44,9 @@ units_fts(trigram) / cjk_bigrams(term, unit_id)              -- 派生，可重�
 | `mem list` | `--track --project --branch --day --state {active,archived,deprecated,all} --limit --offset` |
 | `mem expand` | `--id`（unit + 全部 revisions + events） |
 | `mem search` | `<query> --track --project --limit --include-archived --rebuild-index` |
-| `mem import-evolve` | `--root ~/.dsh/memories --only <tracks> --project-map <json> --samples N [--dry-run]` |
-| `mem init` / `mem status` | `--db` |
+| `mem import-evolve` | `--root ~/.dsh/memories --only <tracks> --project-map <json> --project-map-from-registry [<path>] --samples N [--dry-run]` |
+| `mem snapshot` | `--cwd --branch --project --date --max-entries --max-chars --full-threshold-entries --full-threshold-chars --summary-chars --json`（§2.1） |
+| `mem init` / `mem status` | `--db`；`status` 另报 `project_slug_assigned/unassigned`（§2.2） |
 
 输出：默认 JSON（`{"ok","command","dry_run","db","simulated_fresh","data"}`；失败为 `{"ok":false,"error":{"code","message"},"details"}`），`--format text` 为人类视图。
 
@@ -59,6 +62,34 @@ units_fts(trigram) / cjk_bigrams(term, unit_id)              -- 派生，可重�
 
 **dry-run 语义**：库已存在且已初始化 ⇒ 在真库内 `SAVEPOINT` + `ROLLBACK`（"这次会对这个库做什么"）；库缺失或为空文件 ⇒ 在 **scratch 内存库**上模拟，并回报 `simulated_fresh:true`（`--dry-run` 绝不创建它要检查的文件）。
 **读写纪律**：写命令可建库；**读命令（list/expand/search/status）绝不建库**（对齐 `admin doctor` 的既有纪律）。
+
+### 2.1 `mem snapshot` 契约（P2 注入插件每回合只调它一次）
+
+成功时**直接输出以下对象**（不套 `{"ok","command","data"}` 信封，字段名定死；失败仍走上面的错误信封）：
+
+```json
+{"ok":true,"schema":1,"cwd":"…","branch":"main","project":"2d4994d462af","project_slug":"dsfolder",
+ "tracks":{"memory":{"mode":"summary","count":340,"entries":[{"id":"…","summary":"…","content_len":2304}],"truncated":274},
+           "user":{"mode":"full","count":4,"entries":[…],"truncated":0},
+           "key":{"mode":"summary","count":450,"entries":[…],"truncated":401,"branch_filtered":true}},
+ "daily":{"date":"2026-11-13","count":49},"project_log":{"count":1813},
+ "slots":{"active":48,"deprecated":19,"same_slot_multi_active":0},
+ "degraded":[]}
+```
+
+- `count` = 该轨活跃条目**自然条数**；`truncated` = 因 `--max-entries`/`--max-chars` 被裁掉的条数，恒有 `count - truncated == len(entries)`。裁的是**尾部**（保留语料顺序，便于与 evolve 快照逐段 diff）。
+- `mode` = **判定结果**：仅当"条目数 ≤ `--full-threshold-entries` **且** 总字符 ≤ `--full-threshold-chars`"才 `full`（边界含等号）。它**不改变**裁切行为（裁切只由 `--max-*` 决定），由渲染方决定怎么呈现。
+- `entries[].summary` = `[summary:…]` 标签，否则正文首行（受 `--summary-chars` 限制）；**正文永不返回**（省 token，全文用 `expand --id`）。
+- `branch` 缺省取 `git -C <cwd> rev-parse --abbrev-ref HEAD`；取不到（无 git / detached HEAD）⇒ **不过滤** + `degraded:["branch_unresolved"]`（fail-open，与 evolve 同策略）。`--branch` 显式给出则不依赖 git，且 `branch_filtered:true`。
+- `degraded` 另可含 `project_map_unavailable`（注册表读不到）。**缺库不是 degraded，是 exit 2**（读命令不建库）。
+
+### 2.2 `--project-map-from-registry`（机械反解，不猜）
+
+`project` 的 hash 就是 `sha1(字面绝对 cwd)[:12]`，所以把**工作区注册表里的项目根逐个算 sha1** 即可建 `hash → registry key` 映射（默认 `~/syncfolder/project/los-workspace/.workspace/projects.json`；注册表里 `children` 无 `path` 的按 `<父路径>/<key>` 推导——那是注册表自己的嵌套契约，不是猜测）。**没有目录名兜底**：解析不到的 hash 保持 `project_slug: null`。
+
+显式给了 `--project-map-from-registry` 而文件缺失/结构不认识 ⇒ **exit 2**（判不了）；未给则该映射是**尽力而为**：不可用时报 `degraded`/`project_map.available:false`，命令继续（命令不得因为本机没有工作区登记而不可用，CI 也要能跑）。`status` 用同一映射报 `project_slug_assigned/unassigned`（对 `key`+`project` 轨的去重 project 值计数；hash 或已解析 slug 两种存量形态都算 assigned）。
+
+**实测覆盖（2026-11-13）**：注册表 36 个 hash，语料 73 个 project 目录**只命中 11**（`dsfolder` ✓，`project_hash('/Users/echerlos/syncfolder/project/dsfolder') = 2d4994d462af`）。其余是子目录 cwd 或搬迁前的字面路径（如 `~/Downloads/projects/*`），注册表本身表达不了——这是**已知覆盖缺口**，不是 bug；要更高覆盖需引入"会话 cwd 台账"这类数据源，属 P2 决策项。
 
 ## 3. 写与检索语义
 
@@ -105,11 +136,40 @@ python3 -m memory_tool mem import-evolve --root ~/.dsh/memories --db <临时库>
 `tests/unit/test_ledger_{store,import,cli}.py`：**44 条**，`python3 -m pytest tests/unit/test_ledger_store.py tests/unit/test_ledger_import.py tests/unit/test_ledger_cli.py -q`。
 负向控制（每条都验证"守卫坏掉就会红"）：同 slot 第二个 add 必须把旧条 deprecated 且 `same_slot_multi_active==0`；**同名 slot 换 project 不得被弃**；重复 add 幂等且 revisions 不增；supersede 链只剩一个 active；archive 后 list 不含而 expand 可读；replace 打在 archived 上被拒；空 content ⇒ exit 2；库缺失 ⇒ exit 2 且**不创建文件**；dry-run 前后 events/revisions 不变且缺失库不被创建；events 历史行逐字节不变；`§` 行内不切（并断言 naive split 会切）；导入第二遍 created=0；`[supersedes:]` 落成真边；改文变修订不变单元；symlink 别名只导一次；TODOS 计数且零导入；`--only` 生效；语料根缺失 ⇒ exit 2；`mem` 不落 profile 库（重定向 HOME 验）。
 
-## 7. 未做 / 需要 Lead 决策
+## 7. 裁决记录与未做项
+
+**四项裁决（2026-11-13，Lead，已落进本文与关联文档）**：①契约冲突 → M1 是 DSH 语料写入线，不接管 Nowledge 主库替换线，I1 成立（§0，两处状态注已加）；②退出码 → **两套并存不合并**（`mem` 仪器三态 vs `exit_codes.py` 的 0–5 profile 错误码），只在 §2 保留分工说明；③`project` → 不猜，改机械反解（§2.2），映射进 `status`；④命名统一用 **M1**（P1 只作阶段别名）。
+
+未做 / 仍需决策：
 
 **未做（明确留给后续阶段）**：注入面 P2（DSH 侧读/写入口、`memory` 工具接管、Working Memory/bundle、提示注入与披露）与切换 P4（evolve 停写、水位、语料↔库对账、双写与回退剧本、fail-closed 门禁）。本层目前是"能写、能查、能导入"的底座，**没有任何调用方**。
 
-需要裁决的三点：
-1. `p2-write-path-minimal-loop.md` §8「不建 `service.sqlite3`」与本次实现字面冲突 → 修该文状态行，还是把 M1 定位补进 `nowledge-replacement-batches.md`（B3 一栏）？
-2. `mem` 的 0/1/2 与 `memory_tool/exit_codes.py` 的 0–5 并存（本文 §2 已写明分工）。是否要把 `mem` 的错误码也登记进 `exit_codes.py` 词表？
-3. `project` 目前是 evolve 目录 hash（可复核但不可读）。是否接项目注册表做 hash→slug 映射（现只能 `--project-map` 手工给）？
+1. **project slug 覆盖 11/73**（§2.2）。要不要把"会话 cwd 台账"（如 `dsh_session_catalog` / session 记录里的 cwd 列表）也作为**声明的**候选来源喂进反解？那仍是查表，但会引入新的数据依赖，属 P2 决策。
+2. **`snapshot` 的 `summary_chars` 默认 160 / `max_entries` 200 / `max_chars` 60k** 是**未标定的初值**：真实注入体积（evolve 现为每回合约 77k 字符）要用 P2 的 diff 来定，别把当前值当结论。
+3. **`daily`/`project_log` 只给计数不给条目**（按 Lead 给的 schema）。若 P2 想在注入里显示「今天已写 N 条」以外的内容，需要扩 schema（`schema` 字段就是为这种变更留的）。
+
+## 8. 样例（2026-11-13，真实语料导入临时库后实测）
+
+`mem status`（临时库，避免在默认路径留状态）：
+```
+$ python3 -m memory_tool mem status --db "$T/s.sqlite3" --format text
+db: /var/folders/…/s.sqlite3 (schema v1)
+units=6696 revisions=6696 events=6734 fts_rows=6696 bigram_rows=557578 bytes=128876544
+by_track={'daily': 2810, 'key': 768, 'memory': 340, 'project': 2774, 'user': 4}
+by_state={'active': 6677, 'deprecated': 19}
+project_slug: assigned=11 unassigned=62 (registry available=True, mapped_projects=36)
+```
+
+`mem snapshot`（cwd=dsfolder，`--format text` 是同一 payload 的人类视图）：
+```
+$ python3 -m memory_tool mem snapshot --db "$T/s.sqlite3" --cwd /Users/echerlos/syncfolder/project/dsfolder --format text
+cwd=/Users/echerlos/syncfolder/project/dsfolder branch=main project=2d4994d462af slug=dsfolder
+memory  summary count=340   shown=66   truncated=274
+user    full    count=4     shown=4    truncated=0
+key     summary count=450   shown=49   truncated=401
+daily 2026-11-13 count=49
+project_log count=1813
+slots active=48 deprecated=19 same_slot_multi_active=0
+degraded=[]
+```
+`key count=450` 是**分支过滤后**的条数（该 project 的 key 活跃条共 450：419 条无 `[branch:]` 标签 + 31 条仅 `main`）；换 `--branch superagent/T104-…` 得 419——过滤是真生效的，不是空转。

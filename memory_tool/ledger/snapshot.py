@@ -1,0 +1,203 @@
+"""One-shot render payload for the memory injection surface (P2).
+
+The injection plugin runs once per turn, so it must not spawn one subprocess per
+track. This module composes the whole payload in a single read: five tracks, slot
+health and an explicit degradation list — nothing that requires a second call
+except ``expand --id`` for a full body.
+
+Contract notes that matter for the renderer:
+
+* ``count`` is the **natural** number of active units in the track; ``truncated`` is
+  how many of them the payload dropped. ``count - truncated == len(entries)``.
+* ``mode`` is a judgement derived from the two thresholds (``full`` only when the
+  track fits both), reported so the renderer can decide how to present it. It does
+  **not** change the caps — those are the explicit ``--max-entries``/``--max-chars``.
+* Bodies are never included: a body is fetched deliberately with ``expand --id``.
+* A missing branch is **fail-open** (no branch filter) with a named degradation, the
+  same policy ``evolve`` uses; a missing ledger is exit ``2`` (cannot judge).
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+from dataclasses import dataclass, field
+from typing import Any
+
+from .evolve_md import parse_entry
+from .registry import project_hash
+from .store import Ledger, today_local
+
+__all__ = ["SnapshotOptions", "build_snapshot", "resolve_git_branch", "SNAPSHOT_SCHEMA"]
+
+#: Bumped when the payload shape changes in a way a renderer must notice.
+SNAPSHOT_SCHEMA = 1
+
+#: Tracks that render an entry list. ``daily`` and ``project_log`` render counts only.
+LISTED_TRACKS = ("memory", "user", "key")
+
+
+@dataclass
+class SnapshotOptions:
+    """Everything the payload depends on, so tests can pin it."""
+
+    cwd: str = field(default_factory=os.getcwd)
+    branch: str | None = None
+    project: str | None = None
+    max_entries: int = 200
+    max_chars: int = 60_000
+    full_threshold_entries: int = 200
+    full_threshold_chars: int = 60_000
+    summary_chars: int = 160
+    date: str | None = None
+    project_slugs: dict[str, str] = field(default_factory=dict)
+    project_map_info: dict[str, Any] = field(default_factory=dict)
+
+
+def resolve_git_branch(cwd: str) -> str | None:
+    """Resolve the current branch of ``cwd``; ``None`` when it cannot be known.
+
+    A detached HEAD (``HEAD``) is unresolved on purpose: there is no branch to filter
+    by, and inventing one would silently hide branch-scoped facts.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    name = (result.stdout or "").strip()
+    if not name or name == "HEAD":
+        return None
+    return name
+
+
+def build_snapshot(ledger: Ledger, options: SnapshotOptions) -> dict[str, Any]:
+    """Compose the render payload.
+
+    Args:
+        ledger: Open ledger (the caller owns the connection and its lifecycle).
+        options: Resolved options; see :class:`SnapshotOptions`.
+
+    Returns:
+        The payload described in ``docs/design/m1-writable-ledger.md`` §2.1.
+    """
+    degraded: list[str] = []
+    cwd = os.path.abspath(os.path.expanduser(options.cwd or os.getcwd()))
+
+    branch = options.branch
+    if branch is None:
+        branch = resolve_git_branch(cwd)
+        if branch is None:
+            degraded.append("branch_unresolved")
+
+    project = options.project or project_hash(cwd)
+    project_slug = options.project_slugs.get(project)
+    if options.project_map_info.get("available", True) is False:
+        degraded.append("project_map_unavailable")
+
+    tracks: dict[str, Any] = {}
+    for track in LISTED_TRACKS:
+        branch_filtered = False
+        kwargs: dict[str, Any] = {"track": track, "state": "active", "limit": None}
+        if track == "key":
+            kwargs["project"] = project
+            if branch is not None:
+                kwargs["branch"] = branch
+                branch_filtered = True
+        rows = ledger.list_units(**kwargs)
+        bucket = _render_track(rows, options)
+        if track == "key":
+            bucket["branch_filtered"] = branch_filtered
+        tracks[track] = bucket
+
+    day = options.date or today_local()
+    daily_count = len(ledger.list_units(track="daily", day=day, state="active", limit=None))
+    project_log_count = len(
+        ledger.list_units(track="project", project=project, state="active", limit=None)
+    )
+
+    return {
+        "ok": True,
+        "schema": SNAPSHOT_SCHEMA,
+        "cwd": cwd,
+        "branch": branch,
+        "project": project,
+        "project_slug": project_slug,
+        "tracks": tracks,
+        "daily": {"date": day, "count": daily_count},
+        "project_log": {"count": project_log_count},
+        "slots": _slot_health(ledger),
+        "degraded": degraded,
+    }
+
+
+def _render_track(rows: list[Any], options: SnapshotOptions) -> dict[str, Any]:
+    """Render one track's entries under the caps, with the mode judgement."""
+    total = len(rows)
+    total_chars = sum(len(row.content) for row in rows)
+    mode = (
+        "full"
+        if total <= options.full_threshold_entries and total_chars <= options.full_threshold_chars
+        else "summary"
+    )
+
+    entries: list[dict[str, Any]] = []
+    chars = 0
+    for row in rows:
+        if len(entries) >= options.max_entries:
+            break
+        length = len(row.content)
+        if entries and chars + length > options.max_chars:
+            break
+        entries.append(
+            {
+                "id": row.id,
+                "summary": parse_entry(row.content).summary_text(options.summary_chars),
+                "content_len": length,
+            }
+        )
+        chars += length
+    return {
+        "mode": mode,
+        "count": total,
+        "entries": entries,
+        "truncated": total - len(entries),
+    }
+
+
+def _slot_health(ledger: Ledger) -> dict[str, int]:
+    """Slot counters: active/deprecated unit counts and the multi-active invariant.
+
+    ``same_slot_multi_active`` counts (scope, slot) pairs that hold more than one
+    active unit — it must stay ``0``, and it is reported rather than asserted so a
+    caller can see the invariant instead of trusting it.
+    """
+    conn = ledger.conn
+    active = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM units WHERE state='active' AND slot IS NOT NULL"
+        ).fetchone()[0]
+    )
+    deprecated = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM units WHERE state='deprecated' AND slot IS NOT NULL"
+        ).fetchone()[0]
+    )
+    conflicts = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM (SELECT scope_key, slot FROM units "
+            "WHERE state='active' AND slot IS NOT NULL "
+            "GROUP BY scope_key, slot HAVING COUNT(*) > 1)"
+        ).fetchone()[0]
+    )
+    return {
+        "active": active,
+        "deprecated": deprecated,
+        "same_slot_multi_active": conflicts,
+    }

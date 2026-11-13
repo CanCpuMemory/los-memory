@@ -45,7 +45,9 @@ def import_evolve(
         ledger: Open ledger bound to an initialised connection.
         root: Corpus root (``~/.dsh/memories``).
         only: Optional track filter (``("memory","user",...)``).
-        project_map: Optional ``{directory_hash: display_slug}`` mapping.
+        project_map: Optional ``{directory_hash: slug}`` mapping, used **only** to
+            report slug coverage. Stored identity is always the evolve hash, so a unit
+            cannot become addressable under two names depending on import flags.
         samples: How many example entries to carry per track.
 
     Returns:
@@ -57,7 +59,7 @@ def import_evolve(
         if unknown:
             raise ValueError(f"unknown_track:{unknown[0]}")
 
-    discovery = discover(root, only=only_tuple, project_map=project_map)
+    discovery = discover(root, only=only_tuple)
     report: dict[str, Any] = {
         "root": str(Path(root).expanduser()),
         "only": list(only_tuple) if only_tuple else None,
@@ -93,6 +95,17 @@ def import_evolve(
     for track_file in discovery.files:
         _import_file(ledger, track_file, report, samples)
 
+    project_dirs = {track_file.project for track_file in discovery.files if track_file.project}
+    mapped = project_dirs & set(project_map or {})
+    report["project_coverage"] = {
+        "corpus_projects": len(project_dirs),
+        "mapped": len(mapped),
+        "unmapped": len(project_dirs - mapped),
+    }
+    report["project_slugs"] = {
+        directory: (project_map or {})[directory]
+        for directory in sorted(mapped)
+    }
     report["totals"] = {
         key: sum(bucket[key] for bucket in report["tracks"].values())
         for key in ("files", "entries", "created", "updated", "unchanged", "deprecated_imported",
@@ -127,6 +140,8 @@ def _import_file(
             "source_day": entry.day,
             "source_time": entry.time,
             "source_slot": entry.slot,
+            "source_branches": entry.branches,
+            "source_summary": entry.summary,
             "source_supersedes": entry.supersedes,
             "source_deprecated": entry.deprecated,
         }
@@ -134,6 +149,7 @@ def _import_file(
             track_file.track,
             entry.text,
             project=track_file.project,
+            branch=",".join(entry.branches) if entry.branches else None,
             slot=entry.slot,
             day=track_file.day,
             origin="import:evolve",

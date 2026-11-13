@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from collections.abc import Iterator
@@ -30,7 +31,9 @@ from typing import Any
 
 from . import schema
 from .import_evolve import import_evolve
+from .registry import DEFAULT_REGISTRY, load_project_slugs, try_load_project_slugs
 from .schema import STATES, TRACKS, LedgerRefusedError, LedgerUnavailableError
+from .snapshot import SnapshotOptions, build_snapshot
 from .store import Ledger
 
 __all__ = ["EXIT_OK", "EXIT_REFUSED", "EXIT_UNJUDGEABLE", "register", "run"]
@@ -117,13 +120,53 @@ def _register_actions(actions: Any) -> None:
         "--only", help="Comma-separated track filter (memory,user,key,project,daily)"
     )
     importer.add_argument("--project-map", help="JSON file mapping evolve directory hash to a slug")
+    importer.add_argument(
+        "--project-map-from-registry",
+        nargs="?",
+        const=DEFAULT_REGISTRY,
+        default=argparse.SUPPRESS,
+        help=(
+            "Map evolve directory hashes to project keys by hashing the workspace "
+            f"registry's project roots (default {DEFAULT_REGISTRY}); an explicit path "
+            "that is missing or unrecognised is exit 2"
+        ),
+    )
     importer.add_argument("--samples", type=int, default=3)
     _add_common_arguments(importer)
 
     init = actions.add_parser("init", help="Create/verify the ledger database")
     _add_common_arguments(init)
 
+    snapshot = actions.add_parser(
+        "snapshot", help="One-shot render payload for the injection surface (P2)"
+    )
+    snapshot.add_argument("--cwd", default=os.getcwd())
+    snapshot.add_argument("--branch", help="Branch scope (default: git HEAD of --cwd)")
+    snapshot.add_argument("--project", help="Project directory hash (default: sha1(cwd)[:12])")
+    snapshot.add_argument("--date", help="Daily date to count (default: today)")
+    snapshot.add_argument("--max-entries", type=int, default=200)
+    snapshot.add_argument("--max-chars", type=int, default=60000)
+    snapshot.add_argument("--full-threshold-entries", type=int, default=200)
+    snapshot.add_argument("--full-threshold-chars", type=int, default=60000)
+    snapshot.add_argument("--summary-chars", type=int, default=160)
+    snapshot.add_argument(
+        "--project-map-from-registry",
+        nargs="?",
+        const=DEFAULT_REGISTRY,
+        default=argparse.SUPPRESS,
+        help="Registry used for project_slug (best effort: unavailability is reported, not fatal)",
+    )
+    snapshot.add_argument("--json", action="store_true", help="Emit JSON (the default)")
+    _add_common_arguments(snapshot)
+
     status = actions.add_parser("status", help="Ledger counts and index state")
+    status.add_argument(
+        "--project-map-from-registry",
+        nargs="?",
+        const=DEFAULT_REGISTRY,
+        default=argparse.SUPPRESS,
+        help="Registry used for the project_slug_assigned/unassigned counters",
+    )
     _add_common_arguments(status)
 
 
@@ -166,6 +209,8 @@ def run(args: argparse.Namespace) -> int:
             return _cmd_init(args)
         if action == "status":
             return _cmd_status(args)
+        if action == "snapshot":
+            return _cmd_snapshot(args)
         raise ValueError("unknown_mem_action")
     except LedgerRefusedError as exc:
         return _fail(args, exc, EXIT_REFUSED)
@@ -229,7 +274,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
     with _session(args, write=False) as (ledger, context):
         rows = ledger.list_units(
             track=args.track,
-            project=args.project,
+            project=ledger.project_aliases(args.project) or None,
             state=args.state,
             branch=args.branch,
             day=args.day,
@@ -265,7 +310,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         data = ledger.search(
             args.query,
             track=args.track,
-            project=args.project,
+            project=ledger.project_aliases(args.project) or None,
             limit=args.limit,
             include_archived=args.include_archived,
         )
@@ -285,7 +330,8 @@ def _cmd_import(args: argparse.Namespace) -> int:
     if not root.is_dir():
         raise LedgerUnavailableError("corpus_root_missing", root=str(root))
     only = tuple(part.strip() for part in (args.only or "").split(",") if part.strip()) or None
-    project_map = _load_project_map(args.project_map)
+    explicit_map = _load_project_map(args.project_map)
+    project_map, map_info = _resolve_project_slugs(args, explicit_map=explicit_map)
     dry_run = bool(getattr(args, "dry_run", False))
     with _session(args, write=True, dry_run=dry_run) as (ledger, context):
         report = import_evolve(
@@ -294,6 +340,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
     report["dry_run"] = dry_run
     report["db"] = context["db"]
     report["simulated_fresh"] = context["simulated_fresh"]
+    report["project_map"] = {**map_info, **report.pop("project_coverage")}
     lines = [f"root: {report['root']}"]
     for track, bucket in report["tracks"].items():
         lines.append(
@@ -312,11 +359,96 @@ def _cmd_import(args: argparse.Namespace) -> int:
         f"skipped: TODOS files={report['skipped']['todos_files']} "
         f"({report['skipped']['todos_bytes']} bytes) — {report['skipped']['reason']}"
     )
+    mapping = report["project_map"]
+    lines.append(
+        f"project_map: available={mapping['available']} source={mapping['source']} "
+        f"corpus_projects={mapping['corpus_projects']} mapped={mapping['mapped']} "
+        f"unmapped={mapping['unmapped']}"
+    )
     for track, bucket in report["tracks"].items():
         for sample in bucket["samples"]:
             lines.append(f"sample[{track}] {sample['source_file']}#{sample['source_id'] or '-'} "
                          f"{sample['excerpt'][:100]}")
     return _ok(args, "mem import-evolve", report, context, "\n".join(lines))
+
+
+def _cmd_snapshot(args: argparse.Namespace) -> int:
+    """Emit the one-shot render payload (a read: it never creates the ledger)."""
+    if getattr(args, "json", False):
+        args.mem_format = "json"
+    for name in ("max_entries", "max_chars", "full_threshold_entries", "full_threshold_chars"):
+        value = getattr(args, name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"invalid_{name}")
+    if not isinstance(args.summary_chars, int) or args.summary_chars < 1:
+        raise ValueError("invalid_summary_chars")
+
+    slugs = _cached_project_slugs(args)
+    map_info = getattr(
+        args, "_project_map_info_cache", {"source": None, "available": bool(slugs)}
+    )
+    options = SnapshotOptions(
+        cwd=os.path.abspath(os.path.expanduser(args.cwd)),
+        branch=args.branch,
+        project=args.project,
+        max_entries=args.max_entries,
+        max_chars=args.max_chars,
+        full_threshold_entries=args.full_threshold_entries,
+        full_threshold_chars=args.full_threshold_chars,
+        summary_chars=args.summary_chars,
+        date=args.date,
+        project_slugs=slugs,
+        project_map_info=map_info,
+    )
+    with _session(args, write=False) as (ledger, _context):
+        payload = build_snapshot(ledger, options)
+
+    if args.mem_format == "text":
+        lines = [
+            f"cwd={payload['cwd']} branch={payload['branch']} "
+            f"project={payload['project']} slug={payload['project_slug']}",
+        ]
+        for track, bucket in payload["tracks"].items():
+            lines.append(
+                f"{track:<7} {bucket['mode']:<7} count={bucket['count']:<5} "
+                f"shown={len(bucket['entries']):<4} truncated={bucket['truncated']}"
+            )
+        lines.append(f"daily {payload['daily']['date']} count={payload['daily']['count']}")
+        lines.append(f"project_log count={payload['project_log']['count']}")
+        slots = payload["slots"]
+        lines.append(
+            f"slots active={slots['active']} deprecated={slots['deprecated']} "
+            f"same_slot_multi_active={slots['same_slot_multi_active']}"
+        )
+        lines.append(f"degraded={payload['degraded']}")
+        print("\n".join(lines))
+        return EXIT_OK
+    print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+    return EXIT_OK
+
+
+def _resolve_project_slugs(
+    args: argparse.Namespace, explicit_map: dict[str, str] | None
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Build the hash→slug map: registry lookup, an explicit map won over it.
+
+    An **explicitly given** ``--project-map-from-registry`` is required to work
+    (exit 2 when it does not). The default registry is best effort: its absence is
+    reported in ``project_map``/``degraded`` instead of failing the command, because
+    a read (and a CI run) must not depend on this machine's workspace layout.
+    """
+    explicit_registry = hasattr(args, "project_map_from_registry")
+    registry_path = getattr(args, "project_map_from_registry", None)
+    if explicit_registry:
+        registry_slugs = load_project_slugs(registry_path)
+        info: dict[str, Any] = {"source": registry_path, "available": True}
+    else:
+        registry_slugs, info = try_load_project_slugs()
+    merged = dict(registry_slugs)
+    if explicit_map:
+        merged.update(explicit_map)
+        info = {**info, "explicit_entries": len(explicit_map)}
+    return merged, {**info, "entries": len(merged)}
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -338,15 +470,37 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     with _session(args, write=False) as (ledger, context):
+        slugs = ledger.project_slugs
+        map_info = getattr(
+            args, "_project_map_info_cache", {"source": None, "available": bool(slugs)}
+        )
         data = ledger.status()
         data["db"] = context["db"]
         data["schema_version"] = schema.schema_version(ledger.conn)
+        projects = [
+            str(row[0])
+            for row in ledger.conn.execute(
+                "SELECT DISTINCT project FROM units "
+                "WHERE project IS NOT NULL AND track IN ('key','project')"
+            )
+        ]
+        # A stored value is a hash (imported without a map) or already a registry key
+        # (imported with one), so both shapes must count as assigned.
+        known = set(slugs) | set(slugs.values())
+        assigned = sum(1 for project in projects if project in known)
+        data["project_slug_assigned"] = assigned
+        data["project_slug_unassigned"] = len(projects) - assigned
+        data["project_slug_map"] = {**map_info, "mapped_projects": len(slugs)}
     lines = [
         f"db: {data['db']} (schema v{data['schema_version']})",
         f"units={data['units']} revisions={data['revisions']} events={data['events']} "
         f"fts_rows={data['fts_rows']} bigram_rows={data['bigram_rows']} bytes={data['bytes']}",
         f"by_track={data['by_track']}",
         f"by_state={data['by_state']}",
+        f"project_slug: assigned={data['project_slug_assigned']} "
+        f"unassigned={data['project_slug_unassigned']} "
+        f"(registry available={data['project_slug_map']['available']}, "
+        f"mapped_projects={data['project_slug_map']['mapped_projects']})",
     ]
     return _ok(args, "mem status", data, context, "\n".join(lines))
 
@@ -377,12 +531,30 @@ def _session(
     else:
         conn = schema.connect(path, create=write)
         context = {"db": path, "simulated_fresh": False}
-    ledger = Ledger(conn)
+    ledger = Ledger(conn, project_slugs=_cached_project_slugs(args))
     try:
         with ledger.transaction(dry_run=dry_run):
             yield ledger, context
     finally:
         conn.close()
+
+
+def _cached_project_slugs(args: argparse.Namespace) -> dict[str, str]:
+    """Resolve the hash→slug map once per command (best effort unless made explicit)."""
+    cached = getattr(args, "_project_slugs_cache", None)
+    if cached is not None:
+        return cached
+    try:
+        slugs, info = _resolve_project_slugs(args, explicit_map=None)
+    except LedgerUnavailableError:
+        slugs, info = {}, {
+            "source": None,
+            "available": False,
+            "reason": "project_registry_unavailable",
+        }
+    args._project_slugs_cache = slugs
+    args._project_map_info_cache = info
+    return slugs
 
 
 def _treat_as_absent(path: str) -> bool:
@@ -485,7 +657,11 @@ def _fail(
         "ok": False,
         "command": f"mem {getattr(args, 'mem_action', '')}",
         "dry_run": bool(getattr(args, "dry_run", False)),
-        "error": {"code": error_code, "message": str(exc)},
+        "error": {
+            "code": error_code,
+            "detail": getattr(exc, "detail_code", None),
+            "message": str(exc),
+        },
         "details": details,
     }
     if getattr(args, "mem_format", "json") == "text":

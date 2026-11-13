@@ -153,6 +153,12 @@ Nowledge 有 40+ 子命令，替代不等于逐个复刻。**必需**：写入�
 
 ### B3 写入运行时（隔离库，L）
 
+> **进展（2026-11-13）**：DSH 语料侧的 B3 前置已由 M1 写运行时落地——`service.sqlite3` +
+> `los-memory mem ...` + `~/.dsh/memories` 五轨导入器，见
+> [`m1-writable-ledger.md`](m1-writable-ledger.md)。它**只承接 DSH 语料**（原由
+> `dsh-memory-evolve` 写），不写 Nowledge、不接管本批的 Nowledge 主库替换写入权；
+> N1–N11 与跨设备 outbox/receipt 仍未实现。
+
 - **目的**：把 P2-01 的契约变成能跑的运行时，但**只在隔离库**。
 - **依赖**：B1、B2（写-查闭环要用 B2 的检索）。
 - **交付**：`service.sqlite3` 的事件/修订/outbox/幂等/冲突/撤回/擦除计划；N1–N11 先写测试后写实现；**一个**客户端（Codex 或 Kimi）真实写实验数据并查看 receipt。

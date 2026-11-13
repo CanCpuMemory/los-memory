@@ -19,7 +19,7 @@ import json
 import re
 import secrets
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -130,8 +130,10 @@ def validate_scope(
             raise ValueError("project_required")
     elif project is not None:
         raise ValueError("project_not_applicable")
-    if branch is not None and track not in BRANCH_SCOPED_TRACKS:
-        raise ValueError("branch_not_applicable")
+    if branch is not None:
+        if track not in BRANCH_SCOPED_TRACKS:
+            raise ValueError("branch_not_applicable")
+        branch = normalize_branches(branch)
     if track == "daily":
         if day is None:
             day = today_local()
@@ -140,6 +142,24 @@ def validate_scope(
     elif day is not None:
         raise ValueError("day_not_applicable")
     return project, branch, day
+
+
+def normalize_branches(branch: str | None) -> str | None:
+    """Normalise a branch scope to ``"a,b"`` form; ``None``/empty means every branch.
+
+    ``evolve`` writes ``[branch:main,dev]`` and treats an absent tag as "visible in
+    every branch", so a single column can hold the whole list: ``NULL`` = all
+    branches, otherwise a comma-separated set.
+    """
+    if branch is None:
+        return None
+    parts = [part.strip() for part in str(branch).split(",") if part.strip()]
+    if not parts:
+        raise ValueError("invalid_branch")
+    for part in parts:
+        if SCOPE_SEPARATOR in part:
+            raise ValueError("reserved_separator_in_branch")
+    return ",".join(dict.fromkeys(parts))
 
 
 def _clean(value: str | None) -> str | None:
@@ -233,9 +253,52 @@ _LATEST_REVISION_SQL = (
 class Ledger:
     """Writable memory ledger bound to one open SQLite connection."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        """Bind the ledger to an open, schema-initialised connection."""
+    def __init__(
+        self, conn: sqlite3.Connection, project_slugs: dict[str, str] | None = None
+    ) -> None:
+        """Bind the ledger to an open, schema-initialised connection.
+
+        Args:
+            conn: Open connection with the ledger schema installed.
+            project_slugs: Optional ``{evolve directory hash: registry key}`` map. It
+                only *resolves* the identifiers a caller uses: the stored identity of
+                a project-scoped unit is always the evolve hash, so the same fact
+                cannot end up addressable under two names depending on which flags an
+                import used.
+        """
         self.conn = conn
+        self.project_slugs = dict(project_slugs or {})
+        self._slug_to_hash = {slug: digest for digest, slug in self.project_slugs.items()}
+
+    def resolve_project(self, project: str | None) -> str | None:
+        """Resolve a project reference (hash or registry key) to the stored identity."""
+        if project is None:
+            return None
+        value = str(project).strip()
+        if not value:
+            return None
+        if value in self.project_slugs:
+            return value
+        return self._slug_to_hash.get(value, value)
+
+    def project_aliases(self, project: str | None) -> list[str]:
+        """Return every store-level value that refers to this project.
+
+        A slug and its hash are the same project, so a query must match either; this
+        keeps ``list --project dsfolder`` and ``list --project 2d4994d462af``
+        equivalent once a registry mapping is loaded.
+        """
+        resolved = self.resolve_project(project)
+        if resolved is None:
+            return []
+        aliases = [resolved]
+        slug = self.project_slugs.get(resolved)
+        if slug and slug not in aliases:
+            aliases.append(slug)
+        raw = None if project is None else str(project).strip()
+        if raw and raw not in aliases:
+            aliases.append(raw)
+        return aliases
 
     # ------------------------------------------------------------------ writes
 
@@ -294,6 +357,7 @@ class Ledger:
             A JSON-ready dict describing what happened.
         """
         project, branch, day = validate_scope(track, project, branch, day)
+        project = self.resolve_project(project)
         text = canonical_content(content)
         digest = content_digest(text)
         slot = _clean(slot)
@@ -515,11 +579,11 @@ class Ledger:
         self,
         *,
         track: str | None = None,
-        project: str | None = None,
+        project: str | Sequence[str] | None = None,
         state: str = "active",
         branch: str | None = None,
         day: str | None = None,
-        limit: int = 50,
+        limit: int | None = 50,
         offset: int = 0,
     ) -> list[LedgerRow]:
         """List units with their current revision, newest last.
@@ -540,16 +604,30 @@ class Ledger:
             sql += " AND u.track=?"
             params.append(track)
         if project is not None:
-            sql += " AND u.project=?"
-            params.append(project)
+            wanted_projects = [project] if isinstance(project, str) else list(project)
+            marks = ",".join("?" for _ in wanted_projects)
+            sql += f" AND u.project IN ({marks})"
+            params.extend(wanted_projects)
         if branch is not None:
-            sql += " AND u.branch_scope=?"
-            params.append(branch)
+            # A unit with no branch scope is visible in every branch; otherwise the
+            # requested branches must intersect the unit's set. Matched with
+            # `instr` on a delimited copy so `main` cannot match `main-old`.
+            wanted = [part.strip() for part in str(branch).split(",") if part.strip()]
+            if not wanted:
+                raise ValueError("invalid_branch")
+            clause = " OR ".join(
+                "(u.branch_scope IS NULL OR instr(',' || u.branch_scope || ',', ?) > 0)"
+                for _ in wanted
+            )
+            sql += f" AND ({clause})"
+            params.extend(f",{part}," for part in wanted)
         if day is not None:
             sql += " AND u.day=?"
             params.append(day)
-        sql += " ORDER BY u.created_at ASC, u.id ASC LIMIT ? OFFSET ?"
-        params.extend([max(0, limit), max(0, offset)])
+        sql += " ORDER BY u.created_at ASC, u.id ASC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([max(0, limit), max(0, offset)])
         rows = self.conn.execute(sql, tuple(params)).fetchall()
         return [LedgerRow.from_row(row) for row in rows]
 
@@ -655,7 +733,7 @@ class Ledger:
         query: str,
         *,
         track: str | None = None,
-        project: str | None = None,
+        project: str | Sequence[str] | None = None,
         limit: int = 10,
         include_archived: bool = False,
     ) -> dict[str, Any]:
@@ -727,8 +805,10 @@ class Ledger:
             sql += " AND u.track=?"
             params.append(track)
         if project is not None:
-            sql += " AND u.project=?"
-            params.append(project)
+            wanted_projects = [project] if isinstance(project, str) else list(project)
+            marks = ",".join("?" for _ in wanted_projects)
+            sql += f" AND u.project IN ({marks})"
+            params.extend(wanted_projects)
         if candidates is not None:
             marks = ",".join("?" for _ in candidates)
             sql += f" AND u.id IN ({marks})"
