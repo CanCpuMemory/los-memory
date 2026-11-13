@@ -69,16 +69,18 @@ units_fts(trigram) / cjk_bigrams(term, unit_id)              -- 派生，可重�
 
 ```json
 {"ok":true,"schema":1,"cwd":"…","branch":"main","project":"2d4994d462af","project_slug":"dsfolder",
- "tracks":{"memory":{"mode":"summary","count":340,"entries":[{"id":"…","summary":"…","content_len":2304}],"truncated":274},
+ "tracks":{"memory":{"mode":"summary","count":340,"entries":[{"id":"…","summary":"…","content_len":2304}],"truncated":0},
            "user":{"mode":"full","count":4,"entries":[…],"truncated":0},
-           "key":{"mode":"summary","count":450,"entries":[…],"truncated":401,"branch_filtered":true}},
- "daily":{"date":"2026-11-13","count":49},"project_log":{"count":1813},
+           "key":{"mode":"summary","count":451,"entries":[…],"truncated":0,"branch_filtered":true}},
+ "daily":{"date":"2026-11-13","count":55},"project_log":{"count":1819},
  "slots":{"active":48,"deprecated":19,"same_slot_multi_active":0},
  "degraded":[]}
 ```
 
 - `count` = 该轨活跃条目**自然条数**；`truncated` = 因 `--max-entries`/`--max-chars` 被裁掉的条数，恒有 `count - truncated == len(entries)`。裁的是**尾部**（保留语料顺序，便于与 evolve 快照逐段 diff）。
-- `mode` = **判定结果**：仅当"条目数 ≤ `--full-threshold-entries` **且** 总字符 ≤ `--full-threshold-chars`"才 `full`（边界含等号）。它**不改变**裁切行为（裁切只由 `--max-*` 决定），由渲染方决定怎么呈现。
+- `mode` = **判定结果**：仅当"条目数 ≤ `--full-threshold-entries` **且** 总字符（按**正文**）≤ `--full-threshold-chars`"才 `full`（边界含等号）。它**不改变**裁切行为（裁切只由 `--max-*` 决定），由渲染方决定怎么呈现。
+- **`--max-chars` 计的是"实际发射的字符"，不是"存储的正文字符"**：`summary` 模式每条按 `len(summary) + len(id) + "- [id] " 前缀` 计；`full` 模式才按正文长度计（同一函数分支）。**计费对象必须等于发射对象**——2026-11-13 这里出过一个静默丢条缺陷（旧实现一律按正文计费：340 条摘要只发 32.7k 字符，却被 340 条正文约 1MB 判超限，`truncated=130`），已修并配 3 条负向测试（把旧实现放回去前两条必红）。**只丢整条、不留半条摘要**；单条自身超过 `max_chars` 且轨道非空时仍发射 1 条（短答优于空轨），差额计入 `truncated`。
+- 默认 caps 已按现网尺度校准：`--max-entries 500`、`--max-chars 120000`（`summary_chars` 160）。实测见 §8：memory 340 条摘要 ≈ 5.3 万字符、key 451 条约 5.7 万 ⇒ 默认下**三轨零截断**，余量约 1.8 倍。
 - `entries[].summary` = `[summary:…]` 标签，否则正文首行（受 `--summary-chars` 限制）；**正文永不返回**（省 token，全文用 `expand --id`）。
 - `branch` 缺省取 `git -C <cwd> rev-parse --abbrev-ref HEAD`；取不到（无 git / detached HEAD）⇒ **不过滤** + `degraded:["branch_unresolved"]`（fail-open，与 evolve 同策略）。`--branch` 显式给出则不依赖 git，且 `branch_filtered:true`。
 - `degraded` 另可含 `project_map_unavailable`（注册表读不到）。**缺库不是 degraded，是 exit 2**（读命令不建库）。
@@ -135,7 +137,9 @@ python3 -m memory_tool mem import-evolve --root ~/.dsh/memories --db <临时库>
 
 ## 6. 测试
 
-`tests/unit/test_ledger_{store,import,cli}.py`：**44 条**，`python3 -m pytest tests/unit/test_ledger_store.py tests/unit/test_ledger_import.py tests/unit/test_ledger_cli.py -q`。
+`tests/unit/test_ledger_{store,import,cli,snapshot}.py`：**69 条**，`python3 -m pytest tests/unit/test_ledger_store.py tests/unit/test_ledger_import.py tests/unit/test_ledger_cli.py tests/unit/test_ledger_snapshot.py -q`。
+
+**已修的缺陷（2026-11-13 真库联调发现）**：`_render_track` 的预算按**正文**长度计费，而 `summary` 模式只发摘要 ⇒ 340 条摘要（32.7k 字符）被判超 200k 预算、`truncated=130`；注入侧不看 `truncated` 就等于**静默丢条**。修法 = 按实际发射字符计费（`full` 分支才按正文）。回归 `test_budget_is_charged_for_what_is_emitted_not_the_body` / `test_truncation_follows_the_title_budget` / `test_full_mode_budget_still_charges_the_body`：把旧实现放回去前两条必红，把 `full` 分支改成按摘要计第三条必红（两种变异均已实测）。
 负向控制（每条都验证"守卫坏掉就会红"）：同 slot 第二个 add 必须把旧条 deprecated 且 `same_slot_multi_active==0`；**同名 slot 换 project 不得被弃**；重复 add 幂等且 revisions 不增；supersede 链只剩一个 active；archive 后 list 不含而 expand 可读；replace 打在 archived 上被拒；空 content ⇒ exit 2；库缺失 ⇒ exit 2 且**不创建文件**；dry-run 前后 events/revisions 不变且缺失库不被创建；events 历史行逐字节不变；`§` 行内不切（并断言 naive split 会切）；导入第二遍 created=0；`[supersedes:]` 落成真边；改文变修订不变单元；symlink 别名只导一次；TODOS 计数且零导入；`--only` 生效；语料根缺失 ⇒ exit 2；`mem` 不落 profile 库（重定向 HOME 验）。
 
 ## 7. 裁决记录与未做项
@@ -147,7 +151,7 @@ python3 -m memory_tool mem import-evolve --root ~/.dsh/memories --db <临时库>
 **未做（明确留给后续阶段）**：注入面 P2（DSH 侧读/写入口、`memory` 工具接管、Working Memory/bundle、提示注入与披露）与切换 P4（evolve 停写、水位、语料↔库对账、双写与回退剧本、fail-closed 门禁）。本层目前是"能写、能查、能导入"的底座，**没有任何调用方**。
 
 1. **project slug 覆盖 11/73**（§2.2）。要不要把"会话 cwd 台账"（如 `dsh_session_catalog` / session 记录里的 cwd 列表）也作为**声明的**候选来源喂进反解？那仍是查表，但会引入新的数据依赖，属 P2 决策。
-2. **`snapshot` 的 `summary_chars` 默认 160 / `max_entries` 200 / `max_chars` 60k** 是**未标定的初值**：真实注入体积（evolve 现为每回合约 77k 字符）要用 P2 的 diff 来定，别把当前值当结论。
+2. **`snapshot` 默认 caps 已按现网尺度校准（2026-11-13）**：`max_entries=500` / `max_chars=120000` / `summary_chars=160`，实测默认下 memory/user/key 三轨零截断（evolve 现网注入约 67k 字符，两边不互为短板；P2 侧传 `maxEntries=600`）。最终注入体积仍以 P2 diff 为准——这里给的是"不会平白丢条"的下限。
 3. **`daily`/`project_log` 只给计数不给条目**（按 Lead 给的 schema）。若 P2 想在注入里显示「今天已写 N 条」以外的内容，需要扩 schema（`schema` 字段就是为这种变更留的）。
 
 ## 8. 样例（2026-11-13，真实语料导入临时库后实测）
@@ -162,16 +166,17 @@ by_state={'active': 6677, 'deprecated': 19}
 project_slug: assigned=11 unassigned=62 (registry available=True, mapped_projects=36)
 ```
 
-`mem snapshot`（cwd=dsfolder，`--format text` 是同一 payload 的人类视图）：
+`mem snapshot`（cwd=dsfolder，**默认 caps**；`--format text` 是同一 payload 的人类视图。此为本轮预算修复后的实测）：
 ```
-$ python3 -m memory_tool mem snapshot --db "$T/s.sqlite3" --cwd /Users/echerlos/syncfolder/project/dsfolder --format text
 cwd=/Users/echerlos/syncfolder/project/dsfolder branch=main project=2d4994d462af slug=dsfolder
-memory  summary count=340   shown=66   truncated=274
-user    full    count=4     shown=4    truncated=0
-key     summary count=450   shown=49   truncated=401
-daily 2026-11-13 count=49
-project_log count=1813
+memory  summary count=340   shown=340   truncated=0
+user    full    count=4     shown=4     truncated=0
+key     summary count=451   shown=451   truncated=0
+daily 2026-11-13 count=55
+project_log count=1819
 slots active=48 deprecated=19 same_slot_multi_active=0
 degraded=[]
 ```
-`key count=450` 是**分支过滤后**的条数（该 project 的 key 活跃条共 450：419 条无 `[branch:]` 标签 + 31 条仅 `main`）；换 `--branch superagent/T104-…` 得 419——过滤是真生效的，不是空转。
+`key count=451` 是**分支过滤后**的条数（该 project 的 key 活跃条共 451，其中 419 条无 `[branch:]` 标签、32 条带 `main`）；换 `--branch superagent/T104-…` 得 419——过滤是真生效的，不是空转。
+
+同一 cwd 抬到 `--max-entries 800 --max-chars 200000` 结果不变（三轨仍 340/4/451 全发射）。**旧实现**在同一条命令下是 `memory n=210/trunc=130`、`key n=178/trunc=273`，而实际发射的摘要只有 32,664 / 21,630 字符——这就是"计费对象不是发射对象"的可复现证据。

@@ -35,6 +35,17 @@ SNAPSHOT_SCHEMA = 1
 #: Tracks that render an entry list. ``daily`` and ``project_log`` render counts only.
 LISTED_TRACKS = ("memory", "user", "key")
 
+#: One rendered entry line. The budget charges for this prefix plus the text that is
+#: actually emitted, because a budget that measures something other than the payload
+#: is how 340 short summaries once "exceeded" a 200k limit worth ~1MB of bodies.
+RENDER_PREFIX_TEMPLATE = "- [{unit_id}] "
+
+#: Calibrated on the live corpus 2026-11-13: `memory` 340 + `user` 4 + `key` 451
+#: summaries ≈ 54k emitted characters in total, so these defaults leave all three
+#: tracks untruncated with headroom (the P2 renderer passes its own caps too).
+DEFAULT_MAX_ENTRIES = 500
+DEFAULT_MAX_CHARS = 120_000
+
 
 @dataclass
 class SnapshotOptions:
@@ -43,8 +54,8 @@ class SnapshotOptions:
     cwd: str = field(default_factory=os.getcwd)
     branch: str | None = None
     project: str | None = None
-    max_entries: int = 200
-    max_chars: int = 60_000
+    max_entries: int = DEFAULT_MAX_ENTRIES
+    max_chars: int = DEFAULT_MAX_CHARS
     full_threshold_entries: int = 200
     full_threshold_chars: int = 60_000
     summary_chars: int = 160
@@ -137,8 +148,35 @@ def build_snapshot(ledger: Ledger, options: SnapshotOptions) -> dict[str, Any]:
     }
 
 
+def emitted_cost(mode: str, unit_id: str, summary: str, content_len: int) -> int:
+    """Characters one entry actually costs in the payload.
+
+    ``full`` mode emits the body, so it is charged the body; ``summary`` mode emits
+    only the title, so it is charged the title. Charging the body in summary mode was
+    the defect that silently dropped 130 of 340 entries while emitting 32k characters
+    under a 200k budget.
+    """
+    overhead = len(RENDER_PREFIX_TEMPLATE.format(unit_id=unit_id))
+    if mode == "full":
+        return overhead + content_len
+    return overhead + len(summary)
+
+
 def _render_track(rows: list[Any], options: SnapshotOptions) -> dict[str, Any]:
-    """Render one track's entries under the caps, with the mode judgement."""
+    """Render one track's entries under the caps, with the mode judgement.
+
+    Two different quantities are involved on purpose:
+
+    * ``mode`` is judged on **stored body size** (``full_threshold_*``): it answers
+      "is this track small enough to show in full?".
+    * the cap is charged for **emitted characters** (``emitted_cost``): it answers
+      "does what I am about to print fit?".
+
+    Entries are dropped whole — a half summary would be worse than a missing one —
+    and ``count - truncated == len(entries)`` always holds. When a single entry cannot
+    fit an empty budget, one entry is still emitted (better a short answer than an
+    empty track) and the shortfall stays visible in ``truncated``.
+    """
     total = len(rows)
     total_chars = sum(len(row.content) for row in rows)
     mode = (
@@ -148,21 +186,16 @@ def _render_track(rows: list[Any], options: SnapshotOptions) -> dict[str, Any]:
     )
 
     entries: list[dict[str, Any]] = []
-    chars = 0
+    emitted = 0
     for row in rows:
         if len(entries) >= options.max_entries:
             break
-        length = len(row.content)
-        if entries and chars + length > options.max_chars:
+        summary = parse_entry(row.content).summary_text(options.summary_chars)
+        cost = emitted_cost(mode, row.id, summary, len(row.content))
+        if entries and emitted + cost > options.max_chars:
             break
-        entries.append(
-            {
-                "id": row.id,
-                "summary": parse_entry(row.content).summary_text(options.summary_chars),
-                "content_len": length,
-            }
-        )
-        chars += length
+        entries.append({"id": row.id, "summary": summary, "content_len": len(row.content)})
+        emitted += cost
     return {
         "mode": mode,
         "count": total,

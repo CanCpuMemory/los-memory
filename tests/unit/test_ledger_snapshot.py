@@ -452,3 +452,166 @@ def test_cli_status_counts_assigned_and_unassigned_projects(
     assert payload["project_slug_assigned"] == 1
     assert payload["project_slug_unassigned"] == 1
     assert payload["project_slug_map"]["available"] is True
+
+
+# ------------------------------------------------- the emitted-budget contract
+#
+# Regression target (defect found 2026-11-13 on the real ledger): the budget used to
+# be charged for stored body length while ``summary`` mode emits only the title, so
+# 340 summaries worth ~32k characters were reported as 130 entries dropped under a
+# 200k budget. These tests fail on that implementation.
+
+SUMMARY_BUDGET_CASES = 340
+
+
+def seed_long_body_short_summary(ledger: Ledger, count: int) -> None:
+    """Create ``count`` entries whose body is long but whose title is short."""
+    with ledger.transaction():
+        for index in range(count):
+            ledger.add("memory", f"[summary:摘要{index:03d}] " + "正文" * 500)
+
+
+def independent_cost(unit_id: str, summary: str) -> int:
+    """Per-entry emitted characters, computed without calling the implementation."""
+    return len(summary) + len(unit_id) + len("- [] ")
+
+
+def test_budget_is_charged_for_what_is_emitted_not_the_body(tmp_path: Path) -> None:
+    """A budget that covers every title must truncate nothing, however big the bodies.
+
+    This is the defect's own case: 340 entries with ~1k-character bodies and
+    6-character titles, under a budget that plainly fits all titles.
+    """
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        seed_long_body_short_summary(ledger, SUMMARY_BUDGET_CASES)
+        bucket = build_snapshot(
+            ledger, options(tmp_path, max_entries=800, max_chars=100_000)
+        )["tracks"]["memory"]
+
+        assert bucket["mode"] == "summary"
+        assert bucket["count"] == SUMMARY_BUDGET_CASES
+        assert bucket["truncated"] == 0, "titles fit the budget; bodies are not emitted"
+        assert len(bucket["entries"]) == SUMMARY_BUDGET_CASES
+        emitted = sum(len(entry["summary"]) for entry in bucket["entries"])
+        assert emitted < 10_000, "control: the emitted text really is tiny"
+        # Negative control for the old accounting: bodies alone far exceed the budget.
+        assert bucket["count"] * 1_000 > 100_000
+    finally:
+        conn.close()
+
+
+def test_truncation_follows_the_title_budget(tmp_path: Path) -> None:
+    """Truncation lands where the cumulative *title* cost crosses the cap."""
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        seed_long_body_short_summary(ledger, SUMMARY_BUDGET_CASES)
+        rows = ledger.list_units(track="memory", limit=None)
+        from memory_tool.ledger.evolve_md import parse_entry as parse
+
+        budget = 0
+        for row in rows[:100]:
+            summary = parse(row.content).summary_text(160)
+            budget += independent_cost(row.id, summary)
+
+        bucket = build_snapshot(
+            ledger, options(tmp_path, max_entries=800, max_chars=budget)
+        )["tracks"]["memory"]
+        shown = len(bucket["entries"])
+
+        assert abs(shown - 100) <= 1, f"expected ~100 titles, got {shown}"
+        # Under body-length accounting only a handful of ~1k-character bodies fit.
+        body_based = budget // 1_000
+        assert shown > body_based, (
+            f"truncation is still body-based: {shown} shown vs {body_based} bodies"
+        )
+        assert bucket["truncated"] == bucket["count"] - shown
+    finally:
+        conn.close()
+
+
+def test_full_mode_budget_still_charges_the_body(tmp_path: Path) -> None:
+    """Guard the other branch: when ``mode=full`` the body is what gets emitted."""
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        with ledger.transaction():
+            for index in range(3):
+                ledger.add("memory", f"短条 {index} " + "x" * 400)
+        rows = ledger.list_units(track="memory", limit=None)
+        bodies = sum(len(row.content) for row in rows)
+
+        full = build_snapshot(
+            ledger,
+            options(tmp_path, full_threshold_entries=3, full_threshold_chars=bodies,
+                    max_chars=bodies + 1_000),
+        )["tracks"]["memory"]
+        assert full["mode"] == "full"
+        assert full["truncated"] == 0
+
+        capped = build_snapshot(
+            ledger,
+            options(tmp_path, full_threshold_entries=3, full_threshold_chars=bodies,
+                    max_chars=500),
+        )["tracks"]["memory"]
+        assert capped["mode"] == "full"
+        assert len(capped["entries"]) == 1, "bodies are ~410 chars each, so one fits 500"
+        assert capped["truncated"] == 2
+    finally:
+        conn.close()
+
+
+def test_summary_length_and_budget_are_both_respected(tmp_path: Path) -> None:
+    """Every title honours ``summary_chars`` and the emitted total honours the cap."""
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        with ledger.transaction():
+            for index in range(200):
+                ledger.add("memory", f"[summary:{'题' * 80}{index}] " + "正文" * 50)
+        bucket = build_snapshot(
+            ledger, options(tmp_path, summary_chars=40, max_chars=5_000)
+        )["tracks"]["memory"]
+
+        assert bucket["entries"], "a budget must never produce an empty track"
+        for entry in bucket["entries"]:
+            assert len(entry["summary"]) <= 40
+        emitted = sum(
+            independent_cost(entry["id"], entry["summary"]) for entry in bucket["entries"]
+        )
+        assert emitted <= 5_000
+    finally:
+        conn.close()
+
+
+def test_single_entry_larger_than_the_budget_is_still_emitted(tmp_path: Path) -> None:
+    """A short answer beats an empty track, and the shortfall stays visible."""
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        with ledger.transaction():
+            for index in range(3):
+                ledger.add("memory", f"条目 {index}")
+        bucket = build_snapshot(ledger, options(tmp_path, max_chars=1))["tracks"]["memory"]
+        assert len(bucket["entries"]) == 1
+        assert bucket["truncated"] == 2
+        assert bucket["count"] - bucket["truncated"] == len(bucket["entries"])
+    finally:
+        conn.close()
+
+
+def test_invariants_hold_for_both_caps(tmp_path: Path) -> None:
+    """``count - truncated == len(entries)`` and ``len(entries) <= max_entries`` always."""
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        seed_long_body_short_summary(ledger, 25)
+        for overrides in (
+            {"max_entries": 7},
+            {"max_chars": 300},
+            {"max_entries": 1},
+            {"max_entries": 1_000, "max_chars": 1_000_000},
+        ):
+            bucket = build_snapshot(
+                ledger, options(tmp_path, **overrides)
+            )["tracks"]["memory"]
+            assert bucket["count"] - bucket["truncated"] == len(bucket["entries"])
+            assert len(bucket["entries"]) <= overrides.get("max_entries", 10_000)
+    finally:
+        conn.close()

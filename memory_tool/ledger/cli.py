@@ -33,7 +33,7 @@ from . import schema
 from .import_evolve import import_evolve
 from .registry import DEFAULT_REGISTRY, load_project_slugs, try_load_project_slugs
 from .schema import STATES, TRACKS, LedgerRefusedError, LedgerUnavailableError
-from .snapshot import SnapshotOptions, build_snapshot
+from .snapshot import DEFAULT_MAX_CHARS, DEFAULT_MAX_ENTRIES, SnapshotOptions, build_snapshot
 from .store import Ledger
 
 __all__ = ["EXIT_OK", "EXIT_REFUSED", "EXIT_UNJUDGEABLE", "register", "run"]
@@ -144,8 +144,8 @@ def _register_actions(actions: Any) -> None:
     snapshot.add_argument("--branch", help="Branch scope (default: git HEAD of --cwd)")
     snapshot.add_argument("--project", help="Project directory hash (default: sha1(cwd)[:12])")
     snapshot.add_argument("--date", help="Daily date to count (default: today)")
-    snapshot.add_argument("--max-entries", type=int, default=200)
-    snapshot.add_argument("--max-chars", type=int, default=60000)
+    snapshot.add_argument("--max-entries", type=int, default=DEFAULT_MAX_ENTRIES)
+    snapshot.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS)
     snapshot.add_argument("--full-threshold-entries", type=int, default=200)
     snapshot.add_argument("--full-threshold-chars", type=int, default=60000)
     snapshot.add_argument("--summary-chars", type=int, default=160)
