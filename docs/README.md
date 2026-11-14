@@ -16,6 +16,7 @@ This repository separates documentation by usage instead of keeping every note a
 - [Nowledge replacement readiness review (2026-10-07)](design/nowledge-replacement-readiness.md): executed-state evidence, gap list G1–G12, work packages W-00–W-11
 - [P2 write-path minimal design review](design/p2-write-path-minimal-loop.md): identity/event/revision/retraction/outbox contracts and the negative test list (design only)
 - [M1 writable ledger (2026-11-13)](design/m1-writable-ledger.md): the implemented write runtime — `service.sqlite3` schema, `los-memory mem` CLI (0/1/2 exit codes), evolve corpus importer and search; no injection surface, no cutover yet
+- [Admission & conflict policy (2026-11-14)](design/admission-and-conflict-policy.md)：写入自由、只有 slot/重复/显式 supersede 这几类结构化冲突才判；裁决只看（权威阶梯, 事件时间），唯一需要人的是「同权威+同事件时间+不同正文」；`mem conflicts` / `mem resolve` 是它的运维面
 - [P2-01 contract layer](design/p2-01-contract-layer.md): delivered versioned schema, receipt semantics, identity/authorization model and the N1-N11 negative tests (contract layer only, no runtime, zero blast radius)
 - [Upstream memory tool research](reports/2026-09-26-memory-landscape.md): verified source links and adoption boundaries
 

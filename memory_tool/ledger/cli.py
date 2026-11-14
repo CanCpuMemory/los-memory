@@ -64,6 +64,23 @@ def _register_actions(actions: Any) -> None:
     add.add_argument("--slot", help="Slot slug; a new active slot deactivates the old one")
     add.add_argument("--day", help="Day for the daily track (YYYY-MM-DD, default today)")
     add.add_argument("--claim-status", help="Optional claim status for the revision")
+    add.add_argument(
+        "--actor",
+        default="cli",
+        help="Who asserts this (owner / agent:main / agent:subagent / job:x / import). "
+             "Drives conflict adjudication; see memory_tool/ledger/admission.py",
+    )
+    add.add_argument(
+        "--asserted-at",
+        help="Event time of the assertion (ISO or YYYY-MM-DD). Defaults to write time",
+    )
+    add.add_argument(
+        "--on-conflict",
+        default="auto",
+        choices=["auto", "escalate", "reject", "append"],
+        help="auto=judge mechanically (default); escalate=always ask; "
+             "reject=refuse any slot collision; append=bypass (historical imports)",
+    )
     _add_content_arguments(add)
     _add_common_arguments(add)
 
@@ -169,6 +186,20 @@ def _register_actions(actions: Any) -> None:
     )
     _add_common_arguments(status)
 
+    conflicts = actions.add_parser(
+        "conflicts", help="List escalated conflicts awaiting adjudication"
+    )
+    _add_common_arguments(conflicts)
+
+    resolve = actions.add_parser(
+        "resolve", help="Adjudicate one escalated conflict (replace / drop / keep_both)"
+    )
+    resolve.add_argument("conflict_id", help="conflict-<id> as listed by `mem conflicts`")
+    resolve.add_argument("--action", required=True, choices=["replace", "drop", "keep_both"])
+    resolve.add_argument("--note", help="Why (recorded on the conflict_resolved event)")
+    resolve.add_argument("--actor", default="owner", help="Who adjudicated (default owner)")
+    _add_common_arguments(resolve)
+
 
 def _add_content_arguments(parser: argparse.ArgumentParser) -> None:
     """Add mutually exclusive content sources to a write subcommand."""
@@ -211,6 +242,10 @@ def run(args: argparse.Namespace) -> int:
             return _cmd_status(args)
         if action == "snapshot":
             return _cmd_snapshot(args)
+        if action == "conflicts":
+            return _cmd_conflicts(args)
+        if action == "resolve":
+            return _cmd_resolve(args)
         raise ValueError("unknown_mem_action")
     except LedgerRefusedError as exc:
         return _fail(args, exc, EXIT_REFUSED)
@@ -239,7 +274,14 @@ def _cmd_add(args: argparse.Namespace) -> int:
             slot=args.slot,
             day=args.day,
             claim_status=args.claim_status,
+            actor=getattr(args, "actor", "cli"),
+            asserted_at=getattr(args, "asserted_at", None),
+            on_conflict=getattr(args, "on_conflict", "auto"),
         )
+    # 「写入自由，冲突才判」：被拦/被压过/待裁决都不是"成功"，但**审计事件已落账**
+    # （所以这里在 savepoint 之外退出，exit 1 表示"这条没写成"，不是"命令坏了"）。
+    if result.get("admitted") is False:
+        return _not_admitted(args, result, context)
     return _ok(args, "mem add", result, context, _describe_add(result))
 
 
@@ -268,6 +310,34 @@ def _cmd_archive(args: argparse.Namespace) -> int:
         result = ledger.archive(args.unit_id, reason=args.reason)
     line = f"archived {result['id']}" if result["changed"] else f"{result['id']} already archived"
     return _ok(args, "mem archive", result, context, line)
+
+
+def _cmd_conflicts(args: argparse.Namespace) -> int:
+    with _session(args, write=False) as (ledger, context):
+        result = ledger.list_conflicts()
+    open_count = len(result["open"])
+    line = f"{open_count} open conflict(s)"
+    if open_count:
+        line += " — adjudicate with `mem resolve <conflict-id> --action replace|drop|keep_both`"
+    return _ok(args, "mem conflicts", result, context, line)
+
+
+def _cmd_resolve(args: argparse.Namespace) -> int:
+    dry_run = bool(getattr(args, "dry_run", False))
+    with _session(args, write=True, dry_run=dry_run) as (ledger, context):
+        result = ledger.resolve_conflict(
+            args.conflict_id,
+            args.action,
+            actor=getattr(args, "actor", "owner"),
+            note=getattr(args, "note", None),
+        )
+    if not result.get("changed"):
+        line = f"{args.conflict_id} already resolved"
+    elif args.action == "drop":
+        line = f"{args.conflict_id} dropped (kept existing {result.get('existing_id')})"
+    else:
+        line = f"{args.conflict_id} resolved by {args.action} -> {result.get('written')}"
+    return _ok(args, "mem resolve", result, context, line)
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -597,6 +667,27 @@ def _load_project_map(path: str | None) -> dict[str, str] | None:
     ):
         raise ValueError("project_map_must_be_string_map")
     return payload
+
+
+def _not_admitted(
+    args: argparse.Namespace, result: dict[str, Any], context: dict[str, Any]
+) -> int:
+    """Emit a refused-but-audited payload and return exit code ``1``."""
+    reason = result.get("reason") or result.get("action") or "not_admitted"
+    detail = result.get("hint") or ""
+    if getattr(args, "mem_format", "json") == "text":
+        print(f"refused[{reason}]: {detail}")
+        return EXIT_REFUSED
+    payload = {
+        "ok": False,
+        "command": "mem add",
+        "dry_run": bool(getattr(args, "dry_run", False)),
+        "db": context.get("db"),
+        "error": {"code": reason, **{k: v for k, v in result.items() if k != "hint"},
+                  "hint": detail or None},
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+    return EXIT_REFUSED
 
 
 def _describe_add(result: dict[str, Any]) -> str:

@@ -161,6 +161,14 @@ def _import_file(
             # than be collapsed, otherwise the imported count cannot be reconciled.
             dedupe=False,
         )
+        if result.get("admitted") is False:
+            # 镜像不裁决权威：导入轨 rank=0，若同槽位已被更高权威（agent/owner）的
+            # 条目占着，这条会被判 outranked / escalate。**跳过它并计数**，不让整份
+            # 导入失败，也不让旧镜像反过来压掉活的事实。
+            bucket["refused_admission"] = bucket.get("refused_admission", 0) + 1
+            report.setdefault("refused_admission", 0)
+            report["refused_admission"] += 1
+            continue
         if result["created"]:
             bucket["created"] += 1
             if len(bucket["samples"]) < samples:

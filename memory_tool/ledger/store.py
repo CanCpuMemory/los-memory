@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from . import admission
 from .evolve_md import parse_entry
 from .schema import (
     BRANCH_SCOPED_TRACKS,
@@ -340,8 +341,29 @@ class Ledger:
         actor: str = "cli",
         payload: dict[str, Any] | None = None,
         dedupe: bool = True,
+        asserted_at: str | None = None,
+        on_conflict: str = "auto",
     ) -> dict[str, Any]:
         """Create a unit (or update the unit identified by ``origin_key``).
+
+        Admission is **conflict-centric, not confirmation-centric** (see
+        :mod:`memory_tool.ledger.admission`): a write that overlaps nothing lands
+        immediately; only a same-``slot`` collision is judged, and it is judged
+        mechanically by ``(authority, asserted_at, recorded_at)``. The four
+        outcomes that are not "just write it":
+
+        * ``block`` — sensitive shape (private key / ``sk-`` / password assignment):
+          refused, nothing written.
+        * ``dedupe`` — identical body already active in scope: returns that unit.
+        * ``outranked`` — the existing occupant wins (e.g. an owner assertion vs a
+          sub-agent write): refused, content kept in the event ledger for audit.
+        * ``escalate`` — same authority *and* same event time with different bodies:
+          the only case that needs a human; recorded as ``conflict_escalated`` and
+          listed by ``mem conflicts``.
+
+        ``on_conflict`` overrides the decision for flow control: ``auto`` (default),
+        ``escalate`` (always ask), ``reject`` (refuse any slot collision),
+        ``append`` (bypass, used by historical imports).
 
         Two idempotency rules, both required by the write contract:
 
@@ -396,6 +418,87 @@ class Ledger:
                     "revision": duplicate.revision,
                 }
 
+        # ── 准入：写入自由，只有 slot 冲突才判（见 memory_tool/ledger/admission.py）
+        if on_conflict not in ("auto", "escalate", "reject", "append"):
+            raise ValueError("unknown_on_conflict")
+        decision = admission.decide(
+            admission.Incoming(
+                track=track,
+                scope_key=scope_key,
+                digest=digest,
+                content=text,
+                slot=slot,
+                actor=actor,
+                asserted_at=asserted_at,
+                recorded_at=now,
+            ),
+            self._scope_actives(scope_key),
+            force=("append" if on_conflict == "append" else
+                   "escalate" if on_conflict == "escalate" else None),
+        )
+        if decision.action == "dedupe" and not dedupe:
+            decision = admission.Decision("append", "duplicate_ignored")
+        if decision.action == "block":
+            self._event(
+                "add_blocked", None, None, actor, now,
+                {"track": track, "scope_key": scope_key, "digest": digest,
+                 "reason": decision.reason, "detail": dict(decision.detail or {})},
+            )
+            return {
+                "admitted": False,
+                "action": "block",
+                "reason": "sensitive_content_refused",
+                "pattern": (decision.detail or {}).get("pattern"),
+                "hint": "remove the secret (or split it out) before writing to memory",
+                "track": track,
+            }
+        if decision.action == "outranked":
+            self._event(
+                "add_outranked", decision.existing_id, None, actor, now,
+                {"track": track, "scope_key": scope_key, "slot": slot,
+                 "digest": digest, "content": text, "reason": decision.reason,
+                 "detail": dict(decision.detail or {})},
+            )
+            return {
+                "admitted": False,
+                "action": "outranked",
+                "reason": "outranked_by_slot",
+                "existing_id": decision.existing_id,
+                "slot": slot,
+                "detail": dict(decision.detail or {}),
+                "hint": "the active entry in this slot has higher authority or newer event time; "
+                        "use `mem supersede <id>` if you really must override it",
+                "track": track,
+            }
+        if decision.action == "escalate":
+            conflict_id = "conflict-%d" % self._event(
+                "conflict_escalated", None, None, actor, now,
+                {"track": track, "scope_key": scope_key, "slot": slot, "digest": digest,
+                 "content": text, "reason": decision.reason,
+                 "existing_id": decision.existing_id, "actor": actor,
+                 "asserted_at": asserted_at, "detail": dict(decision.detail or {}),
+                 # scope 三元组必须随事件走：resolve 要重建"同 scope"的写入，
+                 # 否则 key/project 轨会因为缺 project 被 validate_scope 拒掉。
+                 "project": project, "branch": branch, "day": day},
+            )
+            return {
+                "admitted": False,
+                "action": "escalate",
+                "reason": "conflict_undecidable",
+                "conflict_id": conflict_id,
+                "existing_id": decision.existing_id,
+                "detail": dict(decision.detail or {}),
+                "hint": "same authority and same event time with different bodies; "
+                        "adjudicate with `mem conflicts` / `mem resolve`",
+                "track": track,
+            }
+        if decision.action == "supersede":
+            payload = {
+                **(payload or {}),
+                "admission": {"action": "supersede", "existing_id": decision.existing_id,
+                              "reason": decision.reason},
+            }
+
         unit_id = _new_id("unit")
         # The new row goes in first: the slot hand-off points the old row's
         # ``superseded_by`` at it, and the foreign key must already resolve.
@@ -425,6 +528,9 @@ class Ledger:
                 "digest": digest,
                 "origin": origin,
                 "origin_key": origin_key,
+                # 事件时间随 add 事件一起落账：权威/时间两维都必须可回溯，
+                # 否则「同一事实的新旧」只能看写入顺序（乱序导入会倒置）。
+                "asserted_at": asserted_at,
                 **(payload or {}),
             },
         )
@@ -966,6 +1072,174 @@ class Ledger:
             )
         return deprecated
 
+    # --------------------------------------------------- admission / conflicts
+
+    def _scope_actives(self, scope_key: str) -> list[admission.Existing]:
+        """Active units in one scope, shaped for :func:`admission.decide`."""
+        rows = self.conn.execute(
+            _LATEST_REVISION_SQL + "WHERE u.scope_key=? AND u.state='active' "
+            "ORDER BY u.created_at ASC, u.id ASC",
+            (scope_key,),
+        ).fetchall()
+        out: list[admission.Existing] = []
+        for row in rows:
+            unit = LedgerRow.from_row(row)
+            actor, asserted_at = self._unit_provenance(unit.id)
+            out.append(
+                admission.Existing(
+                    id=unit.id,
+                    digest=unit.digest,
+                    slot=unit.slot,
+                    actor=actor,
+                    # 事件时间缺失时退化为落库时间（import 的老条目就是这种情况；
+                    # 它们 rank=0，不会因此压掉任何东西）。
+                    asserted_at=asserted_at or unit.created_at,
+                    recorded_at=unit.created_at,
+                )
+            )
+        return out
+
+    def _unit_provenance(self, unit_id: str) -> tuple[str, str | None]:
+        """``(actor, asserted_at)`` for one unit, read from the append-only events.
+
+        ``units`` deliberately carries no actor/asserted_at columns: authority and
+        event time are **provenance**, and provenance belongs in the ledger, not in a
+        mutable row (renaming an actor or re-dating a fact must not rewrite history).
+        Missing/legacy rows read as ``("import", None)`` — rank 0 means they cannot
+        outrank anything, which is the conservative direction.
+        """
+        row = self.conn.execute(
+            "SELECT actor, payload_json FROM events WHERE unit_id=? "
+            "AND kind IN ('add','import_add') ORDER BY id ASC LIMIT 1",
+            (unit_id,),
+        ).fetchone()
+        if row is None:
+            return ("import", None)
+        payload = json.loads(row["payload_json"] or "{}")
+        asserted = payload.get("asserted_at")
+        return (str(row["actor"]), str(asserted) if asserted else None)
+
+    def list_conflicts(self) -> dict[str, Any]:
+        """Open conflict escalations plus a short audit tail of resolved ones.
+
+        The queue is derived from the append-only ``events`` table — no extra table,
+        no second source of truth: an escalation is open iff no ``conflict_resolved``
+        event names it.
+        """
+        rows = self.conn.execute(
+            "SELECT id, kind, at, actor, payload_json FROM events "
+            "WHERE kind IN ('conflict_escalated','conflict_resolved') ORDER BY id ASC"
+        ).fetchall()
+        resolved: dict[str, dict[str, Any]] = {}
+        open_rows: list[dict[str, Any]] = []
+        for row in rows:
+            payload = json.loads(row["payload_json"] or "{}")
+            if row["kind"] == "conflict_resolved":
+                key = str(payload.get("conflict_id") or "")
+                if key:
+                    resolved[key] = {"at": row["at"], **payload}
+                continue
+            open_rows.append(
+                {
+                    "conflict_id": f"conflict-{row['id']}",
+                    "at": row["at"],
+                    "actor": row["actor"],
+                    "track": payload.get("track"),
+                    "scope_key": payload.get("scope_key"),
+                    "slot": payload.get("slot"),
+                    "digest": payload.get("digest"),
+                    "existing_id": payload.get("existing_id"),
+                    "reason": payload.get("reason"),
+                    "excerpt": _excerpt(str(payload.get("content") or ""), 200),
+                }
+            )
+        open_items = [item for item in open_rows if item["conflict_id"] not in resolved]
+        resolved_items = [
+            {**item, "resolution": resolved[item["conflict_id"]]}
+            for item in open_rows
+            if item["conflict_id"] in resolved
+        ]
+        return {"open": open_items, "resolved": resolved_items[-20:]}
+
+    def resolve_conflict(
+        self,
+        conflict_id: str,
+        action: str,
+        *,
+        actor: str = "owner",
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Adjudicate one escalated conflict.
+
+        Args:
+            conflict_id: ``conflict-<events.id>`` as listed by :meth:`list_conflicts`.
+            action: ``replace`` (new text wins the slot), ``drop`` (keep the existing
+                entry, discard the proposed text) or ``keep_both`` (append the new
+                text without taking the slot).
+            actor: who adjudicated (recorded on the ``conflict_resolved`` event).
+            note: free-form reason for the audit trail.
+
+        Returns:
+            A JSON-ready dict; ``written`` is the unit id when text was kept.
+        """
+        if action not in ("replace", "drop", "keep_both"):
+            raise ValueError("unknown_resolution")
+        if not str(conflict_id).startswith("conflict-"):
+            raise LedgerRefusedError("conflict_not_found", conflict_id=conflict_id)
+        try:
+            event_id = int(str(conflict_id).split("-", 1)[1])
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise LedgerRefusedError("conflict_not_found", conflict_id=conflict_id) from exc
+        row = self.conn.execute(
+            "SELECT id, payload_json FROM events WHERE id=? AND kind='conflict_escalated'",
+            (event_id,),
+        ).fetchone()
+        if row is None:
+            raise LedgerRefusedError("conflict_not_found", conflict_id=conflict_id)
+        payload = json.loads(row["payload_json"] or "{}")
+        already = self.conn.execute(
+            "SELECT id FROM events WHERE kind='conflict_resolved' AND payload_json LIKE ?",
+            (f'%"conflict_id": "{conflict_id}"%',),
+        ).fetchone()
+        now = utc_now()
+        if already is not None:
+            return {"conflict_id": conflict_id, "resolved": True, "changed": False}
+
+        written: str | None = None
+        if action in ("replace", "keep_both"):
+            content = str(payload.get("content") or "")
+            if content.strip() == "":
+                raise LedgerRefusedError("conflict_payload_empty", conflict_id=conflict_id)
+            result = self.add(
+                str(payload.get("track") or "key"),
+                content,
+                project=payload.get("project"),
+                branch=payload.get("branch"),
+                day=payload.get("day"),
+                slot=(payload.get("slot") if action == "replace" else None),
+                origin="cli",
+                actor=actor,
+                on_conflict="append",
+            )
+            written = str(result.get("id") or "") or None
+        self._event(
+            "conflict_resolved",
+            written,
+            None,
+            actor,
+            now,
+            {"conflict_id": conflict_id, "action": action, "note": note,
+             "existing_id": payload.get("existing_id"), "written": written},
+        )
+        return {
+            "conflict_id": conflict_id,
+            "resolved": True,
+            "changed": True,
+            "action": action,
+            "written": written,
+            "existing_id": payload.get("existing_id"),
+        }
+
     def deprecate_for_import(
         self, unit_id: str, superseded_by: str, actor: str, payload: dict[str, Any] | None = None
     ) -> bool:
@@ -1029,14 +1303,15 @@ class Ledger:
         actor: str,
         at: str,
         payload: dict[str, Any] | None,
-    ) -> None:
-        """Append one event. Nothing in this package updates or deletes events."""
-        self.conn.execute(
+    ) -> int:
+        """Append one event and return its rowid (stable, used as ``conflict-<id>``)."""
+        cursor = self.conn.execute(
             "INSERT INTO events (kind, unit_id, revision_id, actor, at, payload_json) "
             "VALUES (?,?,?,?,?,?)",
             (kind, unit_id, revision_id, actor, at,
              json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, default=str)),
         )
+        return int(cursor.lastrowid or 0)
 
     def _index_unit(self, unit_id: str, content: str) -> None:
         """Insert (or refresh) the search rows for one unit."""
