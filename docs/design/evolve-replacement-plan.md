@@ -66,3 +66,42 @@
 3. **cwd 别名规范化** → **搬**（evolve `lib/path-alias.js` 的最小必要部分 + 只读 `~/.dsh/storages/path-alias-map.json`）。理由：写进旧 hash 的"死"项目目录是静默错误，代价高于 150 行；别名表缺失/坏 JSON ⇒ fail-open 退化为不归一化 + warn。
 
 **事实补充**：Nowledge 镜像是一次性安全副本（P0 已补 KEY/全局/用户三轨，共 1,111 条）；此后以 M1 库为权威，P5 停 `mem-sync-evolve` 后不再新增镜像。`nmem m add` 每条约 5–8 s（后端带蒸馏），**不要**为低价值轨（project 日志/daily 增量）再跑批量补镜像。
+
+## 6. P5 前置：冷备与依赖清点（2026-11-14 执行）
+
+### 6.1 冷备（两份，各自带对账基线 —— 恢复后必须能证明"一致"）
+
+| 产物 | 路径 | 大小 | sha256（前 20） | 对账基线 |
+| --- | --- | --- | --- | --- |
+| 记忆语料 | `~/.dsh/backups/memories-20261114T105225.tar.gz` | 5.1 MB（源 64 MB，`events/` 54 MB 压缩比高） | `d431baea753c860a111e` | 315 条目；MEMORY 340 / USER 4 / KEY(唯一项目 39 个，去 alias 后) 785 / daily 72 文件 / decisions 749 行 |
+| 可写账本 | `~/.dsh/backups/service-ledger-20261114T105229.sqlite3` | 130 MB | `c9c3140ca4beda89020d` | units 6,781 / revisions 6,781 / events 6,819 |
+
+⚠️ 账本备份是 WAL 库快照：**只读打开必须 `file:…?immutable=1`**，用 `?mode=ro` 会因缺 `-shm`
+报 `unable to open database file (14)`（本仓记录过的坑，今天又踩了一次）。
+
+### 6.2 依赖清点（P5 要同批改的六处）
+
+| 面 | 位置 | 依赖形态 | P5 动作 |
+| --- | --- | --- | --- |
+| launchd | `com.echerlos.memory-lifecycle-probe` | `ProgramArguments` 指向 `dsplugins/dsh-memory-evolve/scripts/lifecycle-probe.mjs`；脚本只 import node builtin，但**读 `~/.dsh/memories`** | 停用，或改读账本（`slots`/`supersede` 计数账本已有） |
+| profile 依赖 | `~/.dsh/profiles/web/package.json:23` | `"dsh-memory-evolve": "link:…"` | 移除依赖 |
+| profile 配置 | `~/.dsh/profiles/web/cordis.patch.yml:61` 起 | id-targeted config（`injectMemory` / `decisionPolicy` / `decisionAutoApply`） | 整行移除（与 memory-tools 原子批） |
+| 插件间 | `dsplugins/dsh-quick-actions/lib/actions.mjs:72` | `tools.get('dtodo')` 硬依赖 | 切到 `dsh-host-tools` 的 `dtodo`（工具名不变，契约逐字对齐） |
+| 规则 | `~/.dsh/AGENTS.md` §Memory Writes（61–64 行） | 以 `memory(...)` 工具与 markdown 槽位语义书写 | 改写成账本语义（slot / 权威 / 冲突裁决） |
+| 校验器 | `dsplugins/dsh-memory-tools/{scripts,tests}` | parity-check 从 evolve **源码**重推 `memory` schema | 切换点后只保留冻结夹具，去掉对 evolve 源码路径的依赖 |
+
+未发现其他运行时硬依赖：`dsh-feishu-outbound` 只在注释里提到 `de_channel_send`（工具名本身来自 evolve，
+卸载时必须由 `dsh-host-tools` 补齐，这是 P3 的事）。
+
+### 6.3 重载前必须先修的两个环境缺陷（2026-11-14 实测，否则"重载"这件事本身不可行）
+
+| 缺陷 | 症状 | 修法 |
+| --- | --- | --- |
+| `dsh-web-activity.sh` RPC 回退分支 py3.9 语法错 | `activity.json` 缺失时（宿主刚重启后）判据永远「判不了 ⇒ 按忙」，**空闲闸门永不放行** | f-string 里禁止反斜杠 ⇒ 改 `%` 格式化（dsfolder `ff02764`，快照已复拍） |
+| `check-orphan-children.mjs` 把检查器祖先当孤儿 | detached 重启是 `ppid=1`，boot-check 跑在它下面 ⇒ **重启用自己的父进程把自己拦住**（`✗ orphans 发现孤儿进程：31012`） | 排除自身祖先链（`ps` 沿 ppid 最多 32 跳，命中即 legit）；self-test 12→15 条（含"非祖先仍判 orphan"负控）（dsfolder `5982491`） |
+
+### 6.4 观测窗内不要做的事
+
+- 不动写侧（`dsh-memory-tools` 仍 disabled）、不卸载 evolve 的 memory 工具 —— 那会拆掉 A/B 基线。
+- 唯一生效的过渡改动是 `decisionAutoApply.keyMaxChars: 600 → 2000`（注入已按 80 字摘要渲染，
+  长 key 不再贵），它让正常写入直接 `auto_applied`，与新准入模型一致。
