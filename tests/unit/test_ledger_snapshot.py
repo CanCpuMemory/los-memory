@@ -88,7 +88,7 @@ def test_payload_matches_the_declared_schema(tmp_path: Path) -> None:
 
         assert set(payload) == {
             "ok", "schema", "cwd", "branch", "project", "project_slug", "tracks",
-            "daily", "project_log", "slots", "degraded",
+            "daily", "project_log", "slots", "conflicts", "degraded",
         }
         assert payload["ok"] is True
         assert payload["schema"] == 1
@@ -105,6 +105,10 @@ def test_payload_matches_the_declared_schema(tmp_path: Path) -> None:
         assert set(payload["daily"]) == {"date", "count"}
         assert set(payload["project_log"]) == {"count"}
         assert set(payload["slots"]) == {"active", "deprecated", "same_slot_multi_active"}
+        # 待裁决冲突随 payload 走（判据必须有人消费）：0 条时也要有结构，
+        # 这样渲染层能区分"真空态"与"这个版本不认识该字段"。
+        assert set(payload["conflicts"]) == {"open", "ids", "known"}
+        assert payload["conflicts"]["open"] == 0
         assert payload["project"] == PROJECT
         assert payload["project_slug"] == "dsfolder"
         assert payload["degraded"] == []
@@ -262,6 +266,25 @@ def test_daily_and_project_log_are_counted_for_the_requested_scope(tmp_path: Pat
         assert payload["project_log"] == {"count": 1}
     finally:
         conn.close()
+
+
+def test_conflicts_surface_in_the_snapshot(tmp_path: Path) -> None:
+    """同一槽位的真冲突（不同 principal、同权威同事件时间）必须出现在 payload 里。
+
+    这是「判据必须有人消费」的机械形式：注入面是模型唯一自己看得见的地方，
+    如果冲突只在 CLI 里可查，写侧接入后没人会去看。
+    """
+    _conn, ledger = open_ledger(tmp_path / "c.sqlite3")
+    with ledger.transaction():
+        ledger.add("key", "命名用 A", project=PROJECT, slot="naming",
+                   actor="agent:main", asserted_at="2026-11-14")
+    refused = ledger.add("key", "命名用 B", project=PROJECT, slot="naming",
+                         actor="cli", asserted_at="2026-11-14")
+    assert refused["admitted"] is False
+    conflicts = build_snapshot(ledger, options(tmp_path, project_slugs={PROJECT: "dsfolder"}))["conflicts"]
+    assert conflicts["open"] == 1
+    assert conflicts["ids"] and conflicts["ids"][0].startswith("conflict-")
+    assert conflicts["known"] is True
 
 
 def test_slot_health_reports_the_invariant(tmp_path: Path) -> None:

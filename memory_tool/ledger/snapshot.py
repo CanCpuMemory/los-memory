@@ -144,6 +144,11 @@ def build_snapshot(ledger: Ledger, options: SnapshotOptions) -> dict[str, Any]:
         "daily": {"date": day, "count": daily_count},
         "project_log": {"count": project_log_count},
         "slots": _slot_health(ledger),
+        # 待裁决冲突：判据必须有人消费 —— 注入面是模型唯一能"自己看见"的地方，
+        # 所以未裁决冲突以**计数 + id** 出现在这里（正文不进 payload，按 id 走
+        # `mem conflicts` / `mem resolve`）。0 时仍给出结构，便于渲染层判断"真空态"
+        # 与"这个版本不认识该字段"的区别。
+        "conflicts": _conflict_health(ledger),
         "degraded": degraded,
     }
 
@@ -202,6 +207,21 @@ def _render_track(rows: list[Any], options: SnapshotOptions) -> dict[str, Any]:
         "entries": entries,
         "truncated": total - len(entries),
     }
+
+
+def _conflict_health(ledger: Ledger) -> dict[str, Any]:
+    """Open (un-adjudicated) conflicts, as a count plus stable ids.
+
+    Source of truth is the append-only event ledger, same derivation as
+    :meth:`Ledger.list_conflicts` — the snapshot never invents a second queue.
+    """
+    try:
+        queue = ledger.list_conflicts()
+    except Exception:  # noqa: BLE001 - 快照不因审计面缺失而整段失败
+        return {"open": 0, "ids": [], "known": False}
+    items = queue.get("open") or []
+    ids = [str(item.get("conflict_id")) for item in items if item.get("conflict_id")]
+    return {"open": len(items), "ids": ids[:10], "known": True}
 
 
 def _slot_health(ledger: Ledger) -> dict[str, int]:
