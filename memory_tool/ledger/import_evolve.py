@@ -72,6 +72,7 @@ def import_evolve(
                 "updated": 0,
                 "unchanged": 0,
                 "deprecated_imported": 0,
+                "archived_imported": 0,
                 "slot_superseded": 0,
                 "supersede_edges": 0,
                 "supersede_unresolved": 0,
@@ -109,7 +110,7 @@ def import_evolve(
     report["totals"] = {
         key: sum(bucket[key] for bucket in report["tracks"].values())
         for key in ("files", "entries", "created", "updated", "unchanged", "deprecated_imported",
-                    "slot_superseded", "supersede_edges", "supersede_unresolved")
+                    "archived_imported", "slot_superseded", "supersede_edges", "supersede_unresolved")
     }
     return report
 
@@ -186,6 +187,19 @@ def _import_file(
             bucket["unchanged"] += 1
 
         bucket["slot_superseded"] += len(result.get("deprecated") or [])
+
+        if track_file.archived:
+            # ``*-archive.md`` is history, not a live fact: it must be readable by id
+            # (rollback, expand) but must never be injected or compete for a slot.
+            # Archiving after the add keeps one code path for admission/identity.
+            current = ledger.get_unit(result["id"])
+            if current is not None and current.state != "archived":
+                ledger.archive(
+                    result["id"],
+                    actor="import:evolve",
+                    reason="imported from an archive file",
+                )
+            bucket["archived_imported"] = bucket.get("archived_imported", 0) + 1
 
         if entry.deprecated or entry.deprecated_by:
             target = _resolve_source_id(ledger, track_file, entry.deprecated_by)

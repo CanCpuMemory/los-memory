@@ -98,6 +98,10 @@ class TrackFile:
     track: str
     project: str | None = None
     day: str | None = None
+    #: ``*-archive.md`` files are imported as ``state='archived'``. They are history,
+    #: not live facts: the ledger must hold them (so a rollback and `mem expand` see
+    #: them) without ever injecting them or competing for a slot.
+    archived: bool = False
 
 
     @property
@@ -189,7 +193,7 @@ def parse_entry(text: str) -> Entry:
 
 
 def _track_for(root: Path, path: Path):
-    """Map a discovered file onto ``(track, project, day)``.
+    """Map a discovered file onto ``(track, project, day, archived)``.
 
     ``project`` is always the evolve directory name (``sha1(cwd)[:12]``) — the
     stable identity. Human-readable slugs are resolved from the workspace registry at
@@ -201,21 +205,29 @@ def _track_for(root: Path, path: Path):
     parent = path.parent
     if parent == root:
         if name == "MEMORY.md":
-            return "memory", None, None
+            return "memory", None, None, False
         if name == "USER.md":
-            return "user", None, None
+            return "user", None, None, False
+        if name == "MEMORY-archive.md":
+            return "memory", None, None, True
+        if name == "USER-archive.md":
+            return "user", None, None, True
         return None
     if parent.parent == root and parent.name == "daily":
         match = DAILY_NAME_RE.match(name)
         if match:
-            return "daily", None, match.group(1)
+            return "daily", None, match.group(1), False
         return None
     if parent.parent.parent == root and parent.parent.name == "projects":
         directory = parent.name
         if name == "KEY.md":
-            return "key", directory, None
+            return "key", directory, None, False
         if name == "MEMORY.md":
-            return "project", directory, None
+            return "project", directory, None, False
+        if name == "KEY-archive.md":
+            return "key", directory, None, True
+        if name == "MEMORY-archive.md":
+            return "project", directory, None, True
         return None
     return None
 
@@ -238,7 +250,7 @@ def discover(root: str | os.PathLike[str], only: tuple[str, ...] | None = None) 
     if not base.is_dir():
         return Discovery()
     resolved_base = base.resolve()
-    found: list[tuple[Path, str, str | None, str | None]] = []
+    found: list[tuple[Path, str, str | None, str | None, bool]] = []
     skipped_todos: list[Path] = []
     skipped_daily_other: list[str] = []
 
@@ -246,13 +258,13 @@ def discover(root: str | os.PathLike[str], only: tuple[str, ...] | None = None) 
         mapped = _track_for(base, path)
         if mapped is None:
             return
-        track, project, day = mapped
+        track, project, day, archived = mapped
         if only is not None and track not in only:
             return
-        found.append((path, track, project, day))
+        found.append((path, track, project, day, archived))
 
     # Root-level tracks, skipping TODOS* (host-plugin schema).
-    for name in ("MEMORY.md", "USER.md"):
+    for name in ("MEMORY.md", "USER.md", "MEMORY-archive.md", "USER-archive.md"):
         candidate = base / name
         if candidate.is_file():
             add(candidate)
@@ -278,20 +290,23 @@ def discover(root: str | os.PathLike[str], only: tuple[str, ...] | None = None) 
         for directory in sorted(projects.iterdir()):
             if not directory.is_dir():
                 continue
-            for name in ("KEY.md", "MEMORY.md"):
+            for name in ("KEY.md", "MEMORY.md", "KEY-archive.md", "MEMORY-archive.md"):
                 candidate = directory / name
                 if candidate.is_file():
                     add(candidate)
-            todo = directory / "TODOS.md"
-            if todo.is_file():
-                skipped_todos.append(todo)
+            # ``TODOS-archive.md`` has the same host-plugin schema as ``TODOS.md``:
+            # count it as skipped rather than importing todo rows into memory tracks.
+            for todo_name in ("TODOS.md", "TODOS-archive.md"):
+                todo = directory / todo_name
+                if todo.is_file():
+                    skipped_todos.append(todo)
 
     # De-alias: one inode is one file. Two shapes occur in the real corpus
     # (measured 2026-11-13): symlinked project directories, and hard-linked
     # KEY.md/MEMORY.md pairs across different project hashes. Reading them twice
     # would double the corpus; reading them as "different files" would make the
     # import count unverifiable.
-    by_inode: dict[tuple[int, int], list[tuple[Path, str, str | None, str | None]]] = {}
+    by_inode: dict[tuple[int, int], list[tuple[Path, str, str | None, str | None, bool]]] = {}
     order: list[tuple[int, int]] = []
     for item in found:
         path = item[0]
@@ -309,7 +324,7 @@ def discover(root: str | os.PathLike[str], only: tuple[str, ...] | None = None) 
     for key in order:
         group = by_inode[key]
 
-        def rel(item: tuple[Path, str, str | None, str | None]) -> str:
+        def rel(item: tuple[Path, str, str | None, str | None, bool]) -> str:
             return str(item[0].relative_to(base))
 
         # A real path beats a symlinked one (resolves to itself); among real paths
@@ -318,7 +333,7 @@ def discover(root: str | os.PathLike[str], only: tuple[str, ...] | None = None) 
         real = [item for item in group if item[0].resolve() == resolved_base / rel(item)]
         preferred = sorted(real or group, key=rel)
         chosen = preferred[0]
-        path, track, project, day = chosen
+        path, track, project, day, archived = chosen
         discovery.files.append(
             TrackFile(
                 path=path,
@@ -326,6 +341,7 @@ def discover(root: str | os.PathLike[str], only: tuple[str, ...] | None = None) 
                 track=track,
                 project=project,
                 day=day,
+                archived=archived,
             )
         )
         others = sorted(rel(item) for item in group if item is not chosen)

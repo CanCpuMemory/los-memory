@@ -337,3 +337,71 @@ def test_import_of_an_empty_root_reports_zero_without_error(tmp_path: Path) -> N
         assert report["files"] == 0
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- archive files (2026-11-16)
+
+def add_archive_files(root: Path) -> None:
+    """Add the ``*-archive.md`` shapes the corpus carries next to the live files."""
+    project = root / "projects" / "abc123def456"
+    (root / "MEMORY-archive.md").write_text(
+        "[2026-01-01] 已归档的全局事实\n", encoding="utf-8"
+    )
+    (root / "USER-archive.md").write_text(
+        "[2026-01-02] 已归档的用户偏好\n", encoding="utf-8"
+    )
+    (project / "KEY-archive.md").write_text(
+        "[id:eeee5555] [2026-01-03] 已归档的关键事实\n", encoding="utf-8"
+    )
+    # TODOS-archive.md belongs to the host plugin: it must be counted and skipped,
+    # not imported as memory history.
+    (project / "TODOS-archive.md").write_text("[id:zzzz] 归档待办不导入\n", encoding="utf-8")
+
+
+def test_archive_files_import_as_archived_and_never_go_live(tmp_path: Path) -> None:
+    """``*-archive.md`` is history: imported (readable by id) but never injected.
+
+    The failure this pins: importing archives as active would resurrect retired facts
+    into the injection surface, and *skipping* them entirely would make the ledger an
+    incomplete mirror that cannot answer `expand` or survive a rollback.
+    """
+    from memory_tool.ledger.snapshot import SnapshotOptions, build_snapshot
+
+    root = build_corpus(tmp_path / "corpus")
+    add_archive_files(root)
+    conn, ledger = open_ledger(tmp_path / "arc.sqlite3")
+    try:
+        report = run_import(ledger, root)
+        assert report["totals"]["archived_imported"] == 3, report["totals"]
+        assert report["skipped"]["todos_files"] >= 4, "TODOS-archive.md 必须计入跳过"
+        rels = {f.rel_path for f in discover(root).files}
+        assert "projects/abc123def456/TODOS-archive.md" not in rels
+
+        states = {}
+        for row in conn.execute("SELECT track, state, COUNT(*) FROM units GROUP BY track, state"):
+            states[(row[0], row[1])] = row[2]
+        assert states.get(("key", "archived")) == 1
+        assert states.get(("memory", "archived")) == 1
+        assert states.get(("user", "archived")) == 1
+
+        # Injection surface sees only live facts.
+        snapshot = build_snapshot(
+            ledger, SnapshotOptions(cwd=str(tmp_path / "cwd"), project="abc123def456")
+        )
+        archived_ids = {
+            row[0]
+            for row in conn.execute("SELECT id FROM units WHERE state = 'archived'")
+        }
+        emitted = {
+            entry["id"]
+            for track in ("memory", "user", "key")
+            for entry in snapshot["tracks"][track]["entries"]
+        }
+        assert not (emitted & archived_ids), "归档条目不得出现在注入 payload 里"
+
+        # Idempotent: a second run creates nothing and re-counts the same archives.
+        second = run_import(ledger, root)
+        assert second["totals"]["created"] == 0
+        assert second["totals"]["archived_imported"] == 3
+    finally:
+        conn.close()

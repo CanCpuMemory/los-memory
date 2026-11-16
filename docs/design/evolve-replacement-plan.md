@@ -181,9 +181,9 @@
 | --- | --- | --- | --- |
 | 1 | 注入文案的 `expand` 手柄解析不了 | 文案让 `memory action=expand+id`，id 是 `unit_<12hex>`；在册 `memory` 是 evolve，按 `[id:8hex]` 在 markdown 里 `find`（evolve `lib/index.js:1693`）⇒ 必 `not_found`；能吃 `unit_…` 的 `dsh-memory-tools` 是 disabled | ✅ 2026-11-16：文案改指 `mem expand --id`（`dsh-memory-inject/lib/text.js` + render 测试同步），`expand_path` 已绿。**注意：文案改动在宿主进程里生效需要一次插件重载**（磁盘判据先绿，模型看到的仍是旧文案直到重载） |
 | 2 | cwd 别名未归一 | evolve `cwdCanonicalization: true`（`lib/sync/index.js:113/127`）；本仓 `memory_tool/ledger/snapshot.py:110` 直接 `project_hash(cwd)` ⇒ 旧路径会话 key 轨静默 0 | ✅ 2026-11-16：新增 `memory_tool/ledger/path_alias.py`（与 evolve 同表同规则：exact→最长前缀→`/` 边界→单跳→丢自映射；坏表 fail-open 并具名降级），`snapshot` 在算 project hash 前归一化并回传 `cwd/cwd_raw/cwd_aliased_from`；`alias_cwd` 已绿（旧路径 cantool → 32 条 key） |
-| 3 | 归档文件未导入 | `KEY-archive.md` / `MEMORY-archive.md` / `USER-archive.md` 不进 discovery（`evolve_md.discover` 只认 `KEY.md`/`MEMORY.md`），账本 `state=archived` 仅 1 行 | 归档条目数 == 源归档条目数（parity 子项） |
+| 3 | 归档文件未导入 | **✅ 2026-11-16 已修**：`evolve_md` 认 `MEMORY/USER/KEY-archive.md`（根 + `projects/<h>/`）并以 `state=archived` 导入；`TODOS-archive.md` 与 `TODOS.md` 同样计入跳过（host 插件 schema）。实测 dry-run：198 文件 / 6,993 条目 / archived_imported 10，账本 `key · archived = 10`，注入面 key 条数不变（cantool 32） | 归档条目数 == 源归档条目数（已入 `parity_tracks` 覆盖面：parity 用 `origin=import:evolve` 全状态计数，归档行天然在分母里） |
 | 4 | 语义检索未接线 | `search_hybrid` 零非测试调用者、env 未设、无模型/索引；后端还是 shadow 库不是账本 | **不阻塞切换**，切后单独立项（另一条轴：替换 Nowledge） |
-| 5 | host-tools 已知功能差 | 无 `web` 站内通知渠道、无 `de_notify` / `de_session_images`（`dsh-host-tools/README.md` §差异 #5/#6） | 决策记录：**接受**（`notifyEnabled=false` 与生产一致）；要恢复铃铛再立项 |
+| 5 | host-tools 已知功能差 | 无 `web` 站内通知渠道、无 `de_notify` / `de_session_images`（`dsh-host-tools/README.md` §差异 #5/#6） | **决策（2026-11-16，接受，不补）**：①`notifyEnabled=false` 且 web 铃铛无消费者 ⇒ 缺 web 渠道与生产一致；②`de_session_images` 当前**本身也未注册**（`sessionImageQueryEnabled=false`），`de_channel_send` 的 `attachmentId` 分支不可达，描述与开关态本就有漂移。**复活条件**（任一成立再立项）：恢复网页右上角铃铛 / 启用 `sessionImageQueryEnabled` / 出现按 attachmentId 取图的需求。补的成本不在工具本身：`notify-web.js` 依赖 `coi/broadcast.js`（65 KB），属另一件事 |
 | 6 | 三个新插件无 remote | `dsh-memory-inject` / `dsh-memory-tools` / `dsh-host-tools` 均无 origin | 建仓并推（**需人操作**：新建 GitHub 仓） |
 
 ### 7.6 切换门（7 条全绿才动 P5）
@@ -213,5 +213,7 @@
 | expand 手柄修复 | `dsplugins/dsh-memory-inject/lib/text.js`（5 个标题 + 读取说明） | inject 测试 92/92；`expand_path` 绿（CLI 取正文 1,757 字符）；**宿主重载后模型才看到新文案** |
 | cwd 别名归一化 | `memory_tool/ledger/path_alias.py`、`snapshot.py`（新增 `cwd_raw`/`cwd_aliased_from`）、`cli.py`（`--alias-map` / `--no-alias-map`） | `pytest tests/unit/test_ledger_*.py` 130 passed；`alias_cwd` 绿（`~/Downloads/projects/cantool` → 32 条 key，与 live 路径相等） |
 | 直写白名单 | `~/.dsh/memory-inject/dw-allowlist.json` | 4 条 2026-11-16 直写（memory×2 / daily×2）各带 reason；`reverse_divergence` 由红转绿，新增未登记 id 立即红 |
+| 归档导入 | `evolve_md.discover`（`*-archive.md` → `archived`）+ `import_evolve`（add 后 archive，一条码路）+ `TODOS-archive` 计入跳过 | dry-run：198 文件 / 6,993 条目 / archived_imported 10；账本 `key·archived=10`；重跑 `created=0`；注入面不变（cantool key 仍 32）；测试 `test_archive_files_import_as_archived_and_never_go_live`（含「归档不得进 payload」「重跑 created=0」） |
+| host-tools 功能差决策 | 本文 §7.5-5 | 接受（无 web 铃铛/无 `de_session_images`），复活条件与补齐成本已写明 |
 
-遗留（下轮）：归档文件导入（§7.5-3）、`host-tools` 的 UI 面处置（§7.5-5 决策）、三个插件建 remote（需人操作）、`memory` 工具级 expand（原子批）。
+遗留：`host-tools` 的 **UI 面**处置（4 tab + Advisor 面板，与 §7.5-5 的功能差不是一件事）、三个插件建 remote（**需人操作**）、`memory` 工具级 expand（原子批）、宿主重载让新注入文案生效。
