@@ -87,8 +87,9 @@ def test_payload_matches_the_declared_schema(tmp_path: Path) -> None:
         )
 
         assert set(payload) == {
-            "ok", "schema", "cwd", "branch", "project", "project_slug", "tracks",
-            "daily", "project_log", "slots", "conflicts", "degraded",
+            "ok", "schema", "cwd", "cwd_raw", "cwd_aliased_from", "branch", "project",
+            "project_slug", "tracks", "daily", "project_log", "slots", "conflicts",
+            "degraded",
         }
         assert payload["ok"] is True
         assert payload["schema"] == 1
@@ -636,5 +637,72 @@ def test_invariants_hold_for_both_caps(tmp_path: Path) -> None:
             )["tracks"]["memory"]
             assert bucket["count"] - bucket["truncated"] == len(bucket["entries"])
             assert len(bucket["entries"]) <= overrides.get("max_entries", 10_000)
+    finally:
+        conn.close()
+
+
+# ------------------------------------------------- cwd alias canonicalization (2026-11-16)
+
+def _alias_map(tmp_path: Path, old: str, new: str) -> Path:
+    path = tmp_path / "path-alias-map.json"
+    path.write_text(
+        json.dumps({"version": 2, "declared": [{"from": old, "to": new, "basis": "test"}]}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_aliased_cwd_resolves_to_the_live_project(tmp_path: Path) -> None:
+    """A session in a moved-away directory must see the live project's KEY entries.
+
+    Without canonicalization the cwd hashes to a second, empty project directory and
+    the KEY track silently renders zero entries — the failure this test pins.
+    """
+    old = str(tmp_path / "old-root" / "proj")
+    new = str(tmp_path / "new-root" / "proj")
+    live_project = project_hash(new)
+    map_path = _alias_map(tmp_path, old, new)
+
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        with ledger.transaction():
+            ledger.add("key", "fact that must follow the project", project=live_project)
+
+        live = build_snapshot(ledger, SnapshotOptions(cwd=new, alias_map=str(map_path)))
+        moved = build_snapshot(ledger, SnapshotOptions(cwd=old, alias_map=str(map_path)))
+
+        assert live["project"] == moved["project"] == live_project
+        assert moved["cwd"] == new and moved["cwd_raw"] == old
+        assert moved["cwd_aliased_from"] == old
+        assert len(moved["tracks"]["key"]["entries"]) == 1, "别名 cwd 丢掉了项目 KEY 轨"
+    finally:
+        conn.close()
+
+
+def test_without_the_alias_table_the_moved_cwd_is_a_different_project(tmp_path: Path) -> None:
+    """Negative control: the guard above must be what makes the two paths agree."""
+    old = str(tmp_path / "old-root" / "proj")
+    new = str(tmp_path / "new-root" / "proj")
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        with ledger.transaction():
+            ledger.add("key", "fact", project=project_hash(new))
+        moved = build_snapshot(ledger, SnapshotOptions(cwd=old, alias_map=None))
+        assert moved["project"] == project_hash(old) != project_hash(new)
+        assert moved["tracks"]["key"]["count"] == 0
+        assert moved["cwd_aliased_from"] is None
+    finally:
+        conn.close()
+
+
+def test_broken_alias_table_degrades_by_name_instead_of_guessing(tmp_path: Path) -> None:
+    """An unreadable table must be named in ``degraded`` — never silently ignored."""
+    broken = tmp_path / "path-alias-map.json"
+    broken.write_text("{not json", encoding="utf-8")
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        payload = build_snapshot(ledger, SnapshotOptions(cwd=str(tmp_path / "x"), alias_map=str(broken)))
+        assert payload["project"] == project_hash(str(tmp_path / "x"))
+        assert "alias_map_malformed" in payload["degraded"]
     finally:
         conn.close()

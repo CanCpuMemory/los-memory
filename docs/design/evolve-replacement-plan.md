@@ -1,6 +1,7 @@
 # dsh-memory-evolve → los-memory 替换计划（P0–P5）
 
-状态：P0 已落地（2026-11-13），M1 已完成（本地 commit 2690aae），P2 进行中，P3 已完成，P4–P5 待做。
+状态（2026-11-16 对齐）：P0 ✅ / M1 ✅ / **P2 ✅ 已上线并在观测窗内**（2026-11-14 起 `mode=inject`，§7.0 有实测数）/ **P3 🟡 已实现但未接线**（`dsh-host-tools` 安装后 `disabled: true`）/ **P4 改为「观测窗 + 三面判据」✅ 进行中**（2026-11-14→11-28，双注入不可能：宿主同名 context 会抛）/ **P5 ⬜ 未做**。
+路线决定（2026-11-16，用户拍板）：**当前先双写 → 补完 los-memory 缺口 → 再切**；执行口径全部收在 **§7**。
 背景与影响半径见会话审计结论（2026-11-13 三路只读盘点）：evolve 是 `~/.dsh/memories` 的**唯一写者**
 + system prompt 的**唯一记忆注入面**；los-memory 此前是**只读影子 + 只读尺子**（`service_contract/`
 自述无 server/socket/db/CLI，且 `grep service_contract` 零外部 importer）。
@@ -19,9 +20,9 @@
 | --- | --- | --- | --- | --- |
 | **P0 扩桥** | `mem-sync-evolve.py` 覆盖五轨（项目日志/KEY/全局/用户/daily），修 label 语义、realpath 去重、待办显式跳过 | `~/.dsh/scripts/mem-sync-evolve.py` | ①10 条 pytest 全绿（含 4 条负向/不变量）②`--dry-run` 每轨条数可复现 ③Nowledge 主库能搜到 KEY/全局轨独特短语（脚本实测） | ✅ |
 | **M1 写运行时（原计划里的 P1）** | `service.sqlite3`（units/revisions/events）+ `mem add/replace/supersede/archive/list/expand/search` + `import-evolve` 导入器 | 本仓 `memory_tool/ledger/` | ①同 slot 两次 add ⇒ 旧条 deprecated 且 `same_slot_multi_active==0` ②导入幂等（跑两遍第二遍 created=0）③`mem search` 空命中返回 `[]` 而非报错 | ✅ |
-| **P2 注入面** | 新 DSH host 插件，`systemPrompt.context` 渲染五轨快照：全局+用户+项目 KEY（按 cwd + git 分支过滤）、渐进披露摘要、收尾两步骤、审查到期提醒 | `dsplugins/dsh-memory-inject` | ①与 evolve 快照做 **diff**（字符数/条数/段名一一对应，差异表解释） ②分支过滤在 main 与非 main 上各验证一次 ③注入体积对比（目标 ≤ 现 77k 字符） | ⬜ |
-| **P3 宿主能力** | 把 `dtodo` / `skill_manage` / `de_channel_send` 抽成薄插件（`lib/{todo,skills,notify}.js` 共 ~2,000 行，只依赖 `ctx.tools` + 文件） | `dsplugins/dsh-host-tools` | ①6 个工具名与 schema 与原版逐字一致 ②quick-actions 的 `tools.get('dtodo')` 硬依赖不再抛错 ③待办 4 轨 + 167 条现状数据可读 | ⬜ |
-| **P4 影子期 A/B** | 双注入并存 1–2 周，比对注入文本与检索命中；达标判据 = 差异表逐条解释 + 无「该注入没注入」 | — | 每会话可复算：注入账本新增字段（source=inject v2）与实际段落 diff | ⬜ |
+| **P2 注入面** | 新 DSH host 插件，`systemPrompt.context` 渲染五轨快照：全局+用户+项目 KEY（按 cwd + git 分支过滤）、渐进披露摘要、收尾两步骤、审查到期提醒 | `dsplugins/dsh-memory-inject` | ①与 evolve 快照做 **diff**（字符数/条数/段名一一对应，差异表解释） ②分支过滤在 main 与非 main 上各验证一次 ③注入体积对比（目标 ≤ 现 77k 字符） | ✅ 2026-11-14 上线（`mode=inject`；`diff-ledgers` 13/18 共享会话在容差内、5 条已定性）。见 §7.0 |
+| **P3 宿主能力** | 把 `dtodo` / `skill_manage` / `de_channel_send` 抽成薄插件（`lib/{todo,skills,notify}.js` 共 ~2,000 行，只依赖 `ctx.tools` + 文件） | `dsplugins/dsh-host-tools` | ①6 个工具名与 schema 与原版逐字一致 ②quick-actions 的 `tools.get('dtodo')` 硬依赖不再抛错 ③待办 4 轨 + 167 条现状数据可读 | 🟡 三工具已实现并有 parity 夹具，但插件 `disabled: true`（原子批才开）。见 §7.5/§7.6 |
+| **P4 影子期 A/B** | 双注入并存 1–2 周，比对注入文本与检索命中；达标判据 = 差异表逐条解释 + 无「该注入没注入」 | — | 每会话可复算：注入账本新增字段（source=inject v2）与实际段落 diff | ✅ 改为观测窗 2026-11-14→11-28（`observe.mjs` 9 判据 + 每日 09:00 体检 `schedule-920d0e15`）。见 §7.4 |
 | **P5 卸载** | 冷备 → 规则改写（`~/.dsh/AGENTS.md:59-64`）→ 停 `com.echerlos.memory-lifecycle-probe` → 修 quick-actions → 删 patch insert（保留同块 dsh-los-ops）→ `dsh plugin remove` → 数据最后动 | 见审计清单 | ①`/memory-evolve/api/pending-skills` 由 200 变 404 ②插件树无 failed ③`check-scheduler-registry --host` 绿 | ⬜ |
 
 ## 2. 边界（不做的事）
@@ -116,3 +117,101 @@
 
 **判据提醒**：上表的第 3 行是 P5 前必须拍板的唯一开口。若走 ②，它的验收要能回答"计的是什么"（渲染次数 ≠ 回合数，
 子代理与多会话会放大），且**不得**把"没到期"渲染成"到期"（假提醒比没提醒更贵）。
+
+## 7. 2026-11-16 路线决定：先双写 → 补缺口 → 切 los-memory
+
+### 7.0 现状基线（2026-11-16 实测，两路只读审计）
+
+- **注入面已换且判据绿**：`dsh-memory-inject` 自 2026-11-14T02:15Z `mode=inject`；渲染台账 **619 条 inject / 46 会话 / 全 ok**；
+  最近一次 **82.2k 字符**（key 46,392×465 / memory 34,798×342 / user 571×5），对 `maxChars=100000` 是 82%，`truncated=0`。
+- **账本对齐**：units **6,980**（daily 2,927 / project 2,888 / key 816 / memory 344 / user 5），
+  `origin=import:evolve` 6,974 + `origin=cli` 6；小时导入幂等（连续多轮 `created=0`）。
+- **写侧仍是 evolve**：`memory` / `memory_suggest` / `memory_review_status` 只有它提供；`dsh-memory-tools` `disabled: true`。
+- **旧的「镜像 project 4,639 vs 源 2,807（165%）」已不成立**：实测 project 2,888 vs 源 2,890，仓库内无定因记录 ⇒ 判为过期/误测。
+
+### 7.1 决定与理由
+
+用户 2026-11-16 拍板：**当前先双写**（evolve 继续写 markdown，los-memory 账本保持镜像同步）；**补完 los-memory 侧缺口后再切**；
+切换前必须先有一份可机械判定的可观测方案。
+
+理由不是偏好：停写 evolve 会**同时冻结三条下游**——①本仓每小时 `mem import-evolve`（`DEFAULT_CORPUS=~/.dsh/memories`）
+②`~/.dsh/scripts/mem-sync-evolve.py` 的 Nowledge 沉淀 ③`dsplugins/dsh-os-seams` 的 `/os-seams/memory`、`/os-seams/memory-search`
+与 `dsh-memory-console` 读数。在"账本还不是真源"时切，等于把三条链一起停。
+
+### 7.2 双写口径（本阶段唯一合同）
+
+- **方向**：evolve（写者/真源）→ 账本（镜像/读侧真源）。**本阶段不反向写 markdown**。
+- **滞后预算**：单次 ≤300 s、P95 ≤300 s（导入间隔 300 s + 单轮耗时）；超 900 s 判红，不叫"稍微慢"。
+- **禁止直写**：agent 一律用 `memory` 工具（evolve）写；`mem add/replace/supersede/archive/resolve` 仅限维护/演示，
+  且必须同轮把内容补进 markdown。2026-11-16 实测已有 5 条 `origin=cli` 只在账本
+  （`home-inventory-baseline` / `home-cleanup-candidates`），正是本规则要消灭的形态。
+- **身份**：账本 `project` 列恒为 evolve 目录 hash（`sha1(字面 cwd)[:12]`）；slug 只用于报表，不做地址。
+
+### 7.3 双写机制
+
+| 环节 | 现状（2026-11-16） | 本阶段改成 |
+| --- | --- | --- |
+| 导入 | launchd `com.echerlos.los-memory-import`，`StartInterval=3600`，幂等（created 恒 0） | ✅ `StartInterval` → **300**（2026-11-16 已执行；plist 与 `.scheduler/registry.json` 的 triggers 均已对齐） |
+| 写后即时 | 无 | 不建文件监听：day/project 文件是就地追加，**目录 mtime 不变 ⇒ `WatchPaths` 抓不到**；靠 300 s 轮询达成滞后预算 |
+| 直写防护 | 无 | 判据 `reverse_divergence`（§7.4）+ §7.2 规则 |
+| 变更可见性 | 只有 `los-memory-import.out.log` | ✅ 每轮追加一行到 `~/.dsh/memory-inject/dw-YYYY-MM.jsonl`（2026-11-16 起） |
+
+### 7.4 可观测方案（7 项判据 / 三态 / 台账 / 告警）
+
+判据脚本：`scripts/dual_write_observe.py`（本仓，只读，`--json` / `--self-test` / 三态退出）。
+承载：launchd `com.echerlos.los-memory-dw-observe`（`StartInterval=900`，2026-11-16 已安装并登记 registry+curation）+ 壳 `scripts/dw-observe-run.sh`
+（落账 + 失败按小时幂等推飞书，沿用 `dsh-memory-inject/scripts/observe-run.sh` 的键模式）。
+
+| # | 判据 | 判什么 | 失败含义 |
+| --- | --- | --- | --- |
+| 1 | `corpus_reachable` | `~/.dsh/memories` 可读、五轨文件数与字节数可算 | **判不了(2)**，不当 0 |
+| 2 | `parity_tracks` | memory/user 差 ≤1；key/project/daily 按文件逐项比，差 ≤0.2% | 导入漏条或有人直写 |
+| 3 | `import_lag` | 源文件最新 mtime vs 账本 `updated_at` 的最大差 ≤300 s（单次 >900 s 红） | 导入停摆/滞后 |
+| 4 | `reverse_divergence` | `origin='cli'` 且 markdown 无对应的 active units 必须 0（`origin_key` 前缀 `dw-exempt:` 可豁免） | 有人绕过 markdown 直写 |
+| 5 | `expand_path` | 取 1 条 memory unit 跑 `mem expand --id` 必须返回正文；并断言注入文案给出的取全文方式可用 | 全文不可达（当前必红，见 §7.5-1） |
+| 6 | `alias_cwd` | `mem snapshot --cwd <旧路径>` 的 key 条数 == 新路径 | 别名归一化未生效（当前必红，见 §7.5-2） |
+| 7 | `volume` | 复用 `dsh-memory-inject/scripts/observe.mjs`：total ≤ `maxChars`、`truncated=0` | 注入被截断 |
+
+口径纪律：**2 不折 1**（判不了既不是失败也不是通过）；na 不计红但要具名原因；判活看台账最新行与 `checks[]` 齐全，
+**不看 out.log**（沿用 `com.echerlos.memory-inject-observe` 的既有教训）。
+
+### 7.5 切换前必须补的 los-memory 缺口
+
+| # | 缺口 | 证据（2026-11-16） | 完成判据 |
+| --- | --- | --- | --- |
+| 1 | 注入文案的 `expand` 手柄解析不了 | 文案让 `memory action=expand+id`，id 是 `unit_<12hex>`；在册 `memory` 是 evolve，按 `[id:8hex]` 在 markdown 里 `find`（evolve `lib/index.js:1693`）⇒ 必 `not_found`；能吃 `unit_…` 的 `dsh-memory-tools` 是 disabled | ✅ 2026-11-16：文案改指 `mem expand --id`（`dsh-memory-inject/lib/text.js` + render 测试同步），`expand_path` 已绿。**注意：文案改动在宿主进程里生效需要一次插件重载**（磁盘判据先绿，模型看到的仍是旧文案直到重载） |
+| 2 | cwd 别名未归一 | evolve `cwdCanonicalization: true`（`lib/sync/index.js:113/127`）；本仓 `memory_tool/ledger/snapshot.py:110` 直接 `project_hash(cwd)` ⇒ 旧路径会话 key 轨静默 0 | ✅ 2026-11-16：新增 `memory_tool/ledger/path_alias.py`（与 evolve 同表同规则：exact→最长前缀→`/` 边界→单跳→丢自映射；坏表 fail-open 并具名降级），`snapshot` 在算 project hash 前归一化并回传 `cwd/cwd_raw/cwd_aliased_from`；`alias_cwd` 已绿（旧路径 cantool → 32 条 key） |
+| 3 | 归档文件未导入 | `KEY-archive.md` / `MEMORY-archive.md` / `USER-archive.md` 不进 discovery（`evolve_md.discover` 只认 `KEY.md`/`MEMORY.md`），账本 `state=archived` 仅 1 行 | 归档条目数 == 源归档条目数（parity 子项） |
+| 4 | 语义检索未接线 | `search_hybrid` 零非测试调用者、env 未设、无模型/索引；后端还是 shadow 库不是账本 | **不阻塞切换**，切后单独立项（另一条轴：替换 Nowledge） |
+| 5 | host-tools 已知功能差 | 无 `web` 站内通知渠道、无 `de_notify` / `de_session_images`（`dsh-host-tools/README.md` §差异 #5/#6） | 决策记录：**接受**（`notifyEnabled=false` 与生产一致）；要恢复铃铛再立项 |
+| 6 | 三个新插件无 remote | `dsh-memory-inject` / `dsh-memory-tools` / `dsh-host-tools` 均无 origin | 建仓并推（**需人操作**：新建 GitHub 仓） |
+
+### 7.6 切换门（7 条全绿才动 P5）
+
+1. `dw-observe` 连续 7 天 `rc=0`（na 率 ≤10%，每次 na 有具名原因）
+2. `import_lag` P95 ≤300 s 且最大 ≤900 s
+3. `reverse_divergence` 连续 7 天 = 0
+4. `expand_path` 绿，且宿主 `memory` 工具能吃 `unit_…`（= `dsh-memory-tools` 上线那一批）
+5. `alias_cwd` 绿
+6. 归档 parity 绿
+7. §6.2 六处依赖改动 + 一次原子批已验证：`memory`/`dtodo`/`skill_manage`/`de_channel_send` 各只注册一次、
+   插件树无 failed、`check-scheduler-registry --host` 绿
+
+### 7.7 本阶段不做的事
+
+- 不卸 evolve、不改 `mode: inject`、不动 `dsh-memory-tools` / `dsh-host-tools` 的 `disabled`。
+- 不反向写 `~/.dsh/memories`（单向镜像）；不迁 todo 轨（归宿主 `dtodo`）。
+- 不追语义检索质量门禁（那是替换 Nowledge 的 B2/B6，不是本计划）。
+
+### 7.8 执行记录（2026-11-16）
+
+| 动作 | 落点 | 证据 |
+| --- | --- | --- |
+| 双写节奏 3600→300 s | `~/Library/LaunchAgents/com.echerlos.los-memory-import.plist`（模板 `scripts/deploy/`）+ `.scheduler/registry.json` | `triggers[0].seconds=300`；`launchctl print` runs 正常；`import_lag` 判据：pending=0 时 pass，pending>0 且 >300 s 时 fail |
+| 双写判据上线 | 本仓 `scripts/dual_write_observe.py`（7 项 + 20 条自检含 6 条负向控制）、`scripts/dw-observe-run.sh`（落账 + 按小时幂等推飞书） | `--self-test` 20/20；实跑 rc=0，7 项全 pass |
+| 定时承载 | `com.echerlos.los-memory-dw-observe`（900 s） | registry 82 作业、curation 已登记、`check-scheduler-registry --host` = ok（真漂移 0 / 判不了 0）；台账首行 rc=0 |
+| expand 手柄修复 | `dsplugins/dsh-memory-inject/lib/text.js`（5 个标题 + 读取说明） | inject 测试 92/92；`expand_path` 绿（CLI 取正文 1,757 字符）；**宿主重载后模型才看到新文案** |
+| cwd 别名归一化 | `memory_tool/ledger/path_alias.py`、`snapshot.py`（新增 `cwd_raw`/`cwd_aliased_from`）、`cli.py`（`--alias-map` / `--no-alias-map`） | `pytest tests/unit/test_ledger_*.py` 130 passed；`alias_cwd` 绿（`~/Downloads/projects/cantool` → 32 条 key，与 live 路径相等） |
+| 直写白名单 | `~/.dsh/memory-inject/dw-allowlist.json` | 4 条 2026-11-16 直写（memory×2 / daily×2）各带 reason；`reverse_divergence` 由红转绿，新增未登记 id 立即红 |
+
+遗留（下轮）：归档文件导入（§7.5-3）、`host-tools` 的 UI 面处置（§7.5-5 决策）、三个插件建 remote（需人操作）、`memory` 工具级 expand（原子批）。

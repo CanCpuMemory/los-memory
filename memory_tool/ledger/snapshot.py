@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .evolve_md import parse_entry
+from .path_alias import DEFAULT_ALIAS_MAP, canonical_cwd
 from .registry import project_hash
 from .store import Ledger, today_local
 
@@ -62,6 +63,10 @@ class SnapshotOptions:
     date: str | None = None
     project_slugs: dict[str, str] = field(default_factory=dict)
     project_map_info: dict[str, Any] = field(default_factory=dict)
+    #: cwd alias table (``~/.dsh/storages/path-alias-map.json`` by default).
+    #: Same table and same rules as evolve's write path, so the two stores
+    #: cannot disagree about which project a session is in. ``None`` disables.
+    alias_map: str | None = DEFAULT_ALIAS_MAP
 
 
 def resolve_git_branch(cwd: str) -> str | None:
@@ -99,7 +104,14 @@ def build_snapshot(ledger: Ledger, options: SnapshotOptions) -> dict[str, Any]:
         The payload described in ``docs/design/m1-writable-ledger.md`` §2.1.
     """
     degraded: list[str] = []
-    cwd = os.path.abspath(os.path.expanduser(options.cwd or os.getcwd()))
+    cwd_raw = os.path.abspath(os.path.expanduser(options.cwd or os.getcwd()))
+
+    # A moved repository would otherwise hash to a second, dead project directory:
+    # the session would silently see zero KEY entries. Canonicalize exactly like
+    # evolve's write path; report what happened instead of hiding it.
+    cwd, aliased_from, alias_reason = canonical_cwd(cwd_raw, options.alias_map)
+    if alias_reason is not None:
+        degraded.append(alias_reason)
 
     branch = options.branch
     if branch is None:
@@ -137,6 +149,11 @@ def build_snapshot(ledger: Ledger, options: SnapshotOptions) -> dict[str, Any]:
         "ok": True,
         "schema": SNAPSHOT_SCHEMA,
         "cwd": cwd,
+        # ``cwd_raw`` + ``cwd_aliased_from`` keep the canonicalization auditable:
+        # a payload that silently swapped the cwd would be indistinguishable from
+        # one whose session really ran in the canonical directory.
+        "cwd_raw": cwd_raw,
+        "cwd_aliased_from": aliased_from,
         "branch": branch,
         "project": project,
         "project_slug": project_slug,

@@ -208,6 +208,25 @@ This document records the current, implemented state of `los-memory`.
   second mark format), any scheduled job, the topology layer, and any decay score. The design forbids automatic deletion, in-place rewriting of old text, and using text
   similarity as a verdict; see `docs/design/memory-hygiene-and-consolidation.md` §2/§5/§6.
 
+## Writable Ledger And Injection (2026-11-14 → 2026-11-16)
+
+- **Injection moved to los-memory** (2026-11-14): the DSH plugin `dsh-memory-inject` registers `systemPrompt.context`
+  named `memory:snapshot` from `python3 -m memory_tool mem snapshot --json --summary-chars 80`; evolve's
+  `injectMemory` is `false`. Evidence surface: `~/.dsh/memory-inject/renders-YYYY-MM.jsonl` (`mode=inject` rows only).
+  Measured 2026-11-16: 619 inject renders across 46 sessions, all `ok`; latest render 82.2k chars
+  (key 46,392×465 / memory 34,798×342 / user 571×5) against `maxChars=100000`, `truncated=0`.
+- **The ledger is a mirror, not the writer**: evolve still owns `~/.dsh/memories`; the launchd job
+  `com.echerlos.los-memory-import` runs `mem import-evolve` hourly. units **6,980**
+  (daily 2,927 / project 2,888 / key 816 / memory 344 / user 5), `origin=import:evolve` 6,974 + `origin=cli` 6.
+  Re-running the importer is idempotent (`created: 0`).
+- **Route decided 2026-11-16**: dual-write first (import cadence 300 s, no reverse writes), fill the los-memory gaps,
+  then cut over. `docs/design/evolve-replacement-plan.md` **§7** is the only operative statement: dual-write contract,
+  the 7 observability criteria, the gap list and the 7-condition cutover gate. Do not treat P2/P3 status lines in that
+  file's older sections as current — §7 supersedes them.
+- **Known gaps at 2026-11-16** (details in §7.5): injection's `expand` handle does not resolve `unit_<12hex>` ids;
+  `cwd` alias canonicalization is missing in this repo (evolve has it); archive files (`KEY-archive.md` etc.) are not
+  imported; semantic retrieval is not wired to the ledger at all.
+
 ## Current Documentation Rule
 
 - The proposed cross-device service is described in `docs/design/memory-service-architecture.md`, `memory-retrieval-pipeline.md`, and `memory-roadmap.md`. These do not mean authenticated HTTP writes, learned vector search, graph extraction, or NAS34 deployment are implemented.
