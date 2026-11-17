@@ -189,6 +189,10 @@ def _register_actions(actions: Any) -> None:
 
     status = actions.add_parser("status", help="Ledger counts and index state")
     status.add_argument(
+        "--project",
+        help="Scope the per-track projections to one project hash (as in units.project)",
+    )
+    status.add_argument(
         "--project-map-from-registry",
         nargs="?",
         const=DEFAULT_REGISTRY,
@@ -556,7 +560,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         map_info = getattr(
             args, "_project_map_info_cache", {"source": None, "available": bool(slugs)}
         )
-        data = ledger.status()
+        data = ledger.status(project=getattr(args, "project", None))
         data["db"] = context["db"]
         data["schema_version"] = schema.schema_version(ledger.conn)
         projects = [

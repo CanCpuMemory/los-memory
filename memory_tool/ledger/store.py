@@ -795,7 +795,7 @@ class Ledger:
             ],
         }
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, project: str | None = None) -> dict[str, Any]:
         """Return counts per track/state plus index and ledger size.
 
         ``active_by_track`` / ``latest_by_track`` / ``bytes_by_track`` exist for the
@@ -804,32 +804,30 @@ class Ledger:
         three projections must therefore come from here — one producer, one call —
         rather than being recomputed by each consumer (that is how two parsers of the
         same fact start to drift).
+
+        ``project`` scopes **only the project-scoped tracks** (``key`` / ``project``)
+        to that project hash; ``memory`` / ``user`` / ``daily`` stay ledger-wide,
+        because they are not "whose project" facts — a scoped ``daily=0`` would say
+        "you wrote nothing today" when the real reason is that daily rows carry no
+        project. ``scoped`` reports whether the key/project tracks were narrowed.
+        Ledger-wide sizes (``bytes``/``revisions``/``events``) are always global.
         """
-        by_track = {
-            str(row["track"]): int(row["count"])
-            for row in self.conn.execute(
-                "SELECT track, COUNT(*) AS count FROM units GROUP BY track"
-            )
+        scoped = project is not None
+        per_track_sql = {
+            "by_track": "SELECT track, COUNT(*) AS count FROM units WHERE {where} GROUP BY track",
+            "by_state": "SELECT state, COUNT(*) AS count FROM units WHERE {where} GROUP BY state",
+            "active_by_track": "SELECT track, COUNT(*) AS count FROM units "
+                               "WHERE state='active' AND {where} GROUP BY track",
+            "latest_by_track": "SELECT track, MAX(updated_at) AS latest FROM units "
+                               "WHERE state='active' AND {where} GROUP BY track",
         }
-        by_state = {
-            str(row["state"]): int(row["count"])
-            for row in self.conn.execute(
-                "SELECT state, COUNT(*) AS count FROM units GROUP BY state"
-            )
-        }
-        active_by_track = {
-            str(row["track"]): int(row["count"])
-            for row in self.conn.execute(
-                "SELECT track, COUNT(*) AS count FROM units WHERE state='active' GROUP BY track"
-            )
-        }
-        latest_by_track = {
-            str(row["track"]): row["latest"]
-            for row in self.conn.execute(
-                "SELECT track, MAX(updated_at) AS latest FROM units "
-                "WHERE state='active' GROUP BY track"
-            )
-        }
+        maps: dict[str, dict[str, Any]] = {}
+        for name, sql in per_track_sql.items():
+            maps[name] = {
+                str(row[0] if name == "by_state" else row["track"]):
+                    row["latest"] if name == "latest_by_track" else int(row["count"])
+                for row in self.conn.execute(sql.format(where="1=1"))
+            }
         bytes_by_track = {
             str(row["track"]): int(row["bytes"] or 0)
             for row in self.conn.execute(
@@ -839,14 +837,52 @@ class Ledger:
                 "WHERE u.state='active' GROUP BY u.track"
             )
         }
+        if scoped:
+            # Replace only the project-scoped tracks; everything else keeps its
+            # ledger-wide value (see the docstring: two scopes in one payload would
+            # otherwise mean two different questions wearing one shape).
+            for name, sql in per_track_sql.items():
+                if name == "by_state":
+                    continue
+                narrowed = {
+                    str(row["track"]):
+                        row["latest"] if name == "latest_by_track" else int(row["count"])
+                    for row in self.conn.execute(
+                        sql.format(where="project=? AND track IN ('key','project')"), (project,)
+                    )
+                }
+                for track in ("key", "project"):
+                    if track in narrowed:
+                        maps[name][track] = narrowed[track]
+                    else:
+                        maps[name].pop(track, None)
+            narrowed_bytes = {
+                str(row["track"]): int(row["bytes"] or 0)
+                for row in self.conn.execute(
+                    "SELECT u.track AS track, COALESCE(SUM(LENGTH(CAST(r.content AS BLOB))), 0) AS bytes "
+                    "FROM units u JOIN revisions r ON r.unit_id = u.id "
+                    "AND r.revision = (SELECT MAX(r2.revision) FROM revisions r2 WHERE r2.unit_id = u.id) "
+                    "WHERE u.state='active' AND u.project=? AND u.track IN ('key','project') "
+                    "GROUP BY u.track",
+                    (project,),
+                )
+            }
+            for track in ("key", "project"):
+                if track in narrowed_bytes:
+                    bytes_by_track[track] = narrowed_bytes[track]
+                else:
+                    bytes_by_track.pop(track, None)
+        by_track = maps["by_track"]
         page_count = self.conn.execute("PRAGMA page_count").fetchone()[0]
         page_size = self.conn.execute("PRAGMA page_size").fetchone()[0]
         return {
             "units": sum(by_track.values()),
+            "scoped": scoped,
+            "scoped_tracks": ["key", "project"] if scoped else [],
             "by_track": by_track,
-            "by_state": by_state,
-            "active_by_track": active_by_track,
-            "latest_by_track": latest_by_track,
+            "by_state": maps["by_state"],
+            "active_by_track": maps["active_by_track"],
+            "latest_by_track": maps["latest_by_track"],
             "bytes_by_track": bytes_by_track,
             "revisions": int(self.conn.execute("SELECT COUNT(*) FROM revisions").fetchone()[0]),
             "events": int(self.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]),

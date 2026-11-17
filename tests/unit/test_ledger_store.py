@@ -400,5 +400,41 @@ def test_status_projects_active_counts_latest_and_bytes(tmp_path: Path) -> None:
         # Bytes are bytes (UTF-8), not characters: LENGTH() on TEXT would lie here.
         assert st["bytes_by_track"] == {"key": len("网关端口 9090".encode())}
         assert live["id"]
+        assert st["scoped"] is False
+    finally:
+        conn.close()
+
+
+def test_status_scoping_narrows_only_project_scoped_tracks(tmp_path: Path) -> None:
+    """``status(project=…)`` narrows ``key``/``project`` and leaves the rest global.
+
+    Why not "scope everything": ``memory``/``user``/``daily`` rows carry no project
+    (daily imported rows have ``project=NULL``), so scoping them would render
+    ``daily=0`` — "you wrote nothing today" — when the truth is "this row type has no
+    project". That is the same lie as rendering a read failure as zero, one layer up.
+    """
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        with ledger.transaction():
+            ledger.add("key", "项目甲的一条", project="alpha")
+        with ledger.transaction():
+            ledger.add("key", "项目乙的一条", project="beta")
+        with ledger.transaction():
+            ledger.add("memory", "全局一条")
+
+        scoped = ledger.status(project="alpha")
+        assert scoped["scoped"] is True
+        assert scoped["scoped_tracks"] == ["key", "project"]
+        # key narrowed to alpha; memory stays ledger-wide (not zero, not hidden).
+        assert scoped["by_track"] == {"key": 1, "memory": 1}
+        assert scoped["active_by_track"] == {"key": 1, "memory": 1}
+        assert scoped["bytes_by_track"]["key"] == len("项目甲的一条".encode())
+        assert scoped["bytes_by_track"]["memory"] == len("全局一条".encode())
+
+        whole = ledger.status()
+        assert whole["scoped"] is False and whole["scoped_tracks"] == []
+        assert whole["by_track"] == {"key": 2, "memory": 1}
+        # Negative control: the scope must not be "everything" in disguise.
+        assert whole["active_by_track"]["key"] == 2
     finally:
         conn.close()
