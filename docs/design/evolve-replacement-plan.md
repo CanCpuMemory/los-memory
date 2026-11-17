@@ -266,3 +266,25 @@
 
 **⚠️ 生效条件**：这是 host 侧代码（`lib/*.mjs`），运行中的宿主仍跑旧模块 ⇒ **需一次宿主重载**。
 在此之前面板仍显 markdown 数字（两侧此刻等值，所以"看起来没变"不是没生效的证据，判据在 `source:'ledger'` 字段）。
+
+### 7.11 B2：生命周期体检已从 evolve 目录搬到账本（2026-11-18）
+
+§6.2 第一行的依赖是 `com.echerlos.memory-lifecycle-probe` —— 它的 `ProgramArguments` 指向
+`dsplugins/dsh-memory-evolve/scripts/lifecycle-probe.mjs`，且读 `~/.dsh/memories`。P5 卸掉 evolve 的
+那一刻，这个 job 会以 **exit 2** 结束：记忆健康台账正好在最需要它的时刻断掉。
+
+替代品已上线并**与原 job 并存**（观测窗内是对照证据，P5 只删旧那一行）：
+
+| 项 | 值 |
+| --- | --- |
+| 脚本 | `scripts/lifecycle_metrics.py`（只读账本 `mode=ro`，唯一写是追加一行 JSONL） |
+| 台账 | `~/.dsh/memory-inject/lifecycle-YYYY-MM.jsonl`（每次运行一行，判不了也写） |
+| 调度 | `com.echerlos.los-memory-lifecycle`，每日 08:55（错开 08:30/08:40/08:50），已登记 registry + curation，模板在 dsfolder `scripts/deploy/` |
+| 判据 | 每轨 `total/active/deprecated/archived/slots/sameSlotMultiActive/supersedesEdgeUnresolved` + `totals`；三态 0/1/2；门槛含 `slots>0`（否则两个 0 是空分母的 0） |
+| 首跑（kickstart） | `rc=0`，`verdict=pass`，entries 828 / active 815 / deprecated 9 / slots 54 / multiActive 0 / unresolved 0（project `2d4994d462af`） |
+| 对照 | evolve 11-17 01:00 那行：entries 821 / active 813 / deprecated 8 / slots 52 —— 差值 = 归档条目 + 最近写入，不是口径漂移 |
+
+**踩到并修掉的一个真坑**：`--project` 默认值写成 `~/syncfolder/project/dsfolder`，而 `sha1("~/…")`
+≠ `sha1(展开后的路径)` ⇒ 首跑只数到 memory/user（entries **350**、key 轨整轨消失），却照样打印 `pass`。
+修法是 hash 前 `os.path.expanduser`，并把它做成自检里的一条（10/10）。这是"仪器看着绿、被观测面是空的"
+在本计划里的第二次实例（第一次是 `<img src=x>` 那条渲染断言）。
