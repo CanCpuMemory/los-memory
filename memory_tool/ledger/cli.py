@@ -187,6 +187,21 @@ def _register_actions(actions: Any) -> None:
     snapshot.add_argument("--json", action="store_true", help="Emit JSON (the default)")
     _add_common_arguments(snapshot)
 
+    exporter = actions.add_parser(
+        "export-evolve",
+        help="Reverse export: write ledger units back into an evolve markdown corpus "
+             "(the rollback surface for the cutover). Append-only and idempotent",
+    )
+    exporter.add_argument("--root", default="~/.dsh/memories",
+                          help="Existing corpus to merge into (default ~/.dsh/memories)")
+    exporter.add_argument("--out", help="Write into this staging directory instead of --root")
+    exporter.add_argument("--in-place", action="store_true",
+                          help="Really write (to --out or --root). Without it this is a dry run")
+    exporter.add_argument("--track", choices=list(TRACKS))
+    exporter.add_argument("--project")
+    exporter.add_argument("--include-archived", action="store_true", default=True)
+    _add_common_arguments(exporter)
+
     status = actions.add_parser("status", help="Ledger counts and index state")
     status.add_argument(
         "--project",
@@ -251,6 +266,8 @@ def run(args: argparse.Namespace) -> int:
             return _cmd_search(args)
         if action == "import-evolve":
             return _cmd_import(args)
+        if action == "export-evolve":
+            return _cmd_export(args)
         if action == "init":
             return _cmd_init(args)
         if action == "status":
@@ -408,6 +425,46 @@ def _cmd_search(args: argparse.Namespace) -> int:
     if not lines:
         lines = [f"no matches ({data['meta']['mode']}; paths={data['meta']['paths']})"]
     return _ok(args, "mem search", data, context, "\n".join(lines))
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    from .export_evolve import export_units
+
+    target_root = args.out or args.root
+    # Fail-safe default: without --in-place nothing is written, even if --out was given.
+    dry_run = not bool(getattr(args, "in_place", False))
+    with _session(args, write=False) as (ledger, context):
+        rows = []
+        for state in ("active", "archived", "deprecated"):
+            for row in ledger.list_units(
+                track=getattr(args, "track", None),
+                project=getattr(args, "project", None),
+                state=state,
+                limit=None,
+            ):
+                rows.append({
+                    "id": row.id,
+                    "track": row.track,
+                    "project": row.project,
+                    "branch": row.branch,
+                    "slot": row.slot,
+                    "day": row.day,
+                    "state": row.state,
+                    "created_at": row.created_at,
+                    "content": row.content,
+                })
+    report = export_units(rows, root=target_root, dry_run=dry_run)
+    report["units_considered"] = len(rows)
+    report["db"] = context["db"]
+    data = {"mode": "dry-run" if dry_run else "write", **report}
+    lines = [f"{data['mode']}: root={data['root']} units={data['units_considered']} "
+             f"appended={data['appended']} skipped_existing={data['skipped_existing']} "
+             f"unplaceable={len(data['skipped_unplaceable'])}"]
+    for bucket in data["files"]:
+        lines.append(f"  {bucket['path']}: +{bucket['appended']} (已存在 {bucket['skipped']})")
+    if dry_run:
+        lines.append("（dry-run：加 --in-place 才真的写；回滚前先 --out 到 staging 目录核对）")
+    return _ok(args, "mem export-evolve", data, context, "\n".join(lines))
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
