@@ -242,3 +242,27 @@
 
 **对 §7.6 第 1 条的影响**：`render_health` 是窗口判据（默认 24 h），一次失败会让门红到该行滑出窗口。
 这不是噪声，是"切换后没有回退面"的代价；要缩短就得先证明那是瞬态（异步/预热），不是把阈值放宽。
+
+### 7.10 下游读面：`/os-seams/memory(-search)` 已改读账本（2026-11-17，B1）
+
+§7.1 列的第三条下游（dsh-os 接缝读数）此前一半在账本、一半在 markdown：`/memory/entries` 与
+`/memory/archive` 走 CLI，而 `/memory`（计数）与 `/memory/search`（片段）还直接读 `~/.dsh/memories`。
+切换后那份文件不再有写者 ⇒ 同一个面板上"条目在动、计数与检索冻在切换日"。现已统一到账本：
+
+| 面 | 来源 | 三态 / 判据 |
+| --- | --- | --- |
+| `GET /os-seams/memory` | `mem status --project <hash>` | 计数只数 `state='active'`；`key`/`project` 轨按项目收窄，`memory`/`user`/`daily` 保持全局（daily 行没有 project，全收窄会渲染成 0）；读不到 ⇒ `count:null` |
+| `GET /os-seams/memory/search` | `mem search`（有 q）/ `mem list`（浏览） | `total` 取 CLI 的 `meta.hits`/`count`；`hits[].line` 恒 `null`（不编造行号）；读不到 ⇒ `hits:null` |
+
+两处**语义变化**（面板数字会变，不是回归）：`daily` 轨 label 改「每日日志」（不再只看今天）、计数不再含归档。
+账本侧为这两条路由新增的投影在 `mem status`：`active_by_track` / `latest_by_track` / `bytes_by_track`
+（los-memory `fa0d2b4`）——同一事实只有一个生产者，消费方不再各算一份。
+
+验收：`dsh-os-seams` 全部测试 **429 绿**（新增 memory 10 条 + search 11 条纯投影，路由级 7 条含三条负向控制：
+判不了 ⇒ null、搜不到 ⇒ []、非法 track ⇒ bad_request；路由测试用**假 CLI 包**跑真实 spawn 链，不读生产账本）；
+`node scripts/check-dsh-os-seams.mjs` = 路由 38 / 消费者 36 / I1-I3 全成立；`check-os-seams-layering` = L1/L2/L3 全绿。
+真机对照：`memoryPayload({project: dsfolder})` 返回 `key:467`（与注入面 payload 的 key 467 一致）、
+`daily:2948`、`memory:343`；`memorySearchPayload({q:'双写'})` total 8。
+
+**⚠️ 生效条件**：这是 host 侧代码（`lib/*.mjs`），运行中的宿主仍跑旧模块 ⇒ **需一次宿主重载**。
+在此之前面板仍显 markdown 数字（两侧此刻等值，所以"看起来没变"不是没生效的证据，判据在 `source:'ledger'` 字段）。
