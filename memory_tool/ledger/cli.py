@@ -194,9 +194,9 @@ def _register_actions(actions: Any) -> None:
     )
     exporter.add_argument("--root", default="~/.dsh/memories",
                           help="Existing corpus to merge into (default ~/.dsh/memories)")
-    exporter.add_argument("--out", help="Write into this staging directory instead of --root")
+    exporter.add_argument("--out-dir", help="Write into this staging directory instead of --root")
     exporter.add_argument("--in-place", action="store_true",
-                          help="Really write (to --out or --root). Without it this is a dry run")
+                          help="Really write (to --out-dir or --root). Without it this is a dry run")
     exporter.add_argument("--track", choices=list(TRACKS))
     exporter.add_argument("--project")
     exporter.add_argument("--include-archived", action="store_true", default=True)
@@ -430,7 +430,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
 def _cmd_export(args: argparse.Namespace) -> int:
     from .export_evolve import export_units
 
-    target_root = args.out or args.root
+    target_root = getattr(args, "out_dir", None) or args.root
     # Fail-safe default: without --in-place nothing is written, even if --out was given.
     dry_run = not bool(getattr(args, "in_place", False))
     with _session(args, write=False) as (ledger, context):

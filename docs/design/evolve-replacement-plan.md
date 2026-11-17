@@ -309,7 +309,7 @@
 | --- | --- | --- | --- |
 | 0 | 回到批前状态 | `python3 scripts/p5_atomic_batch.py --check` 应 **exit 1**（"未就绪"） | — |
 | 1 | 门体检 | `python3 scripts/dual_write_observe.py --json` → `rc=0`、9 项全 pass、`failures=[]` | 不动任何东西，报告台账最新行 |
-| 2 | 先做回滚面 | `python3 -m memory_tool mem export-evolve --out ~/.dsh/backups/p5-rollback-<ts> --in-place`，看 `appended/skipped_existing` | 失败即停（没有回滚面就不翻） |
+| 2 | 先做回滚面 | `S=~/.dsh/backups/p5-rollback-$(date +%Y%m%dT%H%M%S); cp -a ~/.dsh/memories "$S"; python3 -m memory_tool mem export-evolve --out-dir "$S" --in-place`，期望 `appended`=**6**（= 11-16 那 6 条只写进账本的 origin=cli）、`skipped_existing`≈7049；第二次跑必须 `appended=0` | 失败即停（没有回滚面就不翻） |
 | 3 | 看 diff 再写 | `python3 scripts/p5_atomic_batch.py`（4 行 diff）→ `--apply`（自动备份 `.bak-p5batch-<ts>`） | 写入后静态检查失败会打印回滚命令 |
 | 4 | 一次重载 | `bash ~/.dsh/scripts/dsh-web-restart-detached.sh --detach`，日志 `healthy after ~21s` | 重载失败：`--revert` + 再重载 |
 | 5 | 证明"每工具一次" | 新会话工具清单里 `memory`/`dtodo`/`skill_manage`/`de_channel_send` 各出现一次；`grep -c 'is already registered' ~/.dsh/logs/dsh-web.log` 不新增 | 立即 `--revert` + 重载 |
