@@ -94,6 +94,17 @@
 未发现其他运行时硬依赖：`dsh-feishu-outbound` 只在注释里提到 `de_channel_send`（工具名本身来自 evolve，
 卸载时必须由 `dsh-host-tools` 补齐，这是 P3 的事）。
 
+**六处的当前状态（2026-11-18，逐条可查）**
+
+| 面 | 状态 | 证据 |
+| --- | --- | --- |
+| launchd `memory-lifecycle-probe` | **替代品已上线并跑起来了**（两者并存作对照） | `com.echerlos.los-memory-lifecycle` 每日 08:55，首跑 pass；见 §7.11。P5 只删旧行 |
+| profile 依赖 / 配置 | 未动（原子批同批） | `package.json` 仍有 `link:…dsh-memory-evolve`；patch 第 61 行起 |
+| 插件间 `quick-actions → dtodo` | 未动（原子批后自然满足：dtodo 由 host-tools 提供） | `lib/actions.mjs:72` 仍 `tools.get('dtodo')` |
+| 规则 `AGENTS.md` §Memory Writes | 未改（D1 的 dtodo 描述改动也绑在原子批） | `~/.dsh/AGENTS.md` §Memory Writes |
+| 校验器 parity-check | 未动 | `dsh-memory-tools/scripts/parity-check.mjs` 仍从 evolve 源码重推 |
+| 下游③ Nowledge 镜像 `mem-sync-evolve` | **处置已定并写进 curation**：P5 停用、不改造 | dsfolder `.scheduler/curation.json` 的 `com.echerlos.mem-sync-evolve.note`（含回滚） |
+
 ### 6.3 重载前必须先修的两个环境缺陷（2026-11-14 实测，否则"重载"这件事本身不可行）
 
 | 缺陷 | 症状 | 修法 |
