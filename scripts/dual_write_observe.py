@@ -144,6 +144,24 @@ def verdict_lag(age_seconds: float, pending: int, max_lag: float = MAX_LAG_SECON
     return STATE_FAIL, f"{pending} pending and last import {age / 60:.1f} min ago (> {max_lag:.0f}s contract)"
 
 
+def verdict_pending_wait(mtimes: list[float], now_ts: float) -> float | None:
+    """How long the *pending* entries have actually been waiting, in seconds.
+
+    ``import_lag`` used to measure ``now - MAX(units.updated_at)``: that is "when did
+    the importer last write something", which says nothing about how long the current
+    backlog has waited. With a quiet corpus (no writes for 25 minutes) and one new
+    entry, it reported a 25-minute lag for work that was 30 seconds old — a false red
+    on a gate that has to stay green for 7 days (2026-11-18 实测).
+
+    The honest measure is the age of the *files* that still hold un-imported entries.
+    ``None`` means "cannot tell" and the caller keeps the old estimate.
+    """
+    if not mtimes:
+        return None
+    newest = max(float(m) for m in mtimes)
+    return max(0.0, float(now_ts) - newest)
+
+
 def verdict_divergence(rows: list[dict[str, Any]], allowed: set[str]) -> tuple[str, str]:
     """Ledger-only units (origin=cli) are silent divergence: the corpus lacks them."""
     leaked = [row for row in rows if row.get("id") not in allowed]
@@ -276,6 +294,26 @@ def file_age_seconds(path: str) -> float | None:
         return max(0.0, time.time() - os.stat(_expand(path)).st_mtime)
     except OSError:
         return None
+
+
+def track_mtimes(root: str, track: str) -> list[float]:
+    """Source file mtimes for one track ("when was this track's corpus last written")."""
+    def stat_many(pattern: str) -> list[float]:
+        out: list[float] = []
+        for path in glob.glob(os.path.join(_expand(root), pattern)):
+            try:
+                out.append(os.stat(path).st_mtime)
+            except OSError:
+                continue
+        return out
+
+    return {
+        "memory": lambda: stat_many("MEMORY.md"),
+        "user": lambda: stat_many("USER.md"),
+        "key": lambda: stat_many("projects/*/KEY.md"),
+        "project": lambda: stat_many("projects/*/MEMORY.md"),
+        "daily": lambda: stat_many("daily/*.md"),
+    }.get(track, lambda: [])()
 
 
 def open_ledger(db_path: str) -> sqlite3.Connection:
@@ -446,6 +484,15 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             except ValueError:
                 age = float("inf")
         total_pending = sum(pending_new.values()) + sum(pending_rev.values())
+        pending_age = None
+        if total_pending > 0:
+            pending_tracks = [t for t in TRACKS
+                              if int(pending_new.get(t, 0)) + int(pending_rev.get(t, 0)) > 0]
+            pending_age = verdict_pending_wait(
+                [mtime for track in pending_tracks for mtime in track_mtimes(root, track)], now.timestamp())
+        if pending_age is not None:
+            age = pending_age
+            metrics["pending_wait_s"] = round(pending_age, 1)
         state, detail = verdict_lag(age, total_pending, args.max_lag_seconds)
         metrics["last_import"] = newest_import
         metrics["last_import_age_s"] = None if age == float("inf") else round(age)
@@ -601,9 +648,10 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def self_test() -> int:
-    cases: list[tuple[str, tuple[str, str], str]] = []
+    cases: list[tuple[str, Any, Any]] = []
+    now_ts = 1_763_000_000.0
 
-    def t(label: str, got: tuple[str, str], want: str) -> None:
+    def t(label: str, got: Any, want: Any) -> None:
         cases.append((label, got, want))
 
     base = {"memory": 340, "user": 5, "key": 817, "project": 2888, "daily": 2927}
@@ -619,6 +667,15 @@ def self_test() -> int:
     t("lag: pending inside contract", verdict_lag(120, 3), STATE_PASS)
     t("lag: pending outside contract (negative control)", verdict_lag(1200, 3), STATE_FAIL)
     t("lag: pending exactly at boundary", verdict_lag(300, 1), STATE_PASS)
+    t("pending wait: files just written ⇒ small",
+      verdict_pending_wait([now_ts - 30.0], now_ts) is not None
+      and verdict_pending_wait([now_ts - 30.0], now_ts) <= 300, True)
+    t("pending wait: backlog older than contract ⇒ late",
+      verdict_pending_wait([now_ts - 1200.0], now_ts) > 300, True)
+    t("pending wait: no mtimes ⇒ None (fall back, do not invent)",
+      verdict_pending_wait([], now_ts), None)
+    t("pending wait: future mtime clamps to 0",
+      verdict_pending_wait([now_ts + 500.0], now_ts), 0.0)
 
     rows = [{"id": "unit_a", "slot": "s"}, {"id": "unit_b", "slot": None}]
     t("divergence: allowlisted", verdict_divergence([rows[0]], {"unit_a"}), STATE_PASS)
@@ -656,10 +713,18 @@ def self_test() -> int:
     t("render health: empty window", verdict_render_health([]), STATE_NA)
 
     bad = 0
-    for label, (state, detail), want in cases:
-        ok = state == want
+    for label, got, want in cases:
+        # Two case shapes: a verdict tuple `(state, detail)` from the pure helpers, and
+        # bare scalars/None for the newer predicates. One loop, so a new case cannot
+        # silently skip the tally (an empty-denominator pass is the failure mode here).
+        if isinstance(got, tuple):
+            ok = got[0] == want
+            seen, detail = got[0], f" — {got[1]}"
+        else:
+            ok = got == want
+            seen, detail = got, ""
         bad += 0 if ok else 1
-        print(("ok   " if ok else "FAIL ") + f"{label}: {state} (want {want}) — {detail}")
+        print(("ok   " if ok else "FAIL ") + f"{label}: {seen!r} (want {want!r}){detail}")
     print(f"self-test: {len(cases) - bad}/{len(cases)} pass")
     return 0 if bad == 0 else 1
 

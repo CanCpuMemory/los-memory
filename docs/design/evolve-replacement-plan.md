@@ -177,7 +177,7 @@
 | --- | --- | --- | --- |
 | 1 | `corpus_reachable` | `~/.dsh/memories` 可读、五轨文件数与字节数可算 | **判不了(2)**，不当 0 |
 | 2 | `parity_tracks` | memory/user 差 ≤1；key/project/daily 按文件逐项比，差 ≤0.2% | 导入漏条或有人直写 |
-| 3 | `import_lag` | 源文件最新 mtime vs 账本 `updated_at` 的最大差 ≤300 s（单次 >900 s 红） | 导入停摆/滞后 |
+| 3 | `import_lag` | **积压年龄 ≤300 s**：有 pending 时按「含待导入条目的源文件 mtime」算等待时长（不是 `账本 updated_at`），无 pending 时取上次导入写入距今 | 导入停摆/滞后。口径修正 2026-11-18：旧口径在安静语料+一条新写入时会把 30 s 的积压报成 25 min（假红），见 §7.12 |
 | 4 | `reverse_divergence` | `origin='cli'` 且 markdown 无对应的 active units 必须 0（`origin_key` 前缀 `dw-exempt:` 可豁免） | 有人绕过 markdown 直写 |
 | 5 | `expand_path` | 取 1 条 memory unit 跑 `mem expand --id` 必须返回正文；并断言注入文案给出的取全文方式可用 | 全文不可达（2026-11-16 已修，见 §7.5-1；现绿） |
 | 6 | `alias_cwd` | `mem snapshot --cwd <旧路径>` 的 key 条数 == 新路径 | 别名归一化未生效（2026-11-16 已修，见 §7.5-2；现绿） |
