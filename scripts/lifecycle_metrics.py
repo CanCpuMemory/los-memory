@@ -48,6 +48,7 @@ from typing import Any
 DEFAULT_DB = "~/.local/share/los-memory/service.sqlite3"
 DEFAULT_CWD = "~/syncfolder/project/dsfolder"
 DEFAULT_OUT_DIR = "~/.dsh/memory-inject"
+DEFAULT_REVIEW_STATE = "~/.dsh/memory-inject/review-state.json"
 #: Tracks evolve's probe reported; the ledger has more (project/daily) but a
 #: comparison against the old metrics file is only fair on these three.
 COMPARE_TRACKS = ("memory", "user", "key")
@@ -173,6 +174,72 @@ def collect_metrics(conn: sqlite3.Connection, project: str | None) -> dict[str, 
     }
 
 
+def review_due(metrics: dict[str, Any], last_reviewed_at: str | None,
+               now: _dt.datetime, interval_days: int = 30) -> dict[str, Any]:
+    """Decide the review-due line the injection surface may render (plan §7.9 D2).
+
+    Two triggers, both from facts the ledger already has:
+    * **findings** — a slot with two active units, or a supersedes edge pointing at a
+      missing unit. Those are wrong states, not "old" ones.
+    * **stale** — nothing wrong, but no review recorded for ``interval_days``.
+
+    ``last_reviewed_at`` is read from the state file, never invented: a review that
+    nobody recorded did not happen. Returns the exact payload the injector reads.
+    """
+    findings = {
+        "sameSlotMultiActive": int(metrics.get("totals", {}).get("multiActive", 0)),
+        "supersedesEdgeUnresolved": int(metrics.get("totals", {}).get("unresolved", 0)),
+        "deprecated": int(metrics.get("totals", {}).get("deprecated", 0)),
+    }
+    actionable = findings["sameSlotMultiActive"] + findings["supersedesEdgeUnresolved"]
+    due_at = None
+    last_dt = None
+    if last_reviewed_at:
+        try:
+            last_dt = _dt.datetime.fromisoformat(str(last_reviewed_at).replace("Z", "+00:00"))
+        except ValueError:
+            last_dt = None
+    if last_dt is not None:
+        due_at = _iso(last_dt + _dt.timedelta(days=int(interval_days)))
+    stale = last_dt is not None and (now - last_dt).days >= int(interval_days)
+    if actionable > 0:
+        due, reason = True, "findings"
+    elif stale:
+        due, reason = True, "stale"
+    else:
+        due, reason = False, "not-due"
+    return {
+        "schema": 1,
+        "generatedAt": _iso(now),
+        "lastReviewedAt": last_reviewed_at,
+        "dueAt": due_at,
+        "due": due,
+        "reason": reason,
+        "findings": findings,
+        "reviewIntervalDays": int(interval_days),
+    }
+
+
+def read_last_reviewed(path: str) -> str | None:
+    """Preserve the previous ``lastReviewedAt``; a bad/missing file means "no record"."""
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = raw.get("lastReviewedAt") if isinstance(raw, dict) else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def write_json_state(path: str, payload: dict[str, Any]) -> None:
+    target = os.path.expanduser(path)
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    tmp = f"{target}.tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    os.replace(tmp, target)
+
+
 def judge(metrics: dict[str, Any]) -> tuple[str, str, list[str]]:
     """Three-state verdict. Same gates as evolve's probe, plus archive visibility."""
     problems: list[str] = []
@@ -215,6 +282,21 @@ def self_test() -> int:
     t("judge: slots=0 is empty-denominator ⇒ na", judge({**base, "totals": {**base["totals"], "slots": 0}})[0], STATE_NA)
     t("judge: no tracks ⇒ na", judge({"tracks": {}, "totals": {}})[0], STATE_NA)
 
+    now = _dt.datetime(2026, 11, 18, tzinfo=_dt.timezone.utc)
+    clean = {"totals": {"multiActive": 0, "unresolved": 0, "deprecated": 3}}
+    dirty = {"totals": {"multiActive": 1, "unresolved": 0, "deprecated": 3}}
+    t("review: findings ⇒ due", review_due(dirty, "2026-11-17T00:00:00Z", now)["due"], True)
+    t("review: clean + reviewed yesterday ⇒ not due",
+      review_due(clean, "2026-11-17T00:00:00Z", now)["due"], False)
+    t("review: clean + never reviewed ⇒ not due (no invented record)",
+      review_due(clean, None, now)["due"], False)
+    t("review: clean + reviewed 40 days ago ⇒ stale due",
+      review_due(clean, "2026-10-09T00:00:00Z", now)["due"], True)
+    t("review: bad timestamp is treated as no record",
+      review_due(clean, "not-a-date", now)["due"], False)
+    t("review: dueAt = last + interval",
+      review_due(clean, "2026-11-01T00:00:00Z", now, 30)["dueAt"], "2026-12-01T00:00:00Z")
+
     bad = 0
     for label, got, want in cases:
         ok = got == want
@@ -238,6 +320,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", default=DEFAULT_CWD,
                         help="cwd path or 12-hex hash; pass '' to keep every project")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    parser.add_argument("--review-state", default=DEFAULT_REVIEW_STATE,
+                        help="where the injection surface reads the review-due line (plan §7.9 D2)")
+    parser.add_argument("--review-interval-days", type=int, default=30)
+    parser.add_argument("--mark-reviewed", action="store_true",
+                        help="record a review NOW (the agent calls this after a consolidation pass)")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--self-test", action="store_true")
@@ -275,6 +362,19 @@ def main(argv: list[str] | None = None) -> int:
         "failures": failures,
         **metrics,
     }
+
+    # ---- review-due line the injector may render (plan §7.9 D2) -------------
+    # lastReviewedAt is preserved unless the caller explicitly records a review:
+    # "no record" must stay "no record", not silently become today.
+    last_reviewed = _iso(now) if args.mark_reviewed else read_last_reviewed(args.review_state)
+    review = review_due(metrics, last_reviewed, now, args.review_interval_days)
+    payload["review"] = review
+    if not args.dry_run:
+        try:
+            write_json_state(args.review_state, review)
+            payload["reviewStatePath"] = os.path.expanduser(args.review_state)
+        except OSError as exc:
+            payload["reviewStateError"] = str(exc)
 
     if not args.dry_run:
         try:
