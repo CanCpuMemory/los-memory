@@ -299,3 +299,26 @@
 ≠ `sha1(展开后的路径)` ⇒ 首跑只数到 memory/user（entries **350**、key 轨整轨消失），却照样打印 `pass`。
 修法是 hash 前 `os.path.expanduser`，并把它做成自检里的一条（10/10）。这是"仪器看着绿、被观测面是空的"
 在本计划里的又一个实例；判据形态固定下来：**凡默认值里带 `~` 的路径，必须有一条断言证明它被展开过**。
+
+### 7.12 原子批执行单（可逆，2026-11-18 定稿）
+
+**前置**：§7.6 九条全绿（最早 2026-11-25 09:01，由 `render_health` 的 24h 窗口决定）。
+门未满就翻，等于丢证据而不是省时间。
+
+| # | 步骤 | 命令 / 判据 | 失败怎么办 |
+| --- | --- | --- | --- |
+| 0 | 回到批前状态 | `python3 scripts/p5_atomic_batch.py --check` 应 **exit 1**（"未就绪"） | — |
+| 1 | 门体检 | `python3 scripts/dual_write_observe.py --json` → `rc=0`、9 项全 pass、`failures=[]` | 不动任何东西，报告台账最新行 |
+| 2 | 先做回滚面 | `python3 -m memory_tool mem export-evolve --out ~/.dsh/backups/p5-rollback-<ts> --in-place`，看 `appended/skipped_existing` | 失败即停（没有回滚面就不翻） |
+| 3 | 看 diff 再写 | `python3 scripts/p5_atomic_batch.py`（4 行 diff）→ `--apply`（自动备份 `.bak-p5batch-<ts>`） | 写入后静态检查失败会打印回滚命令 |
+| 4 | 一次重载 | `bash ~/.dsh/scripts/dsh-web-restart-detached.sh --detach`，日志 `healthy after ~21s` | 重载失败：`--revert` + 再重载 |
+| 5 | 证明"每工具一次" | 新会话工具清单里 `memory`/`dtodo`/`skill_manage`/`de_channel_send` 各出现一次；`grep -c 'is already registered' ~/.dsh/logs/dsh-web.log` 不新增 | 立即 `--revert` + 重载 |
+| 6 | 证明写侧真的落账 | 用一次 `memory` 写入，然后 `python3 -m memory_tool mem list --track key --limit 3 --format json` 能看到它（`origin:'cli'`） | 同上回滚 |
+| 7 | 退役 `reverse_divergence` | 该判据的前提（markdown 是真源）到此结束：在 `dual_write_observe.py` 里标 `retired` + 本节记一行 | 只改判定器，不影响数据 |
+
+**回滚**：`python3 scripts/p5_atomic_batch.py --revert` + 一次重载。若已产生新记忆（第 6 步之后），
+它们只在账本里 —— 用第 2 步导出的语料快照做对照，或再跑一次 `mem export-evolve --in-place`
+把它们补进 markdown（这正是这份工具存在的理由）。
+
+**不在这一批里做的事**：P5 卸载（`dsh plugin remove` / 删 profile 依赖 / 停 `memory-lifecycle-probe` /
+停 `mem-sync-evolve`）。那一步不可逆且需要人确认，见 §6.2。
