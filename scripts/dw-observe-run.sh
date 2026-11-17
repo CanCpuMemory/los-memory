@@ -7,8 +7,8 @@
 #   2. **失败有人收**：rc≠0 时按小时幂等推飞书（同 key 不刷屏；跨小时才重发）。
 #   3. **三态透传**：0 通过 / 1 真实漂移 / 2 判不了（2 不当 1，也不当 0）。
 #
-# 判据定义见 docs/design/evolve-replacement-plan.md §7.4；
-# 判据实现见 scripts/dual_write_observe.py（--self-test 有 20 条纯函数控制）。
+# 判据定义见 docs/design/evolve-replacement-plan.md §7.4（9 项）；
+# 判据实现见 scripts/dual_write_observe.py（--self-test 有 27 条纯函数控制）。
 #
 # 用法：bash scripts/dw-observe-run.sh [--window-hours N]   （N 目前未用，保留给趋势统计）
 set -u

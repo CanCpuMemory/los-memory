@@ -156,7 +156,7 @@
 | 直写防护 | 无 | 判据 `reverse_divergence`（§7.4）+ §7.2 规则 |
 | 变更可见性 | 只有 `los-memory-import.out.log` | ✅ 每轮追加一行到 `~/.dsh/memory-inject/dw-YYYY-MM.jsonl`（2026-11-16 起） |
 
-### 7.4 可观测方案（7 项判据 / 三态 / 台账 / 告警）
+### 7.4 可观测方案（9 项判据 / 三态 / 台账 / 告警）
 
 判据脚本：`scripts/dual_write_observe.py`（本仓，只读，`--json` / `--self-test` / 三态退出）。
 承载：launchd `com.echerlos.los-memory-dw-observe`（`StartInterval=900`，2026-11-16 已安装并登记 registry+curation）+ 壳 `scripts/dw-observe-run.sh`
@@ -168,9 +168,11 @@
 | 2 | `parity_tracks` | memory/user 差 ≤1；key/project/daily 按文件逐项比，差 ≤0.2% | 导入漏条或有人直写 |
 | 3 | `import_lag` | 源文件最新 mtime vs 账本 `updated_at` 的最大差 ≤300 s（单次 >900 s 红） | 导入停摆/滞后 |
 | 4 | `reverse_divergence` | `origin='cli'` 且 markdown 无对应的 active units 必须 0（`origin_key` 前缀 `dw-exempt:` 可豁免） | 有人绕过 markdown 直写 |
-| 5 | `expand_path` | 取 1 条 memory unit 跑 `mem expand --id` 必须返回正文；并断言注入文案给出的取全文方式可用 | 全文不可达（当前必红，见 §7.5-1） |
-| 6 | `alias_cwd` | `mem snapshot --cwd <旧路径>` 的 key 条数 == 新路径 | 别名归一化未生效（当前必红，见 §7.5-2） |
+| 5 | `expand_path` | 取 1 条 memory unit 跑 `mem expand --id` 必须返回正文；并断言注入文案给出的取全文方式可用 | 全文不可达（2026-11-16 已修，见 §7.5-1；现绿） |
+| 6 | `alias_cwd` | `mem snapshot --cwd <旧路径>` 的 key 条数 == 新路径 | 别名归一化未生效（2026-11-16 已修，见 §7.5-2；现绿） |
 | 7 | `volume` | 复用 `dsh-memory-inject/scripts/observe.mjs`：total ≤ `maxChars`、`truncated=0` | 注入被截断 |
+| 8 | `importer_alive` | 导入作业自己的心跳（`~/.dsh/logs/los-memory-import.out.log` 的 mtime）≤ 3 h（36× 周期，吸收睡眠不补跑） | 导入作业停摆。**与 `import_lag` 互补**：lag 在"安静语料"时刻意 pass，看不见停摆 ⇒ 只有这条能分开"没写"与"没导" |
+| 9 | `render_health` | 最近 24 h 内 `mode=inject` 的渲染行 **`ok` 必须全为 true**；窗口内零渲染 ⇒ na 具名 | 有整段记忆没注入的回合（`volume` 只读最新行，看不见历史上的失败）。2026-11-17 首跑即抓到 1 次（`01:01:30Z timeout`） |
 
 口径纪律：**2 不折 1**（判不了既不是失败也不是通过）；na 不计红但要具名原因；判活看台账最新行与 `checks[]` 齐全，
 **不看 out.log**（沿用 `com.echerlos.memory-inject-observe` 的既有教训）。
@@ -186,16 +188,23 @@
 | 5 | host-tools 已知功能差 | 无 `web` 站内通知渠道、无 `de_notify` / `de_session_images`（`dsh-host-tools/README.md` §差异 #5/#6） | **决策（2026-11-16，接受，不补）**：①`notifyEnabled=false` 且 web 铃铛无消费者 ⇒ 缺 web 渠道与生产一致；②`de_session_images` 当前**本身也未注册**（`sessionImageQueryEnabled=false`），`de_channel_send` 的 `attachmentId` 分支不可达，描述与开关态本就有漂移。**复活条件**（任一成立再立项）：恢复网页右上角铃铛 / 启用 `sessionImageQueryEnabled` / 出现按 attachmentId 取图的需求。补的成本不在工具本身：`notify-web.js` 依赖 `coi/broadcast.js`（65 KB），属另一件事 |
 | 6 | 三个新插件无 remote | `dsh-memory-inject` / `dsh-memory-tools` / `dsh-host-tools` 均无 origin | 建仓并推（**需人操作**：新建 GitHub 仓） |
 
-### 7.6 切换门（7 条全绿才动 P5）
+### 7.6 切换门（9 条全绿才动 P5）
 
-1. `dw-observe` 连续 7 天 `rc=0`（na 率 ≤10%，每次 na 有具名原因）
+1. `dw-observe` **连续 7 天 `rc=0`**（na 率 ≤10%，每次 na 有具名原因）
+   - **口径（2026-11-17 补）**：按台账 `dw-YYYY-MM.jsonl` 逐行判，不按日历天补数；**漏拍必须具名**
+     （11-17 实测 10:14→11:36 有 82 min 空档 = 睡眠期 interval 作业不补跑）；空档 >3 h（curation 的
+     freshness 阈值）才算该天缺失、不计入连续数。**把"没跑"读成"通过"是这条门最容易自欺的地方。**
 2. `import_lag` P95 ≤300 s 且最大 ≤900 s
 3. `reverse_divergence` 连续 7 天 = 0
 4. `expand_path` 绿，且宿主 `memory` 工具能吃 `unit_…`（= `dsh-memory-tools` 上线那一批）
 5. `alias_cwd` 绿
 6. 归档 parity 绿
-7. §6.2 六处依赖改动 + 一次原子批已验证：`memory`/`dtodo`/`skill_manage`/`de_channel_send` 各只注册一次、
-   插件树无 failed、`check-scheduler-registry --host` 绿
+7. `importer_alive` 连续 7 天不红 —— 它回答"**没导**"，`import_lag` 回答"**没写**是否超预算"，两条不可互相顶替
+8. `render_health` 连续 7 天不红（窗口内 `ok:false` = 0；零渲染 ⇒ na，不计红但必须有具名原因）
+9. §6.2 六处依赖改动 + 一次原子批已验证：`memory`/`dtodo`/`skill_manage`/`de_channel_send` 各只注册一次、
+   插件树无 failed、**本作业条目**在 `check-scheduler-registry --host` 里绿（**不要求全表绿**：2026-11-17
+   实测全表有 3 条无关漂移（session-index / ai-node-reputation / surge-mesh-observe），拿全表当门等于把切换
+   挂在别人家的欠账上）
 
 ### 7.7 本阶段不做的事
 
@@ -215,5 +224,21 @@
 | 直写白名单 | `~/.dsh/memory-inject/dw-allowlist.json` | 4 条 2026-11-16 直写（memory×2 / daily×2）各带 reason；`reverse_divergence` 由红转绿，新增未登记 id 立即红 |
 | 归档导入 | `evolve_md.discover`（`*-archive.md` → `archived`）+ `import_evolve`（add 后 archive，一条码路）+ `TODOS-archive` 计入跳过 | dry-run：198 文件 / 6,993 条目 / archived_imported 10；账本 `key·archived=10`；重跑 `created=0`；注入面不变（cantool key 仍 32）；测试 `test_archive_files_import_as_archived_and_never_go_live`（含「归档不得进 payload」「重跑 created=0」） |
 | host-tools 功能差决策 | 本文 §7.5-5 | 接受（无 web 铃铛/无 `de_session_images`），复活条件与补齐成本已写明 |
+| 判据 7 → 9 项（2026-11-17） | `scripts/dual_write_observe.py`（新增 `importer_alive` / `render_health` + 7 条自检）、`~/.dsh/profiles/web/cordis.patch.yml`（`timeoutMs: 6000`） | `--self-test` **27/27**（新增 4 条 importer、3 条 render，含 2 条负向控制）；实跑首行即 `fail render_health: 1 of 89 inject render(s) failed (2026-11-17T01:01:30 timeout)` —— 判据抓到的是真事，不是误报 |
 
 遗留：`host-tools` 的 **UI 面**处置（4 tab + Advisor 面板，与 §7.5-5 的功能差不是一件事）、三个插件建 remote（**需人操作**）、`memory` 工具级 expand（原子批）、宿主重载让新注入文案生效。
+
+### 7.9 决策记录（2026-11-17，切换前必须裁的两项 + 一处判据补全）
+
+2026-11-16 的盘点把「`memory_suggest` / `memory_review_status` 无替身」和「`reviewReminder` 只有占位」列为
+未拍板开口。以下三条是决定，依据都写在同一行里；D1/D2 只改文档与注入面契约，**不动在跑的插件**。
+
+| # | 事项 | 决定 | 依据 | 落地动作（谁、何时） |
+| --- | --- | --- | --- | --- |
+| D1 | `memory_suggest`（建议 → 待确认队列） | **随 evolve 消失，不做替身** | 准入模型 2026-11-14 已取消"待确认写入"；`~/.dsh/memories/SUGGESTIONS.jsonl` 实测 **0 字节**（enforce 之后没有新条目进过队列）⇒ 队列已死，替身会重建一个没人读的入口。唯一还活着的消费者是 dtodo 描述里那句"模型自建待办请用 memory_suggest" | 原子批同批改 `dsh-host-tools/lib/todo.js:627` 的描述：「模型不要自建待办；只有用户明确要做某事才 add」 |
+| D2 | `memory_review_status`（到 N 回合提醒审查） | **不做注入面自计数替身；改台账驱动** | 计数器的语义是"渲染数"，不是"回合数"（子代理与多会话都会放大），自计数会造出"没到期报到期"的假提醒——比没提醒更贵。台账驱动是三态可判的：有台账就渲染"上次审查 X / 下次 Y"，没有就不渲染 | 二期：定时作业（卫生尺子 `scripts/hygiene_scan.py` 一路）写 `~/.dsh/memory-inject/review-state.json`（`lastReviewedAt/dueAt/findings`），`render.js` 只读它。**当前 `reviewReminder` 保持 false**（先有作业再有渲染） |
+| D3 | 注入超时 | `timeoutMs` **3000 → 6000 ms**（`~/.dsh/profiles/web/cordis.patch.yml`） | 11-17T01:01:30Z 实测整段丢注（`ok:false error=timeout`，chars 581）；典型 445 ms ⇒ 3 s 只有 6.7× 余量。**上限不能再抬**：snapshot 走 `spawnSync`，会阻塞宿主事件循环；复发正解是异步/预热，不是加数值 | ✅ 2026-11-17 已改（配置热重放生效，下次渲染即用新预算） |
+| D4 | 判据面 | 新增 `importer_alive` + `render_health`，切换门 7 → 9 条 | 前者分开"没写"与"没导"（`import_lag` 在安静语料时刻意 pass）；后者补上 `volume` 只读最新行的盲区（一次失败 = 一轮无记忆） | ✅ 2026-11-17 已实现（`--self-test` 27/27）；首跑即抓到 11-17 那次 timeout，**故第 9 条判据自 2026-11-18T01:01Z 起才可能转绿** |
+
+**对 §7.6 第 1 条的影响**：`render_health` 是窗口判据（默认 24 h），一次失败会让门红到该行滑出窗口。
+这不是噪声，是"切换后没有回退面"的代价；要缩短就得先证明那是瞬态（异步/预热），不是把阈值放宽。

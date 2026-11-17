@@ -3,7 +3,7 @@
 
 The operative contract lives in ``docs/design/evolve-replacement-plan.md`` §7.4:
 while evolve is still the writer, ``~/.dsh/memories`` is the source of truth and
-``service.sqlite3`` is its mirror. This script answers seven questions about that
+``service.sqlite3`` is its mirror. This script answers nine questions about that
 mirror and nothing else:
 
 1. ``corpus_reachable``    — can the corpus and the ledger be read at all?
@@ -16,6 +16,12 @@ mirror and nothing else:
                              project KEY entries as the live path?
 7. ``volume``              — is the injection surface still inside its budget and
                              not truncating?
+8. ``importer_alive``      — is the 300 s importer itself still running? (a quiet
+                             corpus explains a stale ledger, not a dead job)
+9. ``render_health``       — did every inject render in the window succeed? (a
+                             failed render drops the model's whole memory segment
+                             for that turn, which reads downstream exactly like
+                             "nothing was remembered")
 
 Design rules this file follows:
 
@@ -62,11 +68,17 @@ DEFAULT_ALLOWLIST = "~/.dsh/memory-inject/dw-allowlist.json"
 DEFAULT_ALIAS_MAP = "~/.dsh/storages/path-alias-map.json"
 DEFAULT_PROFILE_PATCH = "~/.dsh/profiles/web/cordis.patch.yml"
 DEFAULT_INJECT_TEXT = "~/syncfolder/project/dsplugins/dsh-memory-inject/lib/text.js"
+DEFAULT_IMPORT_LOG = "~/.dsh/logs/los-memory-import.out.log"
 
 #: Contract values (plan §7.2). Kept as arguments so a fixture run can tighten them.
 MAX_LAG_SECONDS = 300
 HARD_LAG_SECONDS = 900
 VOLUME_MAX_AGE_HOURS = 12
+#: The importer's own heartbeat tolerance: 3 h = 36 x the 300 s interval, which
+#: still absorbs a sleep gap (interval jobs do not catch up after sleep).
+IMPORTER_MAX_AGE_HOURS = 3
+#: How far back ``render_health`` looks for failed inject renders.
+RENDER_WINDOW_HOURS = 24
 
 TRACKS = ("memory", "user", "key", "project", "daily")
 
@@ -173,6 +185,43 @@ def verdict_expand_hint(text: str) -> tuple[str, str]:
     return STATE_FAIL, "injection hint does not mention `mem expand`; the registered `memory` tool cannot resolve unit ids"
 
 
+def verdict_importer_alive(age_seconds: float | None,
+                           max_age_h: float = IMPORTER_MAX_AGE_HOURS) -> tuple[str, str]:
+    """Liveness of the importer job itself — a quiet corpus must not hide a dead job.
+
+    ``import_lag`` deliberately passes when nothing is pending, so it cannot see a
+    stopped importer. This check answers the other half: the job that fills the
+    mirror wrote its heartbeat recently.
+    """
+    if age_seconds is None:
+        return STATE_NA, "import job log not readable; liveness cannot be judged"
+    age_h = max(0.0, float(age_seconds)) / 3600.0
+    if age_h <= max_age_h:
+        return STATE_PASS, f"import job wrote {age_h:.1f} h ago (<= {max_age_h:.1f} h)"
+    return STATE_FAIL, (
+        f"import job silent for {age_h:.1f} h (> {max_age_h:.1f} h): the 300 s importer is not running "
+        f"(a quiet corpus explains a stale ledger, not a dead job)"
+    )
+
+
+def verdict_render_health(rows: list[dict[str, Any]],
+                          hours: float = RENDER_WINDOW_HOURS) -> tuple[str, str]:
+    """Every inject render in the window must have succeeded.
+
+    ``volume`` only reads the newest row, so a single failed render (snapshot
+    timeout) is invisible there. A failed render means the model's whole memory
+    segment was dropped for that turn — downstream that is indistinguishable from
+    "nothing was remembered", which is why it is a failure and not a warning.
+    """
+    if not rows:
+        return STATE_NA, f"no inject render in the last {hours:.0f} h (no session asked for a prompt)"
+    bad = [row for row in rows if row.get("ok") is not True]
+    if not bad:
+        return STATE_PASS, f"all {len(rows)} inject renders ok in the last {hours:.0f} h"
+    detail = ", ".join(f"{str(row.get('ts'))[:19]}:{row.get('error') or 'unknown'}" for row in bad[:4])
+    return STATE_FAIL, f"{len(bad)} of {len(rows)} inject render(s) failed in the last {hours:.0f} h ({detail})"
+
+
 # --------------------------------------------------------------------------- #
 # IO adapters
 # --------------------------------------------------------------------------- #
@@ -202,6 +251,31 @@ def newest_inject_render(renders_dir: str) -> dict[str, Any] | None:
         if rows:
             return rows[-1]
     return None
+
+
+def inject_renders_since(renders_dir: str, hours: float, now: _dt.datetime) -> list[dict[str, Any]]:
+    """Every ``mode=inject`` render row recorded within ``hours`` of ``now``."""
+    cutoff = now - _dt.timedelta(hours=float(hours))
+    window: list[dict[str, Any]] = []
+    for path in sorted(glob.glob(os.path.join(_expand(renders_dir), "renders-*.jsonl"))):
+        for row in _read_jsonl_tail(path, limit=1_000_000):
+            if row.get("mode") != "inject":
+                continue
+            try:
+                ts = _dt.datetime.fromisoformat(str(row.get("ts", "")).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if ts >= cutoff:
+                window.append(row)
+    return window
+
+
+def file_age_seconds(path: str) -> float | None:
+    """Seconds since ``path`` was last written; ``None`` when it cannot be read."""
+    try:
+        return max(0.0, time.time() - os.stat(_expand(path)).st_mtime)
+    except OSError:
+        return None
 
 
 def open_ledger(db_path: str) -> sqlite3.Connection:
@@ -495,6 +569,18 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     state, detail = verdict_volume(render, max_chars, now)
     checks.append(_check("volume", state, detail, max_chars=max_chars))
 
+    # 8. importer_alive ------------------------------------------------------
+    log_age = file_age_seconds(args.import_log)
+    state, detail = verdict_importer_alive(log_age, args.importer_max_age_hours)
+    checks.append(_check("importer_alive", state, detail, log=args.import_log,
+                         age_seconds=None if log_age is None else round(log_age, 1)))
+
+    # 9. render_health -------------------------------------------------------
+    window = inject_renders_since(args.renders_dir, args.render_window_hours, now)
+    state, detail = verdict_render_health(window, args.render_window_hours)
+    checks.append(_check("render_health", state, detail, renders=len(window),
+                         window_hours=args.render_window_hours))
+
     failures = [row["name"] for row in checks if row["state"] == STATE_FAIL]
     unjudgeable = [row["name"] for row in checks if row["state"] == STATE_NA]
     verdict = "fail" if failures else "pass"
@@ -557,6 +643,18 @@ def self_test() -> int:
     t("expand hint: tool-only (negative control)",
       verdict_expand_hint("用 memory action=expand+id 取全文"), STATE_FAIL)
 
+    t("importer alive: fresh", verdict_importer_alive(600), STATE_PASS)
+    t("importer alive: exactly at tolerance", verdict_importer_alive(IMPORTER_MAX_AGE_HOURS * 3600), STATE_PASS)
+    t("importer alive: silent past tolerance (negative control)",
+      verdict_importer_alive(IMPORTER_MAX_AGE_HOURS * 3600 + 60), STATE_FAIL)
+    t("importer alive: log unreadable", verdict_importer_alive(None), STATE_NA)
+
+    ok_render = {"ts": "2026-11-16T00:00:00Z", "mode": "inject", "ok": True}
+    t("render health: all ok", verdict_render_health([ok_render, ok_render]), STATE_PASS)
+    t("render health: one timeout (negative control)",
+      verdict_render_health([ok_render, {**ok_render, "ok": False, "error": "timeout"}]), STATE_FAIL)
+    t("render health: empty window", verdict_render_health([]), STATE_NA)
+
     bad = 0
     for label, (state, detail), want in cases:
         ok = state == want
@@ -593,6 +691,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--alias-map", default=DEFAULT_ALIAS_MAP)
     parser.add_argument("--profile-patch", default=DEFAULT_PROFILE_PATCH)
     parser.add_argument("--inject-text", default=DEFAULT_INJECT_TEXT)
+    parser.add_argument("--import-log", default=DEFAULT_IMPORT_LOG)
+    parser.add_argument("--importer-max-age-hours", type=float, default=IMPORTER_MAX_AGE_HOURS)
+    parser.add_argument("--render-window-hours", type=float, default=RENDER_WINDOW_HOURS)
     parser.add_argument("--max-lag-seconds", type=float, default=MAX_LAG_SECONDS)
     args = parser.parse_args(argv)
 
