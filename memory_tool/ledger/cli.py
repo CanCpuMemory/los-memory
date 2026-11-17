@@ -199,7 +199,6 @@ def _register_actions(actions: Any) -> None:
                           help="Really write (to --out-dir or --root). Without it this is a dry run")
     exporter.add_argument("--track", choices=list(TRACKS))
     exporter.add_argument("--project")
-    exporter.add_argument("--include-archived", action="store_true", default=True)
     _add_common_arguments(exporter)
 
     status = actions.add_parser("status", help="Ledger counts and index state")
