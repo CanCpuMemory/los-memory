@@ -796,7 +796,15 @@ class Ledger:
         }
 
     def status(self) -> dict[str, Any]:
-        """Return counts per track/state plus index and ledger size."""
+        """Return counts per track/state plus index and ledger size.
+
+        ``active_by_track`` / ``latest_by_track`` / ``bytes_by_track`` exist for the
+        read-only seams (``GET /os-seams/memory``): before 2026-11-17 they counted the
+        markdown corpus, which freezes the moment the ledger becomes the source. The
+        three projections must therefore come from here — one producer, one call —
+        rather than being recomputed by each consumer (that is how two parsers of the
+        same fact start to drift).
+        """
         by_track = {
             str(row["track"]): int(row["count"])
             for row in self.conn.execute(
@@ -809,12 +817,37 @@ class Ledger:
                 "SELECT state, COUNT(*) AS count FROM units GROUP BY state"
             )
         }
+        active_by_track = {
+            str(row["track"]): int(row["count"])
+            for row in self.conn.execute(
+                "SELECT track, COUNT(*) AS count FROM units WHERE state='active' GROUP BY track"
+            )
+        }
+        latest_by_track = {
+            str(row["track"]): row["latest"]
+            for row in self.conn.execute(
+                "SELECT track, MAX(updated_at) AS latest FROM units "
+                "WHERE state='active' GROUP BY track"
+            )
+        }
+        bytes_by_track = {
+            str(row["track"]): int(row["bytes"] or 0)
+            for row in self.conn.execute(
+                "SELECT u.track AS track, COALESCE(SUM(LENGTH(CAST(r.content AS BLOB))), 0) AS bytes "
+                "FROM units u JOIN revisions r ON r.unit_id = u.id "
+                "AND r.revision = (SELECT MAX(r2.revision) FROM revisions r2 WHERE r2.unit_id = u.id) "
+                "WHERE u.state='active' GROUP BY u.track"
+            )
+        }
         page_count = self.conn.execute("PRAGMA page_count").fetchone()[0]
         page_size = self.conn.execute("PRAGMA page_size").fetchone()[0]
         return {
             "units": sum(by_track.values()),
             "by_track": by_track,
             "by_state": by_state,
+            "active_by_track": active_by_track,
+            "latest_by_track": latest_by_track,
+            "bytes_by_track": bytes_by_track,
             "revisions": int(self.conn.execute("SELECT COUNT(*) FROM revisions").fetchone()[0]),
             "events": int(self.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]),
             "events_last_id": self._last_event_id(),

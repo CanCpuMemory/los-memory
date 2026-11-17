@@ -369,3 +369,36 @@ def test_digest_is_stable_for_equivalent_whitespace(tmp_path: Path) -> None:
         )
     finally:
         conn.close()
+
+
+def test_status_projects_active_counts_latest_and_bytes(tmp_path: Path) -> None:
+    """``status()`` feeds the read-only seams: active-only counts, per-track
+    freshness and byte size, all from one query pass.
+
+    Why this is a test and not a documentation promise: ``GET /os-seams/memory``
+    used to count the markdown corpus, which freezes the moment the ledger becomes
+    the source. If these three projections silently counted archived/deprecated
+    rows, the panel would keep looking alive while reporting a number nobody can
+    act on — the exact "measured surface is empty" failure this repo keeps hitting.
+    """
+    conn, ledger = open_ledger(tmp_path / "s.sqlite3")
+    try:
+        with ledger.transaction():
+            live = ledger.add("key", "网关端口 9090", project="dsfolder")
+        with ledger.transaction():
+            dropped = ledger.add("memory", "会被归档的一条")
+        with ledger.transaction():
+            ledger.archive(dropped["id"], reason="test")
+
+        st = ledger.status()
+
+        # Total vs active must differ, or the archived row proves nothing.
+        assert st["by_track"] == {"key": 1, "memory": 1}
+        assert st["active_by_track"] == {"key": 1}
+        # Freshness only exists for tracks that still have an active unit.
+        assert set(st["latest_by_track"]) == {"key"}
+        # Bytes are bytes (UTF-8), not characters: LENGTH() on TEXT would lie here.
+        assert st["bytes_by_track"] == {"key": len("网关端口 9090".encode())}
+        assert live["id"]
+    finally:
+        conn.close()
